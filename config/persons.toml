@@ -1,0 +1,86 @@
+# Stable person records. max_load is contractual; aliases normalize imported
+# abbreviated instructor names. An alias may include subject to disambiguate it.
+
+[[persons]]
+name = "Bain, Leslie M."
+max_load = 15
+aliases = ["Bain"]
+courses = ["MATH 0903", "MATH 1113", "STAT 2163"]
+
+[[persons]]
+name = "Ballard, Kasey L."
+max_load = 12
+aliases = ["Ballard"]
+courses = ["MATH 0803", "MATH 1003", "MATH 1113"]
+
+[[persons]]
+name = "Cox, Allie M."
+max_load = 15
+aliases = ["Cox"]
+courses = ["MATH 1110", "MATH 1113", "MATH 2223"]
+
+[[persons]]
+name = "Growns, Landon C."
+max_load = 15
+aliases = ["Growns"]
+courses = ["MATH 0903", "MATH 1110", "MATH 1113"]
+
+[[persons]]
+name = "Hogan, Jessica L."
+max_load = 15
+aliases = ["Hogan"]
+courses = ["MATH 0903", "MATH 1110", "MATH 1113"]
+
+[[persons]]
+name = "Jordan, Scott M."
+max_load = 12
+aliases = [{ short = "Jordan", subject = "STAT" }]
+courses = ["STAT 3153", "STAT 4113", "STAT 4163", "STAT 5113"]
+
+[[persons]]
+name = "Jordan, Susan M."
+max_load = 15
+aliases = [{ short = "Jordan", subject = "MATH" }]
+courses = ["MATH 1914", "MATH 2703", "MATH 2914"]
+
+[[persons]]
+name = "King, Jamie L."
+max_load = 15
+aliases = ["King"]
+courses = ["MATH 0903", "MATH 1113", "STAT 2163"]
+
+[[persons]]
+name = "Limperis, Thomas G."
+max_load = 12
+aliases = ["Limperis"]
+courses = ["MATH 2914", "MATH 2934"]
+
+[[persons]]
+name = "Myers, Jeanine L."
+max_load = 15
+aliases = ["Myers"]
+courses = ["MATH 2914", "MATH 2924"]
+
+[[persons]]
+name = "Overduin, Matthew D."
+max_load = 12
+aliases = ["Overduin"]
+courses = ["MATH 2243", "MATH 2703", "MATH 3243"]
+
+[[persons]]
+name = "Taylor, Teresa L."
+max_load = 15
+aliases = ["Taylor"]
+courses = ["MATH 2033", "MATH 2043", "MATH 3033"]
+
+[[persons]]
+name = "Winn, Janet L."
+max_load = 15
+aliases = ["Winn"]
+courses = ["MATH 0903", "MATH 1003", "MATH 1113"]
+
+[[persons]]
+name = "Xiao, Xinli"
+max_load = 12
+aliases = ["Xiao"]
+courses = ["MATH 3243", "MATH 4003", "MATH 4033", "STAT 4383", "STAT 5383"]

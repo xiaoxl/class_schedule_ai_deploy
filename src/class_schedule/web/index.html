@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Class Schedule Workbench</title>
+  <meta name="description" content="Upload a schedule file, parse it with the atomic class model, and view the grouped result.">
+  <link rel="stylesheet" href="/styles.css?v=7">
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead">
+      <p class="eyebrow">CLASS SCHEDULE</p>
+      <h1>Class Schedule Workbench</h1>
+      <p class="lede">Upload a CSV or Excel schedule to parse and view it automatically; click "Solve Schedule" to run the solver, eliminating hard conflicts and minimizing soft preference penalties.</p>
+    </header>
+
+    <section class="upload-panel">
+      <form id="uploadForm">
+        <label class="drop-zone" id="dropZone">
+          <input id="scheduleFile" name="schedule_file" type="file" accept=".csv,.xlsx,.xls" required>
+          <span class="upload-mark">+</span>
+          <strong id="fileLabel">Drop a schedule file here, or click to choose one</strong>
+          <small>Supports CSV, XLSX, XLS, up to 50 MB</small>
+        </label>
+        <button id="submitButton" type="submit" disabled>Solve Schedule</button>
+      </form>
+      <div id="errorBox" class="error-box hidden"></div>
+    </section>
+
+    <section id="results" class="results hidden">
+      <div class="results-summary"><strong id="countLabel"></strong></div>
+      <div id="attemptTabs" class="attempt-tabs hidden" role="tablist"></div>
+      <div id="changesSummary" class="changes-summary hidden"></div>
+      <div id="excelDownloads" class="excel-downloads hidden">
+        <a id="downloadRaw" download="schedule.xlsx">Download Schedule (As-Is)</a>
+        <a id="downloadInstructor" download="schedule_instructor.xlsx">Download Schedule (By Instructor)</a>
+        <a id="downloadRoom" download="schedule_room.xlsx">Download Schedule (By Room)</a>
+      </div>
+      <div id="violationsSummary" class="violations-summary hidden"></div>
+      <div class="view-switcher" id="viewSwitcher" role="tablist">
+        <button type="button" class="view-tab" data-view="atomic">Atomic Classes</button>
+        <button type="button" class="view-tab" data-view="course">By Course</button>
+        <button type="button" class="view-tab active" data-view="instructor">By Instructor</button>
+        <button type="button" class="view-tab" data-view="room">By Room</button>
+      </div>
+      <div id="classList" class="class-list"></div>
+    </section>
+  </main>
+  <script src="/app.js?v=11" defer></script>
+</body>
+</html>

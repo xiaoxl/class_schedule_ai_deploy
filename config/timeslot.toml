@@ -1,0 +1,43 @@
+# Time patterns the solver may use when generating new schedule candidates,
+# plus periods that generated candidates may not overlap.
+
+[[calendar.meeting_patterns]]
+days = "MWF"
+duration_minutes = 50
+starts = ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00"]
+
+[[calendar.meeting_patterns]]
+days = "TR"
+duration_minutes = 80
+starts = ["08:00", "09:30", "11:00", "13:00", "14:30"]
+
+[[calendar.meeting_patterns]]
+days = "MW"
+duration_minutes = 50
+starts = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00"]
+
+[[calendar.meeting_patterns]]
+days = "R"
+duration_minutes = 50
+starts = ["08:00", "09:30", "11:00", "13:00", "14:30"]
+
+[[calendar.meeting_patterns]]
+days = "R"
+duration_minutes = 80
+starts = ["08:00", "09:30", "11:00", "13:00", "14:30"]
+
+[[calendar.meeting_patterns]]
+days = "T"
+duration_minutes = 50
+starts = ["08:00", "09:30", "11:00", "13:00", "14:30"]
+
+[[calendar.meeting_patterns]]
+days = "T"
+duration_minutes = 80
+starts = ["08:00", "09:30", "11:00", "13:00", "14:30"]
+
+[[calendar.blackouts]]
+days = ["F"]
+start = "12:00"
+end = "12:50"
+reason = "Department-wide Friday noon meeting"

@@ -1,0 +1,178 @@
+# Per-term instructor preferences. Never set or override the contractual
+# max_load here -- that belongs in persons.toml.
+# name must exactly match persons.toml -- no abbreviations, no reordering.
+# Locations/rooms use the CSV's own full spelling, e.g. Corley, Rothwell,
+# Ross Pendergraft Library, and Corley 101, Rothwell 221.
+# preferred_courses/disliked_courses use persons.toml's own "SUBJECT NUMBER"
+# course convention (e.g. "MATH 0903"), not a full course id with section.
+#
+# overload_penalty is a single 0-100 strictness knob for going over
+# max_load: 0 means entirely fine with overload, 100 means avoid it at
+# essentially any cost. Either way it's always soft -- not a hard block --
+# and it never applies within +2 credit hours of max_load; that's the
+# definition of overload, not something this knob can loosen or tighten.
+
+[[instructors]]
+name = "Bain, Leslie M."
+overload_penalty = 10
+allow_back_to_back = true
+preferred_times = []
+disliked_times = []
+preferred_locations = []
+disliked_locations = []
+preferred_courses = []
+disliked_courses = []
+
+[[instructors]]
+name = "Ballard, Kasey L."
+overload_penalty = 100
+allow_back_to_back = true
+preferred_times = []
+disliked_times = []
+preferred_locations = []
+disliked_locations = []
+preferred_courses = []
+disliked_courses = []
+
+[[instructors]]
+name = "Cox, Allie M."
+overload_penalty = 100
+allow_back_to_back = true
+preferred_times = []
+disliked_times = []
+preferred_locations = []
+disliked_locations = []
+preferred_courses = []
+disliked_courses = []
+
+[[instructors]]
+name = "Growns, Landon C."
+overload_penalty = 10
+allow_back_to_back = true
+preferred_times = []
+disliked_times = []
+preferred_locations = []
+disliked_locations = []
+preferred_courses = []
+disliked_courses = []
+
+[[instructors]]
+name = "Hogan, Jessica L."
+overload_penalty = 100
+allow_back_to_back = true
+preferred_times = []
+disliked_times = []
+preferred_locations = []
+disliked_locations = []
+preferred_courses = []
+disliked_courses = []
+
+[[instructors]]
+name = "Jordan, Scott M."
+overload_penalty = 100
+allow_back_to_back = true
+preferred_times = []
+disliked_times = []
+preferred_locations = []
+disliked_locations = []
+preferred_courses = []
+disliked_courses = []
+
+[[instructors]]
+name = "Jordan, Susan M."
+overload_penalty = 100
+allow_back_to_back = true
+preferred_times = []
+disliked_times = []
+preferred_locations = []
+disliked_locations = []
+preferred_courses = []
+disliked_courses = []
+
+[[instructors]]
+name = "King, Jamie L."
+overload_penalty = 100
+allow_back_to_back = true
+preferred_times = []
+disliked_times = []
+preferred_locations = []
+disliked_locations = []
+preferred_courses = []
+disliked_courses = []
+
+[[instructors]]
+name = "Limperis, Thomas G."
+overload_penalty = 100
+allow_back_to_back = true
+preferred_times = []
+disliked_times = []
+preferred_locations = []
+disliked_locations = []
+preferred_courses = []
+disliked_courses = []
+
+[[instructors]]
+name = "Myers, Jeanine L."
+overload_penalty = 100
+allow_back_to_back = true
+preferred_times = []
+disliked_times = []
+preferred_locations = []
+disliked_locations = []
+preferred_courses = []
+disliked_courses = []
+
+[[instructors]]
+name = "Overduin, Matthew D."
+overload_penalty = 100
+allow_back_to_back = true
+preferred_times = []
+disliked_times = []
+preferred_locations = []
+disliked_locations = []
+preferred_courses = []
+disliked_courses = []
+
+[[instructors]]
+name = "Taylor, Teresa L."
+overload_penalty = 10
+allow_back_to_back = true
+preferred_times = []
+disliked_times = []
+preferred_locations = []
+disliked_locations = []
+preferred_courses = []
+disliked_courses = []
+
+[[instructors]]
+name = "Winn, Janet L."
+overload_penalty = 100
+allow_back_to_back = true
+preferred_times = []
+disliked_times = []
+preferred_locations = []
+disliked_locations = []
+preferred_courses = []
+disliked_courses = []
+
+[[instructors]]
+name = "Xiao, Xinli"
+overload_penalty = 100
+allow_back_to_back = true
+preferred_times = []
+disliked_times = []
+preferred_locations = []
+disliked_locations = []
+preferred_courses = []
+disliked_courses = []
+
+# Time preference example:
+# preferred_times = [
+#   { days = ["M", "W", "F"], start = "09:00", end = "14:00", reason = "Prefers daytime" },
+# ]
+# disliked_times = [
+#   { days = ["T", "R"], start = "08:00", end = "10:00", reason = "Prefers no early classes" },
+# ]
+# Course preference example:
+# preferred_courses = ["MATH 1913"]
+# disliked_courses = ["MATH 0803"]
