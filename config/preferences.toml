@@ -6,36 +6,34 @@
 # preferred_courses/disliked_courses use persons.toml's own "SUBJECT NUMBER"
 # course convention (e.g. "MATH 0903"), not a full course id with section.
 #
-# overload_penalty is a single 0-100 strictness knob for going over
-# max_load: 0 means entirely fine with overload, 100 means avoid it at
-# essentially any cost. Either way it's always soft -- not a hard block --
-# and it never applies within +2 credit hours of max_load; that's the
+# allow_overload: true means this instructor is fine with going over
+# max_load, false means avoid it (penalty 100, this system's practical
+# ceiling). Either way it's always soft -- not a hard block -- and it
+# never applies within +2 credit hours of max_load; that's the
 # definition of overload, not something this knob can loosen or tighten.
 #
 # instructors.rules -- free-form soft rules for this instructor beyond the
 # fixed fields above (course/section/room/time-scoped, any combination of
 # those you fill in; leaving one out means "matches anything"). Each rule
 # needs `direction` ("prefer" or "dislike") and `weight` (how strongly).
-# Recommended weight scale, so rules stay comparable to each other and to
-# the rest of this system's own fixed penalties (`overload`/`under_load`
-# max out at 1000):
-#   100  -- SLIGHTLY:  a little
-#   500  -- VERYMUCH:  a lot
-#   1000 -- HAVETO:    as strong as this system's soft rules go; ties
-#                       under_load, the strongest existing penalty --
-#                       still not a hard guarantee, but as close as this
-#                       mechanism gets
+# `weight` is on the same 0-100 scale as every penalty in this system --
+# 100 is the practical ceiling, just below under_load (this system's
+# strongest penalty):
+#   10  -- a little
+#   50  -- a lot
+#   100 -- as strong as this system's soft rules go -- still not a hard
+#          guarantee, but as close as this mechanism gets
 #
 #   [[instructors.rules]]
 #   room = "Corley 269"
 #   direction = "prefer"
-#   weight = 1000
+#   weight = 100
 #
 #   [[instructors.rules]]
 #   course = "MATH 1113"
-#   time = { days = ["T", "R"], start = "08:00", end = "09:30" }
+#   time = { days = ["T", "R"], between = ["08:00", "09:30"] }
 #   direction = "dislike"
-#   weight = 100
+#   weight = 10
 #
 # A rule with no instructor at all -- applies no matter who ends up
 # teaching the match, e.g. a specific course-section pinned to a room
@@ -47,11 +45,11 @@
 #   section = "F01"
 #   room = "Corley 269"
 #   direction = "prefer"
-#   weight = 1000
+#   weight = 100
 
 [[instructors]]
 name = "Bain, Leslie M."
-overload_penalty = 10
+allow_overload = true
 allow_back_to_back = true
 preferred_times = []
 disliked_times = []
@@ -62,7 +60,7 @@ disliked_courses = []
 
 [[instructors]]
 name = "Ballard, Kasey L."
-overload_penalty = 100
+allow_overload = false
 allow_back_to_back = true
 preferred_times = []
 disliked_times = []
@@ -73,10 +71,12 @@ disliked_courses = []
 
 [[instructors]]
 name = "Cox, Allie M."
-overload_penalty = 100
+allow_overload = false
 allow_back_to_back = true
 preferred_times = []
-disliked_times = []
+disliked_times = [
+  { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "Prefers no early classes" },
+]
 preferred_locations = []
 disliked_locations = []
 preferred_courses = []
@@ -84,7 +84,7 @@ disliked_courses = []
 
 [[instructors]]
 name = "Growns, Landon C."
-overload_penalty = 10
+allow_overload = true
 allow_back_to_back = true
 preferred_times = []
 disliked_times = []
@@ -95,7 +95,7 @@ disliked_courses = []
 
 [[instructors]]
 name = "Hogan, Jessica L."
-overload_penalty = 100
+allow_overload = false
 allow_back_to_back = true
 preferred_times = []
 disliked_times = []
@@ -106,7 +106,7 @@ disliked_courses = []
 
 [[instructors]]
 name = "Jordan, Scott M."
-overload_penalty = 100
+allow_overload = false
 allow_back_to_back = true
 preferred_times = []
 disliked_times = []
@@ -117,7 +117,7 @@ disliked_courses = []
 
 [[instructors]]
 name = "Jordan, Susan M."
-overload_penalty = 100
+allow_overload = false
 allow_back_to_back = true
 preferred_times = []
 disliked_times = []
@@ -128,7 +128,7 @@ disliked_courses = []
 
 [[instructors]]
 name = "King, Jamie L."
-overload_penalty = 100
+allow_overload = false
 allow_back_to_back = true
 preferred_times = []
 disliked_times = []
@@ -139,7 +139,7 @@ disliked_courses = []
 
 [[instructors]]
 name = "Limperis, Thomas G."
-overload_penalty = 100
+allow_overload = false
 allow_back_to_back = true
 preferred_times = []
 disliked_times = []
@@ -150,7 +150,7 @@ disliked_courses = []
 
 [[instructors]]
 name = "Myers, Jeanine L."
-overload_penalty = 100
+allow_overload = false
 allow_back_to_back = true
 preferred_times = []
 disliked_times = []
@@ -161,7 +161,7 @@ disliked_courses = []
 
 [[instructors]]
 name = "Overduin, Matthew D."
-overload_penalty = 100
+allow_overload = false
 allow_back_to_back = true
 preferred_times = []
 disliked_times = []
@@ -172,7 +172,7 @@ disliked_courses = []
 
 [[instructors]]
 name = "Taylor, Teresa L."
-overload_penalty = 10
+allow_overload = true
 allow_back_to_back = true
 preferred_times = []
 disliked_times = []
@@ -183,7 +183,7 @@ disliked_courses = []
 
 [[instructors]]
 name = "Winn, Janet L."
-overload_penalty = 100
+allow_overload = false
 allow_back_to_back = true
 preferred_times = []
 disliked_times = []
@@ -194,7 +194,7 @@ disliked_courses = []
 
 [[instructors]]
 name = "Xiao, Xinli"
-overload_penalty = 100
+allow_overload = false
 allow_back_to_back = true
 preferred_times = []
 disliked_times = []
@@ -205,10 +205,10 @@ disliked_courses = []
 
 # Time preference example:
 # preferred_times = [
-#   { days = ["M", "W", "F"], start = "09:00", end = "14:00", reason = "Prefers daytime" },
+#   { days = ["M", "W", "F"], between = ["09:00", "14:00"], reason = "Prefers daytime" },
 # ]
 # disliked_times = [
-#   { days = ["T", "R"], start = "08:00", end = "10:00", reason = "Prefers no early classes" },
+#   { days = ["T", "R"], between = ["08:00", "10:00"], reason = "Prefers no early classes" },
 # ]
 # Course preference example:
 # preferred_courses = ["MATH 1913"]

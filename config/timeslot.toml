@@ -60,6 +60,5 @@ types = ["four_credit_partial"]
 
 [[calendar.blackouts]]
 days = ["F"]
-start = "12:00"
-end = "12:50"
+between = ["12:00", "12:50"]
 reason = "Department-wide Friday noon meeting"

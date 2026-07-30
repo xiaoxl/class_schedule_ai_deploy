@@ -3,7 +3,6 @@ import unittest
 
 from class_schedule.class_model import CrossListingClass, NormalClass, Section
 from class_schedule.schedule_model import (
-    HAVETO,
     PreferenceRecord,
     PreferenceRule,
     Schedule,
@@ -92,7 +91,7 @@ class SolveHonorsPreferenceRulesTests(unittest.TestCase):
             ],
             preferences={"Alice": PreferenceRecord(
                 name="Alice",
-                rules=(PreferenceRule(room="Corley 269", direction="prefer", weight=HAVETO),),
+                rules=(PreferenceRule(room="Corley 269", direction="prefer", weight=100),),
             )},
         )
         solved = solve(schedule, config, time_limit_seconds=10.0)
@@ -116,7 +115,7 @@ class SolveHonorsPreferenceRulesTests(unittest.TestCase):
             global_rules=(
                 PreferenceRule(
                     course="MATH 1113", section="F01", room="Corley 269",
-                    direction="prefer", weight=HAVETO,
+                    direction="prefer", weight=100,
                 ),
             ),
         )

@@ -51,13 +51,14 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 LOG_PATH = Path("output/logs/webapp.log")
 
 # A soft finding's penalty at or above this is rendered orange in the UI
-# (under_load, always weighted 1000, overload, weighted up to 1000
-# depending on that instructor's own overload_penalty, and a "dislike"
-# PreferenceRule at VERYMUCH/HAVETO strength, land here); below it is
-# yellow (back_to_back/disliked_*, weighted 20-50, a SLIGHTLY-strength
-# PreferenceRule, and a lenient
-# instructor's overload finding).
-SOFT_SEVERITY_THRESHOLD = 200.0
+# (under_load, always weighted 100, overload, weighted up to 100
+# depending on that instructor's own overload_penalty, and a strongly
+# weighted "dislike" PreferenceRule, land here); below it is yellow
+# (back_to_back/disliked_*, weighted 5-10, a mildly weighted
+# PreferenceRule, and a lenient instructor's overload finding). Every
+# penalty in this system shares one 0-100 scale -- see the comment above
+# schedule_model.OVERLOAD_PENALTY_SCALE.
+SOFT_SEVERITY_THRESHOLD = 20.0
 
 # The solver is a real optimization pass, not instant -- generous but
 # bounded so a solve request can't hang the server indefinitely. This is

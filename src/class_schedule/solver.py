@@ -52,7 +52,6 @@ from .class_model import (
 )
 from .schedule_model import (
     OVERLOAD_TOLERANCE,
-    OVERLOAD_PENALTY_SCALE,
     BACK_TO_BACK_PENALTY,
     DISLIKED_COURSE_PENALTY,
     DISLIKED_LOCATION_PENALTY,
@@ -75,11 +74,13 @@ class NoFeasibleSchedule(RuntimeError):
     couldn't find one within the time limit."""
 
 
-# ---- stability tiebreaker: same weights the old system used for "prefer
-# not to move things", carried over since the shape of the idea is the same.
-INSTRUCTOR_CHANGE_COST = 30.0
-TIME_CHANGE_COST = 20.0
-ROOM_CHANGE_COST = 10.0
+# ---- stability tiebreaker: "prefer not to move things" -- on the same
+# 0-100 penalty scale as schedule_model.py's own constants, scaled down
+# proportionally so a real preference/load violation always outweighs
+# pure churn.
+INSTRUCTOR_CHANGE_COST = 10.0
+TIME_CHANGE_COST = 5.0
+ROOM_CHANGE_COST = 5.0
 
 # Cap candidates *per qualified instructor*, not per section overall --
 # ranked by cost within each instructor's own bucket, so every qualified
@@ -629,7 +630,8 @@ def _add_load_terms(
     """max_load is a per-instructor TARGET, not just a ceiling -- mirrors
     ``schedule_model``'s overload/under_load contract exactly (see its
     module docstring): always-soft terms, never a hard violation. A soft
-    term scaled by ``preference.overload_penalty`` (0-100) beyond
+    term weighted by ``preference.overload_penalty`` (derived from
+    ``allow_overload`` -- see ``PreferenceRecord``) beyond
     max_load + OVERLOAD_TOLERANCE, and a heavily-weighted soft term
     (UNDER_LOAD_PENALTY) for anyone left short of their target -- "must
     reach max_load" should dominate ordinary soft preferences, but an
@@ -662,9 +664,7 @@ def _add_load_terms(
         target = int(round(person.max_load * load_scale))
         limit = int(round((person.max_load + OVERLOAD_TOLERANCE) * load_scale))
         preference = preferences.get(instructor)
-        penalty_weight = (
-            preference.overload_penalty * OVERLOAD_PENALTY_SCALE if preference else 0.0
-        )
+        penalty_weight = preference.overload_penalty if preference else 0.0
         if penalty_weight:
             over = model.new_bool_var(f"overload_{instructor}")
             model.add(total > limit).only_enforce_if(over)

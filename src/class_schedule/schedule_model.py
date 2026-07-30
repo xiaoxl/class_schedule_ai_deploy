@@ -400,12 +400,13 @@ def _take_coreqs(
 #     configurable per instructor) even though it stays a named constant
 #     for easy retuning later (e.g. to 1.0).
 #   - more than that over: a soft "overload" finding, always. Its penalty
-#     is ``preference.overload_penalty`` (0-100, this term's per-instructor
-#     overload strictness -- 0 means "entirely fine with it", 100 means
-#     "avoid at essentially any cost") scaled by OVERLOAD_PENALTY_SCALE so
-#     it lands in the same 0-1000 range as every other penalty tier below.
-#     An instructor with no preferences.toml entry defaults to a penalty
-#     of 0 (no opinion on record).
+#     is ``preference.overload_penalty`` -- derived from ``allow_overload``
+#     (this term's per-instructor overload tolerance: ``True`` means
+#     "fine with it", ``False`` means "avoid it") rather than a
+#     continuous dial; see ``PreferenceRecord.overload_penalty`` for the
+#     two fixed values. An instructor with no preferences.toml entry
+#     defaults to a penalty of 0 (no opinion on record) instead of
+#     either fixed value.
 #   - under max_load by any amount: also a soft finding, weighted very
 #     high (UNDER_LOAD_PENALTY) -- "must reach max_load" is meant to
 #     dominate ordinary soft preferences. It's still soft, though: if
@@ -414,18 +415,15 @@ def _take_coreqs(
 #     than forced.
 OVERLOAD_TOLERANCE = 2.0
 
-# Maps overload_penalty's 0-100 preferences.toml scale onto the same
-# 0-1000 range UNDER_LOAD_PENALTY already uses, so "100" (as strict as
-# possible) behaves as the same kind of dominant, "avoid at essentially
-# any cost" soft term as under_load, not some smaller, easily-outweighed
-# number.
-OVERLOAD_PENALTY_SCALE = 10.0
-
-UNDER_LOAD_PENALTY = 1000.0
-BACK_TO_BACK_PENALTY = 50.0
-DISLIKED_TIME_PENALTY = 20.0
-DISLIKED_LOCATION_PENALTY = 20.0
-DISLIKED_COURSE_PENALTY = 20.0
+# Every penalty in this system shares one 0-100 scale (see
+# PreferenceRecord.overload_penalty and PreferenceRule.weight) -- 100 is
+# the practical ceiling used throughout, though UNDER_LOAD_PENALTY itself
+# is tuned slightly below it.
+UNDER_LOAD_PENALTY = 90.0
+BACK_TO_BACK_PENALTY = 10.0
+DISLIKED_TIME_PENALTY = 5.0
+DISLIKED_LOCATION_PENALTY = 5.0
+DISLIKED_COURSE_PENALTY = 5.0
 
 
 def weekday_time_overlap(
@@ -459,10 +457,16 @@ class TimeWindow:
 
     @classmethod
     def from_config(cls, raw: Mapping[str, object]) -> "TimeWindow":
+        """``raw["between"]`` is a two-element ``[start, end]`` array --
+        e.g. ``between = ["08:00", "09:00"]`` -- rather than separate
+        ``start``/``end`` keys, since a bare "start"/"end" reads
+        ambiguously next to a class's own actual start/end time (this is
+        a *window* to match against, not one specific meeting)."""
+        window_start, window_end = raw["between"]
         return cls(
             days=frozenset(raw.get("days", ())),
-            start=record_utils.clock(raw["start"]),
-            end=record_utils.clock(raw["end"]),
+            start=record_utils.clock(window_start),
+            end=record_utils.clock(window_end),
             reason=str(raw.get("reason", "")),
         )
 
@@ -484,19 +488,6 @@ class PersonRecord:
     courses: tuple[str, ...] = ()
 
 
-# Reference scale for a PreferenceRule's `weight` -- purely documentation
-# for whoever is filling in preferences.toml (see its header comment for
-# the worked examples), not something the loader enforces. Picked to sit
-# alongside this module's other penalty constants: SLIGHTLY comfortably
-# beats the small fixed ones below (back_to_back/disliked_* at 20-50) and
-# solver.py's own room/time/instructor "prefer not to move things" costs
-# (10-30); HAVETO ties UNDER_LOAD_PENALTY, the strongest existing soft
-# term, rather than inventing a new ceiling above it.
-SLIGHTLY = 100.0
-VERYMUCH = 500.0
-HAVETO = 1000.0
-
-
 @dataclass(frozen=True)
 class PreferenceRule:
     """One `[[rules]]` entry (top-level, applies regardless of
@@ -514,8 +505,9 @@ class PreferenceRule:
     ``direction`` is ``"prefer"`` (subtracts ``weight`` from a matching
     candidate's cost -- a reward the solver seeks out) or ``"dislike"``
     (adds it -- a penalty the solver avoids); ``weight`` is always a
-    positive magnitude, see SLIGHTLY/VERYMUCH/HAVETO above for the
-    recommended scale.
+    positive magnitude, on the same 0-100 scale as every other penalty in
+    this system -- 100 is this system's practical ceiling, just below
+    ``UNDER_LOAD_PENALTY``.
     """
 
     course: str | None = None
@@ -555,13 +547,15 @@ class PreferenceRule:
 class PreferenceRecord:
     """One preferences.toml entry for the current term.
 
-    ``overload_penalty`` is a single 0-100 strictness knob: 0 means
-    entirely fine with overload, 100 means avoid it at essentially any
-    cost (still soft -- see the module comment above OVERLOAD_TOLERANCE).
+    ``allow_overload`` is this instructor's overload tolerance: ``True``
+    means fine with it, ``False`` means avoid it (still soft -- see the
+    module comment above OVERLOAD_TOLERANCE). ``overload_penalty`` derives
+    the actual scoring penalty from it -- 10 when ``allow_overload`` is
+    ``True``, 100 (this system's practical ceiling) when it's ``False``.
     """
 
     name: str
-    overload_penalty: float = 0.0
+    allow_overload: bool = True
     allow_back_to_back: bool = True
     preferred_times: tuple[TimeWindow, ...] = ()
     disliked_times: tuple[TimeWindow, ...] = ()
@@ -570,6 +564,10 @@ class PreferenceRecord:
     preferred_courses: tuple[str, ...] = ()
     disliked_courses: tuple[str, ...] = ()
     rules: tuple[PreferenceRule, ...] = ()
+
+    @property
+    def overload_penalty(self) -> float:
+        return 10.0 if self.allow_overload else 100.0
 
 
 def load_persons(path: str | Path) -> dict[str, PersonRecord]:
@@ -593,7 +591,7 @@ def load_preferences(path: str | Path) -> dict[str, PreferenceRecord]:
     return {
         entry["name"]: PreferenceRecord(
             name=entry["name"],
-            overload_penalty=float(entry.get("overload_penalty", 0)),
+            allow_overload=bool(entry.get("allow_overload", True)),
             allow_back_to_back=bool(entry.get("allow_back_to_back", True)),
             preferred_times=tuple(
                 TimeWindow.from_config(w) for w in entry.get("preferred_times", ())
@@ -702,9 +700,8 @@ def _overload_statuses(
     Anything within ``OVERLOAD_TOLERANCE`` credit hours of max_load isn't
     included at all -- it doesn't count as overload, so it's never
     reported by ``check_soft_preferences``. Everything this returns *is*
-    overload, always soft -- ``penalty`` is
-    ``preference.overload_penalty * OVERLOAD_PENALTY_SCALE`` (``0.0`` when
-    there's no preferences.toml entry for that instructor).
+    overload, always soft -- ``penalty`` is ``preference.overload_penalty``
+    (``0.0`` when there's no preferences.toml entry for that instructor).
     """
     statuses: list[_OverloadStatus] = []
     for instructor, load in sorted(_teaching_loads(schedule).items()):
@@ -714,7 +711,7 @@ def _overload_statuses(
         if load <= person.max_load + OVERLOAD_TOLERANCE:
             continue
         preference = preferences.get(instructor)
-        penalty = preference.overload_penalty * OVERLOAD_PENALTY_SCALE if preference else 0.0
+        penalty = preference.overload_penalty if preference else 0.0
         statuses.append(_OverloadStatus(
             instructor=instructor,
             load=load,

@@ -286,6 +286,23 @@ function renderExcelDownloads(excel) {
 // ---- changes summary: what the solver actually adjusted ----
 
 const CHANGE_FIELD_LABELS = { instructor: "Instructor", time: "Time", room: "Room" };
+const CHANGE_FIELD_ORDER = ["time", "room", "instructor"];
+
+// changes only carries fields that actually differ (see solver.py's
+// diff_schedules) -- to show the other, unchanged fields alongside them
+// we look the section back up in the current render's own data.
+function currentSectionByCourseId(courseId) {
+  if (!lastData) return null;
+  return flattenSections(lastData).find((s) => s.course_id === courseId) || null;
+}
+
+function currentFieldValue(section, field) {
+  if (!section) return "";
+  if (field === "time") return section["Time Slot"] || "";
+  if (field === "room") return roomLabel(section);
+  if (field === "instructor") return section["Instructor"] || "";
+  return "";
+}
 
 function renderChanges(changes) {
   const box = $("#changesSummary");
@@ -297,14 +314,28 @@ function renderChanges(changes) {
   const groups = groupBy(changes, (c) => c.course_id, "(Unknown course)");
   const items = groups
     .map(([courseId, courseChanges]) => {
-      const parts = courseChanges
-        .map((c) => {
-          const label = CHANGE_FIELD_LABELS[c.field] || c.field;
+      const changedByField = new Map(courseChanges.map((c) => [c.field, c]));
+      const section = currentSectionByCourseId(courseId);
+      // Unchanged fields first (plain current value), changed fields
+      // after (before -> after) -- both halves in the same Time/Room/
+      // Instructor order for a predictable read.
+      const unchangedParts = CHANGE_FIELD_ORDER
+        .filter((field) => !changedByField.has(field))
+        .map((field) => {
+          const label = CHANGE_FIELD_LABELS[field];
+          const value = currentFieldValue(section, field) || "(empty)";
+          return `${esc(label)} ${esc(value)}`;
+        });
+      const changedParts = CHANGE_FIELD_ORDER
+        .filter((field) => changedByField.has(field))
+        .map((field) => {
+          const c = changedByField.get(field);
+          const label = CHANGE_FIELD_LABELS[field] || field;
           const before = c.before || "(empty)";
           const after = c.after || "(empty)";
           return `${esc(label)} ${esc(before)} → ${esc(after)}`;
-        })
-        .join("; ");
+        });
+      const parts = [...unchangedParts, ...changedParts].join("; ");
       return `<li><strong>${esc(courseId)}</strong>: ${parts}</li>`;
     })
     .join("");
@@ -381,7 +412,7 @@ function renderClass(item) {
   return `<article class="class-card">
     <header><span class="kind-badge">${esc(label)}</span><strong>${esc(item.course_ids.join(" / "))}</strong></header>
     <table>
-      <thead><tr><th>Time Slot</th><th>Room</th><th>Instructor</th><th>Type</th></tr></thead>
+      <thead><tr><th>Time Slot</th><th>Room</th><th>Instructor</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </article>`;
@@ -392,7 +423,6 @@ function renderSection(section) {
     <td>${esc(section["Time Slot"])}</td>
     <td>${esc(roomLabel(section))}</td>
     <td>${esc(section["Instructor"])}</td>
-    <td>${esc(section["Type"])}</td>
   </tr>`;
 }
 
@@ -488,19 +518,16 @@ const GROUP_COLUMNS = {
     ["Time Slot", (r) => r["Time Slot"]],
     ["Room", (r) => roomLabel(r)],
     ["Instructor", (r) => r["Instructor"]],
-    ["Type", (r) => r["Type"]],
   ],
   instructor: [
     ["Course", (r) => r.course_id],
     ["Time Slot", (r) => r["Time Slot"]],
     ["Room", (r) => roomLabel(r)],
-    ["Type", (r) => r["Type"]],
   ],
   room: [
     ["Course", (r) => r.course_id],
     ["Time Slot", (r) => r["Time Slot"]],
     ["Instructor", (r) => r["Instructor"]],
-    ["Type", (r) => r["Type"]],
   ],
 };
 

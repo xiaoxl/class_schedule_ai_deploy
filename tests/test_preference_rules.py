@@ -5,11 +5,9 @@ from pathlib import Path
 
 from class_schedule.class_model import NormalClass, Section
 from class_schedule.schedule_model import (
-    HAVETO,
     PreferenceRecord,
     PreferenceRule,
     Schedule,
-    SLIGHTLY,
     TimeWindow,
     check_soft_preferences,
     load_global_rules,
@@ -92,12 +90,12 @@ class LoadPreferencesRulesTests(unittest.TestCase):
         path = write_toml("""
 [[instructors]]
 name = "Xiao, Xinli"
-overload_penalty = 100
+allow_overload = false
 
   [[instructors.rules]]
   room = "Corley 269"
   direction = "prefer"
-  weight = 1000
+  weight = 100
 """)
         self.addCleanup(path.unlink)
         preferences = load_preferences(path)
@@ -105,13 +103,13 @@ overload_penalty = 100
         self.assertEqual(len(rules), 1)
         self.assertEqual(rules[0].room, "Corley 269")
         self.assertEqual(rules[0].direction, "prefer")
-        self.assertEqual(rules[0].weight, HAVETO)
+        self.assertEqual(rules[0].weight, 100)
 
     def test_instructor_without_rules_gets_empty_tuple(self):
         path = write_toml("""
 [[instructors]]
 name = "Xiao, Xinli"
-overload_penalty = 100
+allow_overload = false
 """)
         self.addCleanup(path.unlink)
         preferences = load_preferences(path)
@@ -155,7 +153,7 @@ course = "MATH 1113"
 section = "F01"
 room = "Corley 269"
 direction = "prefer"
-weight = 1000
+weight = 100
 
 [[instructors]]
 name = "Xiao, Xinli"
@@ -181,10 +179,10 @@ class CheckSoftPreferencesRuleFindingsTests(unittest.TestCase):
         schedule = Schedule([NormalClass((section,))])
         preferences = {"Alice": PreferenceRecord(
             name="Alice",
-            rules=(PreferenceRule(room="Corley 101", direction="dislike", weight=SLIGHTLY),),
+            rules=(PreferenceRule(room="Corley 101", direction="dislike", weight=10),),
         )}
         total, findings = check_soft_preferences(schedule, preferences, {})
-        self.assertEqual(total, SLIGHTLY)
+        self.assertEqual(total, 10)
         self.assertTrue(any(f.rule == "custom_rule" for f in findings))
 
     def test_matching_prefer_rule_produces_no_finding(self):
@@ -192,7 +190,7 @@ class CheckSoftPreferencesRuleFindingsTests(unittest.TestCase):
         schedule = Schedule([NormalClass((section,))])
         preferences = {"Alice": PreferenceRecord(
             name="Alice",
-            rules=(PreferenceRule(room="Corley 101", direction="prefer", weight=SLIGHTLY),),
+            rules=(PreferenceRule(room="Corley 101", direction="prefer", weight=10),),
         )}
         total, findings = check_soft_preferences(schedule, preferences, {})
         self.assertEqual(total, 0.0)
@@ -207,7 +205,7 @@ class CheckSoftPreferencesRuleFindingsTests(unittest.TestCase):
         global_rules = (
             PreferenceRule(
                 course="MATH 1113", section="F01", room="Corley 269",
-                direction="dislike", weight=HAVETO,
+                direction="dislike", weight=100,
             ),
         )
         # "Bob" has no preferences.toml entry at all -- the global rule
@@ -223,7 +221,7 @@ class CheckSoftPreferencesRuleFindingsTests(unittest.TestCase):
         )
         schedule2 = Schedule([NormalClass((section_in_disliked_room,))])
         total2, findings2 = check_soft_preferences(schedule2, {}, {}, global_rules)
-        self.assertEqual(total2, HAVETO)
+        self.assertEqual(total2, 100)
         self.assertTrue(any(f.rule == "custom_rule" for f in findings2))
 
 
