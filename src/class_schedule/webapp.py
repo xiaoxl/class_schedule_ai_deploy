@@ -219,6 +219,7 @@ async def _read_and_group(schedule_file: UploadFile) -> tuple[str, Schedule]:
     except Exception as error:
         logger.exception("Failed to read %r", filename)
         raise HTTPException(400, f"Could not read file: {error}") from error
+    del content  # no longer needed once parsed; drop it before the solve path holds `schedule`
 
     try:
         schedule = Schedule.from_dataframe(dataframe)
@@ -237,6 +238,7 @@ async def _read_and_group(schedule_file: UploadFile) -> tuple[str, Schedule]:
     except ValueError as error:
         logger.warning("Failed to group %r into classes: %s", filename, error)
         raise HTTPException(400, str(error)) from error
+    del dataframe  # Schedule.from_dataframe() copies out into Class objects; doesn't need the DataFrame itself
 
     return filename, schedule
 
