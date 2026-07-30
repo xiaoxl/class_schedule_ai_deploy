@@ -146,7 +146,7 @@ class OverloadPenaltyTests(unittest.TestCase):
     """max_load=10 throughout; OVERLOAD_TOLERANCE=2 (2 is fine, 3+
     triggers), OVERLOAD_FAR_THRESHOLD=4 (4 is fine, 5+ triggers -- same
     "last safe value" convention as OVERLOAD_TOLERANCE),
-    OVERLOAD_FAR_PENALTY=50."""
+    OVERLOAD_FAR_PENALTY=80 (base 10 + far 80 = 90)."""
 
     def test_within_tolerance_is_no_overload_finding(self):
         schedule = _schedule_with_load([9, 3])  # 12 total, 2 credit hours over
@@ -179,7 +179,7 @@ class OverloadPenaltyTests(unittest.TestCase):
         preferences = {"Alice": PreferenceRecord(name="Alice", allow_overload=True)}
         _, findings = check_soft_preferences(schedule, preferences, persons)
         overload = next(f for f in findings if f.rule == "overload")
-        self.assertEqual(overload.penalty, 60.0)  # base (10) + far (50)
+        self.assertEqual(overload.penalty, 90.0)  # base (10) + far (80)
 
     def test_permissive_past_the_far_threshold_adds_the_extra_penalty(self):
         schedule = _schedule_with_load([9, 8])  # 17 total, 7 credit hours over
@@ -187,15 +187,15 @@ class OverloadPenaltyTests(unittest.TestCase):
         preferences = {"Alice": PreferenceRecord(name="Alice", allow_overload=True)}
         _, findings = check_soft_preferences(schedule, preferences, persons)
         overload = next(f for f in findings if f.rule == "overload")
-        self.assertEqual(overload.penalty, 60.0)  # base (10) + far (50)
+        self.assertEqual(overload.penalty, 90.0)  # base (10) + far (80)
 
-    def test_permissive_stays_at_60_far_over(self):
+    def test_permissive_stays_at_90_far_over(self):
         schedule = _schedule_with_load([9, 9, 9])  # 27 total, 17 credit hours over
         persons = {"Alice": PersonRecord(name="Alice", max_load=10)}
         preferences = {"Alice": PreferenceRecord(name="Alice", allow_overload=True)}
         _, findings = check_soft_preferences(schedule, preferences, persons)
         overload = next(f for f in findings if f.rule == "overload")
-        self.assertEqual(overload.penalty, 60.0)  # flat -- not scaled further
+        self.assertEqual(overload.penalty, 90.0)  # flat -- not scaled further
 
     def test_strict_instructor_uses_the_flat_ceiling(self):
         schedule = _schedule_with_load([9, 4])  # 13 total, 3 credit hours over

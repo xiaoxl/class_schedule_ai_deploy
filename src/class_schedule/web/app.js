@@ -370,9 +370,13 @@ function renderViolations(violations) {
     ));
   }
   if (yellow.length) {
+    // This group's own point total -- not violations.soft_total, which
+    // is the grand total across *both* severities and would silently
+    // include orange's points here too whenever both groups are present.
+    const yellowTotal = yellow.reduce((sum, f) => sum + f.penalty, 0);
     groups.push(renderViolationGroup(
       "yellow",
-      `Soft Preferences Not Met (${yellow.length}, ${violations.soft_total} pts total)`,
+      `Soft Preferences Not Met (${yellow.length}, ${yellowTotal} pts total)`,
       yellow.map((f) => ({ subject: f.subject, message: f.message, penalty: f.penalty }))
     ));
   }
