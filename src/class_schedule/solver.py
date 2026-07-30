@@ -52,6 +52,8 @@ from .class_model import (
 )
 from .schedule_model import (
     OVERLOAD_TOLERANCE,
+    OVERLOAD_FAR_THRESHOLD,
+    OVERLOAD_FAR_PENALTY,
     BACK_TO_BACK_PENALTY,
     DISLIKED_COURSE_PENALTY,
     DISLIKED_LOCATION_PENALTY,
@@ -631,17 +633,25 @@ def _add_load_terms(
     ``schedule_model``'s overload/under_load contract exactly (see its
     module docstring): always-soft terms, never a hard violation. A soft
     term weighted by ``preference.overload_penalty`` (derived from
-    ``allow_overload`` -- see ``PreferenceRecord``) beyond
-    max_load + OVERLOAD_TOLERANCE, and a heavily-weighted soft term
-    (UNDER_LOAD_PENALTY) for anyone left short of their target -- "must
-    reach max_load" should dominate ordinary soft preferences, but an
-    instructor with no reachable course left to fill the gap is accepted
-    rather than modeled as impossible. Load is attributed via each
-    class's *first* section's instructor, matching how a class's own
-    predicate already forces the two sections of
-    FourCreditClass/CoreqClass to share one instructor;
-    HybridClass/CrossListingClass don't enforce that, so a mismatched
-    second section is a rare, accepted edge case.
+    ``allow_overload``; see ``PreferenceRecord``) beyond
+    max_load + OVERLOAD_TOLERANCE, flat and one-time rather than scaled by
+    how many credit hours over -- see the module comment above
+    OVERLOAD_TOLERANCE in schedule_model.py for why: scaling this (either
+    a continuous excess-times-rate calculation, or a multi-tier cumulative
+    boolean scheme) measurably slowed CP-SAT's search on a real schedule
+    each time it was tried, for reasons that didn't reduce to any single
+    identifiable modeling choice. A second, independent flat term
+    (OVERLOAD_FAR_PENALTY) applies on top once past OVERLOAD_FAR_THRESHOLD
+    credit hours over, for ``allow_overload=True`` only -- ``False``
+    already sits at this system's 100-point ceiling. A heavily-weighted
+    soft term (UNDER_LOAD_PENALTY) for anyone left short of their target
+    -- "must reach max_load" should dominate ordinary soft preferences,
+    but an instructor with no reachable course left to fill the gap is
+    accepted rather than modeled as impossible. Load is attributed via
+    each class's *first* section's instructor, matching how a class's own
+    predicate already forces the two sections of FourCreditClass/CoreqClass
+    to share one instructor; HybridClass/CrossListingClass don't enforce
+    that, so a mismatched second section is a rare, accepted edge case.
     """
     load_scale = 10
     per_instructor: dict[str, list] = {}
@@ -670,6 +680,13 @@ def _add_load_terms(
             model.add(total > limit).only_enforce_if(over)
             model.add(total <= limit).only_enforce_if(over.Not())
             objective_terms.append(penalty_weight * over)
+
+            if preference.allow_overload:
+                far_limit = int(round((person.max_load + OVERLOAD_FAR_THRESHOLD) * load_scale))
+                far_over = model.new_bool_var(f"overload_far_{instructor}")
+                model.add(total > far_limit).only_enforce_if(far_over)
+                model.add(total <= far_limit).only_enforce_if(far_over.Not())
+                objective_terms.append(OVERLOAD_FAR_PENALTY * far_over)
 
         under = model.new_bool_var(f"under_load_{instructor}")
         model.add(total < target).only_enforce_if(under)

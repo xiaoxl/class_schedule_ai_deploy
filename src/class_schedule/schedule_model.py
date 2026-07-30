@@ -396,17 +396,27 @@ def _take_coreqs(
 # findings now, never hard:
 #   - within OVERLOAD_TOLERANCE credit hours over max_load: fine, not
 #     overload at all -- this is the definition of overload, not a
-#     leniency knob, so it's a single fixed constant for everyone (not
-#     configurable per instructor) even though it stays a named constant
-#     for easy retuning later (e.g. to 1.0).
+#     leniency knob.
 #   - more than that over: a soft "overload" finding, always. Its penalty
 #     is ``preference.overload_penalty`` -- derived from ``allow_overload``
 #     (this term's per-instructor overload tolerance: ``True`` means
-#     "fine with it", ``False`` means "avoid it") rather than a
-#     continuous dial; see ``PreferenceRecord.overload_penalty`` for the
-#     two fixed values. An instructor with no preferences.toml entry
-#     defaults to a penalty of 0 (no opinion on record) instead of
-#     either fixed value.
+#     "fine with it", ``False`` means "avoid it") -- flat and one-time,
+#     deliberately NOT scaled by how many credit hours over: an earlier
+#     version tried both a continuous excess-times-rate calculation and a
+#     multi-tier cumulative boolean scheme, and both measurably slowed
+#     CP-SAT's search on a real schedule (the same problem stopped
+#     reaching a proven-optimal solution within the same time budget it
+#     used to, and reverting this flat scheme is what brought that back)
+#     -- this system doesn't have a way to reward "further over" that
+#     doesn't cost real solve performance, at least not one found so far.
+#     The one exception: OVERLOAD_FAR_PENALTY, a *second*, independent
+#     flat charge (not tiered/cumulative logic) that also applies once
+#     over OVERLOAD_FAR_THRESHOLD credit hours, on top of the base
+#     penalty above -- for ``allow_overload=True`` only, since
+#     ``allow_overload=False`` already sits at this system's 100-point
+#     ceiling and has nowhere higher to go.
+#     An instructor with no preferences.toml entry defaults to a penalty
+#     of 0 (no opinion on record).
 #   - under max_load by any amount: also a soft finding, weighted very
 #     high (UNDER_LOAD_PENALTY) -- "must reach max_load" is meant to
 #     dominate ordinary soft preferences. It's still soft, though: if
@@ -414,6 +424,8 @@ def _take_coreqs(
 #     else is wrong, one instructor coming up short is accepted rather
 #     than forced.
 OVERLOAD_TOLERANCE = 2.0
+OVERLOAD_FAR_THRESHOLD = 5  # credit hours over max_load
+OVERLOAD_FAR_PENALTY = 50.0
 
 # Every penalty in this system shares one 0-100 scale (see
 # PreferenceRecord.overload_penalty and PreferenceRule.weight) -- 100 is
@@ -550,8 +562,9 @@ class PreferenceRecord:
     ``allow_overload`` is this instructor's overload tolerance: ``True``
     means fine with it, ``False`` means avoid it (still soft -- see the
     module comment above OVERLOAD_TOLERANCE). ``overload_penalty`` derives
-    the actual scoring penalty from it -- 10 when ``allow_overload`` is
-    ``True``, 100 (this system's practical ceiling) when it's ``False``.
+    the actual flat scoring penalty from it -- 10 when ``allow_overload``
+    is ``True``, 100 (this system's practical ceiling) when it's
+    ``False``.
     """
 
     name: str
@@ -701,17 +714,25 @@ def _overload_statuses(
     included at all -- it doesn't count as overload, so it's never
     reported by ``check_soft_preferences``. Everything this returns *is*
     overload, always soft -- ``penalty`` is ``preference.overload_penalty``
-    (``0.0`` when there's no preferences.toml entry for that instructor).
+    (``0.0`` when there's no preferences.toml entry for that instructor),
+    plus ``OVERLOAD_FAR_PENALTY`` on top when they're also over
+    ``OVERLOAD_FAR_THRESHOLD`` credit hours *and* ``allow_overload`` --
+    see the module comment above ``OVERLOAD_TOLERANCE``. Mirrors
+    ``solver.py``'s ``_add_load_terms`` exactly so the web UI's reported
+    penalty matches what the solver actually optimized for.
     """
     statuses: list[_OverloadStatus] = []
     for instructor, load in sorted(_teaching_loads(schedule).items()):
         person = persons.get(instructor)
         if person is None:
             continue
-        if load <= person.max_load + OVERLOAD_TOLERANCE:
+        excess = load - person.max_load
+        if excess <= OVERLOAD_TOLERANCE:
             continue
         preference = preferences.get(instructor)
         penalty = preference.overload_penalty if preference else 0.0
+        if preference is not None and preference.allow_overload and excess > OVERLOAD_FAR_THRESHOLD:
+            penalty += OVERLOAD_FAR_PENALTY
         statuses.append(_OverloadStatus(
             instructor=instructor,
             load=load,

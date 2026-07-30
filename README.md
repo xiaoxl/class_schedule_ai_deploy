@@ -104,13 +104,17 @@ Four files under `config/`, each with a different lifetime:
   `aliases` (optionally scoped by `subject`, e.g. MATH Jordan vs. STAT
   Jordan), and the `courses` an instructor is qualified to teach.
 - `preferences.toml` -- this term's wishes per instructor:
-  `overload_penalty` (0-100 -- 0 is entirely fine with going over
-  `max_load`, 100 avoids it at essentially any cost, but it's always
-  soft, and never applies within +2 credit hours of `max_load` -- that's
-  the definition of overload, not a leniency knob), `allow_back_to_back`,
+  `allow_overload` (bool -- `true` is fine with going over `max_load`,
+  `false` avoids it at essentially any cost, but it's always soft, and
+  never applies within 2 credit hours of `max_load` -- that's the
+  definition of overload, not a leniency knob; see `OVERLOAD_TOLERANCE`/
+  `OVERLOAD_FAR_THRESHOLD` in `schedule_model.py` for how far over
+  actually costs), `allow_back_to_back`,
   `preferred_times`/`disliked_times`, `preferred_locations`/
-  `disliked_locations`, `preferred_courses`/`disliked_courses`.
-  `preferred_*` fields are informational only -- never scored.
+  `disliked_locations`, `preferred_courses`/`disliked_courses`, and
+  free-form `rules` (course/section/room/time-scoped `prefer`/`dislike`
+  rules, see the file's own header comment). `preferred_*` fields are
+  informational only -- never scored.
 - `timeslot.toml` -- the day/duration/start-time combinations
   (`[[calendar.meeting_patterns]]`) the solver may assign, plus
   `[[calendar.blackouts]]` periods nothing may overlap.
