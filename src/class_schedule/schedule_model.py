@@ -410,9 +410,12 @@ def _take_coreqs(
 #     -- this system doesn't have a way to reward "further over" that
 #     doesn't cost real solve performance, at least not one found so far.
 #     The one exception: OVERLOAD_FAR_PENALTY, a *second*, independent
-#     flat charge (not tiered/cumulative logic) that also applies once
-#     over OVERLOAD_FAR_THRESHOLD credit hours, on top of the base
-#     penalty above -- for ``allow_overload=True`` only, since
+#     flat charge (not tiered/cumulative logic) that also applies once an
+#     instructor goes more than OVERLOAD_FAR_THRESHOLD credit hours over
+#     their own max_load -- identical convention to OVERLOAD_TOLERANCE
+#     above (the constant is the last value that's still fine, not the
+#     first that triggers), just a second, further-out line -- on top of
+#     the base penalty above -- for ``allow_overload=True`` only, since
 #     ``allow_overload=False`` already sits at this system's 100-point
 #     ceiling and has nowhere higher to go.
 #     An instructor with no preferences.toml entry defaults to a penalty
@@ -424,7 +427,10 @@ def _take_coreqs(
 #     else is wrong, one instructor coming up short is accepted rather
 #     than forced.
 OVERLOAD_TOLERANCE = 2.0
-OVERLOAD_FAR_THRESHOLD = 5  # credit hours over max_load
+# Same convention as OVERLOAD_TOLERANCE: the last credit-hour-over-max_load
+# value that does NOT trigger the extra penalty -- 4 is fine, 5 triggers
+# it (a strict "more than" comparison, exactly like OVERLOAD_TOLERANCE).
+OVERLOAD_FAR_THRESHOLD = 4
 OVERLOAD_FAR_PENALTY = 50.0
 
 # Every penalty in this system shares one 0-100 scale (see
@@ -715,11 +721,12 @@ def _overload_statuses(
     reported by ``check_soft_preferences``. Everything this returns *is*
     overload, always soft -- ``penalty`` is ``preference.overload_penalty``
     (``0.0`` when there's no preferences.toml entry for that instructor),
-    plus ``OVERLOAD_FAR_PENALTY`` on top when they're also over
-    ``OVERLOAD_FAR_THRESHOLD`` credit hours *and* ``allow_overload`` --
-    see the module comment above ``OVERLOAD_TOLERANCE``. Mirrors
-    ``solver.py``'s ``_add_load_terms`` exactly so the web UI's reported
-    penalty matches what the solver actually optimized for.
+    plus ``OVERLOAD_FAR_PENALTY`` on top when they're *also* more than
+    ``OVERLOAD_FAR_THRESHOLD`` credit hours over their own max_load *and*
+    ``allow_overload`` -- see the module comment above
+    ``OVERLOAD_TOLERANCE``. Mirrors ``solver.py``'s ``_add_load_terms``
+    exactly so the web UI's reported penalty matches what the solver
+    actually optimized for.
     """
     statuses: list[_OverloadStatus] = []
     for instructor, load in sorted(_teaching_loads(schedule).items()):

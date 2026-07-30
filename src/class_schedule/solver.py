@@ -641,8 +641,10 @@ def _add_load_terms(
     boolean scheme) measurably slowed CP-SAT's search on a real schedule
     each time it was tried, for reasons that didn't reduce to any single
     identifiable modeling choice. A second, independent flat term
-    (OVERLOAD_FAR_PENALTY) applies on top once past OVERLOAD_FAR_THRESHOLD
-    credit hours over, for ``allow_overload=True`` only -- ``False``
+    (OVERLOAD_FAR_PENALTY) applies on top once an instructor goes more
+    than OVERLOAD_FAR_THRESHOLD credit hours over their own max_load --
+    identical convention to OVERLOAD_TOLERANCE, just a second,
+    further-out line, for ``allow_overload=True`` only -- ``False``
     already sits at this system's 100-point ceiling. A heavily-weighted
     soft term (UNDER_LOAD_PENALTY) for anyone left short of their target
     -- "must reach max_load" should dominate ordinary soft preferences,
