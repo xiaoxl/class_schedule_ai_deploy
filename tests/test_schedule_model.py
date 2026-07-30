@@ -1,0 +1,128 @@
+import unittest
+
+from class_schedule.class_model import CrossListingClass, FourCreditClass, NormalClass, Section
+from class_schedule.schedule_model import GroupingError, Schedule, check_conflicts
+
+
+def make_record(**overrides) -> dict:
+    defaults = dict(
+        Subject="MATH",
+        Number="1113",
+        Section="001",
+        **{"Time Slot": "MWF 9:00am"},
+        Duration=50,
+        Room="101",
+        Building="Corley",
+        Instructor="Alice",
+    )
+    defaults.update(overrides)
+    return defaults
+
+
+def make_section(**overrides) -> Section:
+    record = make_record(**overrides)
+    return Section.from_record(record)
+
+
+class CheckConflictsTests(unittest.TestCase):
+    def test_same_room_overlapping_time_is_room_conflict(self):
+        a = NormalClass((make_section(Number="1113", Section="001", Room="101"),))
+        b = NormalClass((make_section(Number="2103", Section="002", Room="101", Instructor="Bob"),))
+        violations = check_conflicts(Schedule([a, b]))
+        self.assertTrue(any(v.rule == "room_conflict" for v in violations))
+
+    def test_same_instructor_overlapping_time_is_instructor_conflict(self):
+        a = NormalClass((make_section(Number="1113", Section="001", Instructor="Alice", Room="101"),))
+        b = NormalClass((make_section(Number="2103", Section="002", Instructor="Alice", Room="102"),))
+        violations = check_conflicts(Schedule([a, b]))
+        self.assertTrue(any(v.rule == "instructor_conflict" for v in violations))
+
+    def test_non_overlapping_time_is_no_conflict(self):
+        a = NormalClass((make_section(**{"Time Slot": "MWF 9:00am"}, Room="101", Instructor="Alice"),))
+        b = NormalClass((make_section(**{"Time Slot": "MWF 10:00am"}, Room="101", Instructor="Alice"),))
+        self.assertEqual(check_conflicts(Schedule([a, b])), [])
+
+    def test_a_classs_own_two_rows_are_never_compared(self):
+        # Honors pair: same time/room/instructor by design -- must never
+        # be reported as a conflict against itself.
+        left = make_section(Section="001", Instructor="Alice", Room="101")
+        right = make_section(Section="H01", Instructor="Alice", Room="101")
+        honors = CrossListingClass((left, right))
+        self.assertEqual(check_conflicts(Schedule([honors])), [])
+
+    def test_different_rooms_overlapping_time_different_instructors_is_no_conflict(self):
+        a = NormalClass((make_section(Room="101", Instructor="Alice"),))
+        b = NormalClass((make_section(Number="2103", Section="002", Room="102", Instructor="Bob"),))
+        self.assertEqual(check_conflicts(Schedule([a, b])), [])
+
+
+class GroupingTests(unittest.TestCase):
+    def test_mwf_and_tr_same_course_same_instructor_groups_as_four_credit(self):
+        records = [
+            make_record(**{"Time Slot": "MWF 9:00am"}, Duration=50),
+            make_record(**{"Time Slot": "T 9:00am"}, Duration=75),
+        ]
+        schedule = Schedule.from_records(records)
+        self.assertEqual(len(schedule), 1)
+        self.assertIsInstance(schedule.classes[0], FourCreditClass)
+
+    def test_cross_list_column_pairs_different_courses(self):
+        records = [
+            make_record(Subject="MATH", Number="1113", **{"Cross-List": "XL1"}),
+            make_record(Subject="STAT", Number="2103", **{"Cross-List": "XL1"}),
+        ]
+        schedule = Schedule.from_records(records)
+        self.assertEqual(len(schedule), 1)
+        self.assertIsInstance(schedule.classes[0], CrossListingClass)
+
+    def test_honors_pair_without_cross_list_column_still_groups(self):
+        records = [
+            make_record(Section="001", Instructor="Alice", Room="101"),
+            make_record(Section="H01", Instructor="Alice", Room="101"),
+        ]
+        schedule = Schedule.from_records(records)
+        self.assertEqual(len(schedule), 1)
+        self.assertIsInstance(schedule.classes[0], CrossListingClass)
+
+    def test_coreq_whitelist_pair_groups_as_coreq(self):
+        from class_schedule.class_model import CoreqClass
+
+        records = [
+            make_record(Subject="MATH", Number="1113", Section="001", **{"Time Slot": "MWF 9:00am"}),
+            make_record(Subject="MATH", Number="0903", Section="001", **{"Time Slot": "MWF 9:50am"}),
+        ]
+        schedule = Schedule.from_records(records)
+        self.assertEqual(len(schedule), 1)
+        self.assertIsInstance(schedule.classes[0], CoreqClass)
+
+    def test_unrelated_single_row_becomes_normal_class(self):
+        schedule = Schedule.from_records([make_record()])
+        self.assertEqual(len(schedule), 1)
+        self.assertIsInstance(schedule.classes[0], NormalClass)
+
+    def test_three_rows_same_identity_is_grouping_error(self):
+        records = [make_record() for _ in range(3)]
+        with self.assertRaises(GroupingError):
+            Schedule.from_records(records)
+
+    def test_ambiguous_coreq_pairing_is_grouping_error(self):
+        # MATH 1113-001 is a whitelisted coreq partner for *both*
+        # MATH 0903-001 and MATH 1110-001 -- with all three present at the
+        # same section number, 1113 can't be unambiguously paired with
+        # just one of them.
+        records = [
+            make_record(Subject="MATH", Number="1113", Section="001"),
+            make_record(Subject="MATH", Number="0903", Section="001"),
+            make_record(Subject="MATH", Number="1110", Section="001"),
+        ]
+        with self.assertRaises(GroupingError):
+            Schedule.from_records(records)
+
+    def test_concurrent_enrollment_prefix_is_dropped(self):
+        records = [make_record(Section="P01")]
+        schedule = Schedule.from_records(records)
+        self.assertEqual(len(schedule), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

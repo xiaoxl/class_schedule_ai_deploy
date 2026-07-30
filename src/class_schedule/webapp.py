@@ -152,22 +152,19 @@ def create_app() -> FastAPI:
                 previous=schedule if regenerate else None,
             )
         except solver_module.NoFeasibleSchedule as error:
+            # 422, not 400: the request itself was well-formed -- there's
+            # just no conflict-free assignment to offer for this input
+            # (see solver.solve()'s docstring). app.js keys off this
+            # status to keep "Solve Schedule" disabled until a new file
+            # is chosen, instead of inviting a retry that can't succeed.
             logger.warning("Could not solve %r: %s", filename, error)
-            raise HTTPException(400, str(error)) from error
+            raise HTTPException(422, str(error)) from error
         changes = solver_module.diff_schedules(schedule, solved)
         violations = _evaluate_schedule(solved)
-        remaining_hard = len(violations["hard"])
-        if remaining_hard:
-            logger.warning(
-                "Solved %r best-effort: %d hard violation(s) remain "
-                "(%d classes, %d field change(s))",
-                filename, remaining_hard, len(solved), len(changes),
-            )
-        else:
-            logger.info(
-                "Solved %r cleanly (%d classes, %d field change(s))",
-                filename, len(solved), len(changes),
-            )
+        logger.info(
+            "Solved %r cleanly (%d classes, %d field change(s))",
+            filename, len(solved), len(changes),
+        )
         return {
             "count": len(solved),
             "classes": _serialize_schedule(solved),

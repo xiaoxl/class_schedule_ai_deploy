@@ -5,12 +5,13 @@ timeslot.toml, locations.toml), find new (instructor, time, room)
 assignments for every class such that:
 
   - hard requirements (``schedule_model.check_conflicts`` -- the only hard-
-    violation source; see its docstring) are satisfied whenever an
-    assignment doing so exists -- modeled as a soft term weighted so far
-    above everything else (HARD_VIOLATION_PENALTY) that the optimizer
-    always prefers zero conflicts when reachable. When it truly isn't
-    reachable, this still returns its closest attempt instead of raising
-    -- see ``solve()``'s docstring;
+    violation source; see its docstring) are enforced as genuine CP-SAT
+    hard constraints (``add_no_overlap`` over per-candidate optional
+    intervals, bucketed by room/day and instructor/day -- see
+    ``_add_scheduling_constraints``), not a penalized objective term. If no
+    conflict-free assignment exists within the candidate pool,
+    ``solve()`` raises ``NoFeasibleSchedule`` rather than returning a
+    best-effort schedule with conflicts still in it -- see its docstring;
   - the total soft-preference penalty (``schedule_model.check_soft_preferences``'s
     scoring, replicated here as CP-SAT objective terms -- including
     max_load, which is always soft) is as low as possible;
@@ -33,7 +34,6 @@ valid final state via an invalid intermediate one on two-section classes.
 from __future__ import annotations
 
 import datetime
-import itertools
 import random
 import tomllib
 from dataclasses import dataclass, replace
@@ -78,14 +78,6 @@ class NoFeasibleSchedule(RuntimeError):
 INSTRUCTOR_CHANGE_COST = 30.0
 TIME_CHANGE_COST = 20.0
 ROOM_CHANGE_COST = 10.0
-
-# "Hard" requirements (room/instructor conflicts, max_load without
-# consent) are modeled as heavily-penalized soft terms, not unconditional
-# constraints -- see the module docstring. This must dominate every other
-# objective term combined (stability costs, UNDER_LOAD_PENALTY x N
-# instructors, etc.) so the solver only ever accepts a hard violation
-# when truly nothing better exists.
-HARD_VIOLATION_PENALTY = 1_000_000.0
 
 # Cap candidates *per qualified instructor*, not per section overall --
 # ranked by cost within each instructor's own bucket, so every qualified
@@ -453,61 +445,104 @@ def _add_scheduling_constraints(
     preferences: dict[str, PreferenceRecord],
     model: cp_model.CpModel,
 ) -> list:
-    """Room/instructor double-booking, bucketed by (room-or-instructor,
-    weekday) so only candidates that could plausibly conflict are ever
-    compared -- not every pair in the whole schedule. Also collects the
-    back-to-back soft-penalty objective terms, using the same
-    instructor/weekday buckets.
+    """Room/instructor double-booking is a hard constraint (see the module
+    docstring on why this replaced the old penalized-soft-term approach):
+    bucketed by (room-or-instructor, weekday) into ``add_no_overlap`` over
+    one optional interval per candidate, present iff that candidate is
+    ``chosen`` -- O(candidates) intervals instead of the O(candidates^2)
+    pairwise conflict BoolVars this replaced, which is what let a real
+    85-section schedule's model-build alone reach ~3.8 GB RSS.
 
-    A conflict is a heavily-penalized soft term (HARD_VIOLATION_PENALTY),
-    not an unconditional exclusion -- see the module docstring on why
-    "hard" constraints here are relaxed rather than absolute, so
-    ``solve()`` always returns its best effort instead of an exception
-    when zero conflicts truly isn't achievable.
+    A class's own two sections are never checked against *each other*
+    (``schedule_model``'s "a class's own two rows are never compared"
+    invariant -- a genuine cross-listing/four-credit/hybrid/coreq pair is
+    meant to share room/time/instructor). ``add_no_overlap`` can't express
+    that exemption directly, so a class that contributes two intervals to
+    the same bucket is pulled out of that bucket's group call and checked
+    against everyone *else* in the bucket via a handful of explicit
+    pairwise constraints instead -- bounded by the number of two-section
+    classes that happen to land in one bucket (essentially always 0-1 in
+    practice), not by candidate-pool size, so it doesn't reintroduce the
+    quadratic blowup.
+
+    Also collects the back-to-back soft-penalty objective terms (still a
+    preference, not a hard rule) via a start-time index rather than
+    all-pairs, since only exactly-adjacent candidates ever qualify.
     """
-    by_room_day: dict[tuple[str, str], list[_Slot]] = {}
-    by_instructor_day: dict[tuple[str, str], list[_Slot]] = {}
-    for slot in slots:
+    by_room_day: dict[tuple[str, str], list[int]] = {}
+    by_instructor_day: dict[tuple[str, str], list[int]] = {}
+    intervals: list = [None] * len(slots)
+
+    for index, slot in enumerate(slots):
+        start_minutes = slot.start.hour * 60 + slot.start.minute
+        end_minutes = slot.end.hour * 60 + slot.end.minute
+        if end_minutes <= start_minutes:
+            end_minutes += 24 * 60
+        intervals[index] = model.new_optional_interval_var(
+            start_minutes, end_minutes - start_minutes, end_minutes,
+            chosen[slot.section][slot.candidate], f"iv_{slot.section}_{slot.candidate}",
+        )
         for day in slot.days:
             if slot.room_key:
-                by_room_day.setdefault((slot.room_key, day), []).append(slot)
+                by_room_day.setdefault((slot.room_key, day), []).append(index)
             if slot.instructor:
-                by_instructor_day.setdefault((slot.instructor, day), []).append(slot)
+                by_instructor_day.setdefault((slot.instructor, day), []).append(index)
 
-    seen_pairs: set[tuple] = set()
+    def _add_bucket_no_overlap(indices: list[int]) -> None:
+        # Grouped by class, then by *distinct section* -- a single section
+        # can legitimately contribute many of its own candidate-time
+        # options to the same bucket (same room/day, different times),
+        # and those never need the exemption below: `chosen`'s
+        # exactly-one already keeps a section's own candidates mutually
+        # exclusive, so sharing one add_no_overlap call is safe. Only a
+        # class whose *two different sections* both land here needs to be
+        # pulled out, since that's the only case add_no_overlap can't
+        # express (see docstring).
+        sections_by_class: dict[int, set[int]] = {}
+        for i in indices:
+            sections_by_class.setdefault(slots[i].class_index, set()).add(slots[i].section)
+        exempt_classes = {c for c, secs in sections_by_class.items() if len(secs) > 1}
+        solo = [i for i in indices if slots[i].class_index not in exempt_classes]
+        paired = [i for i in indices if slots[i].class_index in exempt_classes]
+        if len(solo) > 1:
+            model.add_no_overlap([intervals[i] for i in solo])
+        for i in paired:
+            a = slots[i]
+            for j in indices:
+                if j == i or slots[j].class_index == a.class_index:
+                    continue
+                b = slots[j]
+                if a.start < b.end and b.start < a.end:
+                    model.add_bool_or([
+                        chosen[a.section][a.candidate].Not(),
+                        chosen[b.section][b.candidate].Not(),
+                    ])
+
+    for indices in by_room_day.values():
+        if len(indices) > 1:
+            _add_bucket_no_overlap(indices)
+
     objective_terms = []
-
-    def _key(a: _Slot, b: _Slot):
-        return tuple(sorted([(a.section, a.candidate), (b.section, b.candidate)]))
-
-    def _penalize_conflict(a: _Slot, b: _Slot) -> None:
-        key = _key(a, b)
-        if key in seen_pairs:
-            return
-        seen_pairs.add(key)
-        conflict = model.new_bool_var(
-            f"conflict_{a.section}_{a.candidate}_{b.section}_{b.candidate}"
-        )
-        model.add(
-            chosen[a.section][a.candidate] + chosen[b.section][b.candidate] - 1
-            <= conflict
-        )
-        objective_terms.append(HARD_VIOLATION_PENALTY * conflict)
-
-    for bucket in by_room_day.values():
-        for a, b in itertools.combinations(bucket, 2):
-            if a.class_index != b.class_index and a.start < b.end and b.start < a.end:
-                _penalize_conflict(a, b)
-
-    for (instructor, _day), bucket in by_instructor_day.items():
+    for (instructor, _day), indices in by_instructor_day.items():
+        if len(indices) > 1:
+            _add_bucket_no_overlap(indices)
         preference = preferences.get(instructor)
-        avoid_back_to_back = preference is not None and not preference.allow_back_to_back
-        for a, b in itertools.combinations(bucket, 2):
-            if a.class_index == b.class_index:
-                continue
-            if a.start < b.end and b.start < a.end:
-                _penalize_conflict(a, b)
-            elif avoid_back_to_back and (a.end == b.start or b.end == a.start):
+        if preference is None or preference.allow_back_to_back:
+            continue
+        by_start: dict[datetime.time, list[int]] = {}
+        for i in indices:
+            by_start.setdefault(slots[i].start, []).append(i)
+        seen_pairs: set[tuple[int, int]] = set()
+        for i in indices:
+            a = slots[i]
+            for j in by_start.get(a.end, ()):
+                b = slots[j]
+                if a.class_index == b.class_index:
+                    continue
+                key = (i, j) if i < j else (j, i)
+                if key in seen_pairs:
+                    continue
+                seen_pairs.add(key)
                 both = model.new_bool_var(
                     f"b2b_{a.section}_{a.candidate}_{b.section}_{b.candidate}"
                 )
@@ -648,19 +683,17 @@ def solve(
     """Return a new ``Schedule`` with the best reassignment found.
 
     "Hard" requirements (room/instructor conflicts -- see
-    ``schedule_model.check_conflicts``) are modeled as a heavily-penalized
-    soft term (HARD_VIOLATION_PENALTY), not an unconditional constraint --
-    so if a fully hard-feasible assignment exists, the optimizer will find
-    it (that penalty dominates every other objective term combined), but
-    if it genuinely doesn't, this still returns its *closest* attempt
-    rather than raising. Call ``schedule_model.check_conflicts`` on the
-    result to see whether it's fully clean or best-effort, and what's
-    still wrong.
+    ``schedule_model.check_conflicts``) are unconditional CP-SAT
+    constraints (``add_no_overlap``), not a penalized objective term --
+    a solved result therefore always has zero conflicts, never a
+    best-effort schedule with conflicts still in it.
 
-    Raises ``NoFeasibleSchedule`` only for a structural problem this
-    module can't work around at all -- a section with zero legal
-    candidates, or the solver finding no assignment whatsoever (not even
-    a bad one) within ``time_limit_seconds``.
+    Raises ``NoFeasibleSchedule`` whenever no conflict-free assignment
+    exists within the candidate pool -- a section with zero legal
+    candidates, a genuine structural conflict no reassignment can avoid,
+    or the solver finding no assignment whatsoever (not even a bad one)
+    within ``time_limit_seconds``. Callers should treat this as "nothing
+    to offer for this input," not as a bug to retry.
 
     Every call uses a fresh random search seed, so re-solving the same
     input twice isn't guaranteed to reproduce the exact same result. Pass
@@ -729,8 +762,7 @@ def solve(
     # values are always one of its candidates, and the input schedule
     # was already class-valid) -- hinting it gives CP-SAT an instant,
     # guaranteed-feasible starting incumbent instead of having to search
-    # for one from scratch, which matters once HARD_VIOLATION_PENALTY's
-    # large coefficients make the objective landscape harder to explore.
+    # for one from scratch.
     for i, section in enumerate(sections):
         for j, candidate in enumerate(candidates[i]):
             is_current = (
@@ -766,7 +798,12 @@ def solve(
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_seconds
-    solver.parameters.num_search_workers = 8
+    # 1, not CP-SAT's usual multi-worker default -- each parallel search
+    # worker keeps its own copy of the model's search state, which was
+    # multiplying peak RSS several-fold on top of the already-large model
+    # this replaced (see _add_scheduling_constraints); memory mattered
+    # more here than shaving solve time via parallel search.
+    solver.parameters.num_search_workers = 1
     solver.parameters.random_seed = random.SystemRandom().randrange(1, 2**31 - 1)
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):

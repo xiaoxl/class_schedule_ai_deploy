@@ -28,6 +28,11 @@ let currentFile = null;
 let attempts = [];
 let solvedOnce = false;
 let activeAttemptIndex = -1;
+// Set when /api/solve comes back 422 (no conflict-free assignment exists
+// for this input -- see solver.solve()'s docstring): retrying the same
+// input can't succeed, so "Solve Schedule" stays disabled until a fresh
+// file is chosen instead of inviting a pointless re-click.
+let solveBlocked = false;
 
 const file = $("#scheduleFile");
 const zone = $("#dropZone");
@@ -43,7 +48,7 @@ function updateFileLabel() {
 function setBusy(value, buttonText) {
   busy = value;
   file.disabled = value;
-  submitButton.disabled = value || !lastData;
+  submitButton.disabled = value || !lastData || solveBlocked;
   if (buttonText) submitButton.textContent = buttonText;
 }
 
@@ -91,6 +96,7 @@ async function parseSelectedFile() {
   attempts = [];
   solvedOnce = false;
   activeAttemptIndex = -1;
+  solveBlocked = false;
   renderAttemptTabs();
   setBusy(true, "Parsing…");
   const data = await submitFile("/api/schedule", currentFile);
@@ -125,6 +131,8 @@ $("#uploadForm").addEventListener("submit", async (event) => {
     solvedOnce = true;
     render(data, cumulativeChanges);
     renderAttemptTabs();
+  } else if (lastResponseStatus === 422) {
+    solveBlocked = true;
   }
   setBusy(false, IDLE_BUTTON_TEXT);
 });
@@ -162,9 +170,16 @@ function base64ToFile(base64, filename, mimeType) {
   return new File([bytes], filename, { type: mimeType });
 }
 
+// Set by submitFile on every call so callers that care about *why* a
+// request failed (see the /api/solve handler's 422 check) can look past
+// the generic null-on-failure return without changing that contract for
+// every other caller.
+let lastResponseStatus = null;
+
 async function submitFile(endpoint, fileToSend, extraFields = {}) {
   if (!fileToSend) return null;
   hideError();
+  lastResponseStatus = null;
   try {
     const formData = new FormData();
     formData.append("schedule_file", fileToSend);
@@ -172,6 +187,7 @@ async function submitFile(endpoint, fileToSend, extraFields = {}) {
       formData.append(key, value);
     }
     const response = await fetch(endpoint, { method: "POST", body: formData });
+    lastResponseStatus = response.status;
     const data = await response.json();
     if (!response.ok) {
       const detail = data.detail;
