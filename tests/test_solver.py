@@ -2,7 +2,13 @@ import datetime
 import unittest
 
 from class_schedule.class_model import CrossListingClass, NormalClass, Section
-from class_schedule.schedule_model import Schedule, check_conflicts
+from class_schedule.schedule_model import (
+    HAVETO,
+    PreferenceRecord,
+    PreferenceRule,
+    Schedule,
+    check_conflicts,
+)
 from class_schedule.solver import NoFeasibleSchedule, MeetingPattern, RoomRecord, SolverConfig, solve
 
 
@@ -72,6 +78,52 @@ class SolveExemptsAClasssOwnSectionsTests(unittest.TestCase):
         schedule = Schedule([honors])
         solved = solve(schedule, empty_config(), time_limit_seconds=10.0)
         self.assertEqual(check_conflicts(solved), [])
+
+
+class SolveHonorsPreferenceRulesTests(unittest.TestCase):
+    def test_moves_a_class_into_a_haveto_preferred_room(self):
+        section = make_section(room="101", building="Corley")
+        schedule = Schedule([NormalClass((section,))])
+        config = empty_config(
+            rooms=[
+                RoomRecord(building="Corley", room="101"),
+                RoomRecord(building="Corley", room="269"),
+            ],
+            preferences={"Alice": PreferenceRecord(
+                name="Alice",
+                rules=(PreferenceRule(room="Corley 269", direction="prefer", weight=HAVETO),),
+            )},
+        )
+        solved = solve(schedule, config, time_limit_seconds=10.0)
+        solved_section = solved.classes[0].sections[0]
+        self.assertEqual(
+            f"{solved_section.building} {solved_section.room}".strip(), "Corley 269"
+        )
+
+    def test_a_global_rule_applies_even_without_a_preferences_entry(self):
+        # No PreferenceRecord for "Alice" at all -- only a top-level rule,
+        # scoped to the course/section rather than any instructor.
+        section = make_section(
+            subject="MATH", number="1113", section="F01", room="101", building="Corley",
+        )
+        schedule = Schedule([NormalClass((section,))])
+        config = empty_config(
+            rooms=[
+                RoomRecord(building="Corley", room="101"),
+                RoomRecord(building="Corley", room="269"),
+            ],
+            global_rules=(
+                PreferenceRule(
+                    course="MATH 1113", section="F01", room="Corley 269",
+                    direction="prefer", weight=HAVETO,
+                ),
+            ),
+        )
+        solved = solve(schedule, config, time_limit_seconds=10.0)
+        solved_section = solved.classes[0].sections[0]
+        self.assertEqual(
+            f"{solved_section.building} {solved_section.room}".strip(), "Corley 269"
+        )
 
 
 if __name__ == "__main__":

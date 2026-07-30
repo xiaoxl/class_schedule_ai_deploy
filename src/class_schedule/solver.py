@@ -59,9 +59,11 @@ from .schedule_model import (
     DISLIKED_TIME_PENALTY,
     PersonRecord,
     PreferenceRecord,
+    PreferenceRule,
     Schedule,
     TimeWindow,
     UNDER_LOAD_PENALTY,
+    load_global_rules,
     load_persons,
     load_preferences,
     location_matches,
@@ -169,6 +171,7 @@ class SolverConfig:
     meeting_patterns: list[MeetingPattern]
     rooms: list[RoomRecord]
     blackouts: list[TimeWindow]
+    global_rules: tuple[PreferenceRule, ...] = ()
 
     @classmethod
     def load(cls, config_dir: str | Path) -> "SolverConfig":
@@ -179,6 +182,7 @@ class SolverConfig:
             meeting_patterns=load_meeting_patterns(config_dir / "timeslot.toml"),
             rooms=load_rooms(config_dir / "locations.toml"),
             blackouts=load_blackouts(config_dir / "timeslot.toml"),
+            global_rules=load_global_rules(config_dir / "preferences.toml"),
         )
 
 
@@ -218,19 +222,35 @@ def _preference_cost(
     building: str,
     room: str,
     course: str,
+    section: str,
     preferences: dict[str, PreferenceRecord],
+    global_rules: tuple[PreferenceRule, ...] = (),
 ) -> float:
     """The parts of ``check_soft_preferences`` decidable from one
-    candidate alone (disliked_time/disliked_location/disliked_course).
-    Overload and back-to-back need cross-candidate context and are
+    candidate alone (disliked_time/disliked_location/disliked_course,
+    plus every matching ``PreferenceRule`` -- ``global_rules`` and, if
+    this instructor has a preferences.toml entry, their own ``rules``
+    too). Overload and back-to-back need cross-candidate context and are
     modeled separately as CP-SAT objective terms.
     ``preferred_courses``/``preferred_locations`` are intentionally not
     costed here either, matching ``check_soft_preferences``'s
-    "informational, not scored" treatment of every ``preferred_*`` field."""
+    "informational, not scored" treatment of every ``preferred_*`` field
+    -- unlike those, a ``PreferenceRule`` with ``direction="prefer"`` *is*
+    costed here (as a negative cost/reward), since it's an explicit rule,
+    not one of the old blanket-unscored fields."""
     preference = preferences.get(instructor)
-    if preference is None:
-        return 0.0
     cost = 0.0
+    applicable_rules = list(global_rules)
+    if preference is not None:
+        applicable_rules.extend(preference.rules)
+    for rule in applicable_rules:
+        if rule.matches(
+            course=course, section=section, building=building, room=room,
+            days=days, start=start, end=end,
+        ):
+            cost += rule.signed_weight
+    if preference is None:
+        return cost
     for window in preference.disliked_times:
         if window.overlaps(days, start, end):
             cost += DISLIKED_TIME_PENALTY
@@ -249,7 +269,8 @@ def _section_candidates(
     course = f"{section.subject} {section.number}"
     current_cost = _preference_cost(
         section.instructor, section.days, section.start, section.end,
-        section.building, section.room, course, config.preferences,
+        section.building, section.room, course, section.section,
+        config.preferences, config.global_rules,
     )
     current = SectionCandidate(
         instructor=section.instructor,
@@ -310,7 +331,8 @@ def _section_candidates(
                         cost += ROOM_CHANGE_COST
                     cost += _preference_cost(
                         instructor, pattern.days, start, end,
-                        room.building, room.room, course, config.preferences,
+                        room.building, room.room, course, section.section,
+                        config.preferences, config.global_rules,
                     )
                     key = (time_slot, room.building, room.room)
                     bucket[key] = SectionCandidate(

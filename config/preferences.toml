@@ -11,6 +11,43 @@
 # essentially any cost. Either way it's always soft -- not a hard block --
 # and it never applies within +2 credit hours of max_load; that's the
 # definition of overload, not something this knob can loosen or tighten.
+#
+# instructors.rules -- free-form soft rules for this instructor beyond the
+# fixed fields above (course/section/room/time-scoped, any combination of
+# those you fill in; leaving one out means "matches anything"). Each rule
+# needs `direction` ("prefer" or "dislike") and `weight` (how strongly).
+# Recommended weight scale, so rules stay comparable to each other and to
+# the rest of this system's own fixed penalties (`overload`/`under_load`
+# max out at 1000):
+#   100  -- SLIGHTLY:  a little
+#   500  -- VERYMUCH:  a lot
+#   1000 -- HAVETO:    as strong as this system's soft rules go; ties
+#                       under_load, the strongest existing penalty --
+#                       still not a hard guarantee, but as close as this
+#                       mechanism gets
+#
+#   [[instructors.rules]]
+#   room = "Corley 269"
+#   direction = "prefer"
+#   weight = 1000
+#
+#   [[instructors.rules]]
+#   course = "MATH 1113"
+#   time = { days = ["T", "R"], start = "08:00", end = "09:30" }
+#   direction = "dislike"
+#   weight = 100
+#
+# A rule with no instructor at all -- applies no matter who ends up
+# teaching the match, e.g. a specific course-section pinned to a room
+# regardless of instructor -- goes in a top-level [[rules]] list instead
+# of under any one [[instructors]] block:
+#
+#   [[rules]]
+#   course = "MATH 1113"
+#   section = "F01"
+#   room = "Corley 269"
+#   direction = "prefer"
+#   weight = 1000
 
 [[instructors]]
 name = "Bain, Leslie M."

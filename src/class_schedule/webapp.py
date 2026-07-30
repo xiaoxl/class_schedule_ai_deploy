@@ -34,10 +34,12 @@ from .schedule_model import (
     HardViolation,
     PersonRecord,
     PreferenceRecord,
+    PreferenceRule,
     Schedule,
     SoftFinding,
     check_conflicts,
     check_soft_preferences,
+    load_global_rules,
     load_persons,
     load_preferences,
 )
@@ -49,9 +51,11 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 LOG_PATH = Path("output/logs/webapp.log")
 
 # A soft finding's penalty at or above this is rendered orange in the UI
-# (under_load, always weighted 1000, and overload, weighted up to 1000
-# depending on that instructor's own overload_penalty, land here); below
-# it is yellow (back_to_back/disliked_*, weighted 20-50, and a lenient
+# (under_load, always weighted 1000, overload, weighted up to 1000
+# depending on that instructor's own overload_penalty, and a "dislike"
+# PreferenceRule at VERYMUCH/HAVETO strength, land here); below it is
+# yellow (back_to_back/disliked_*, weighted 20-50, a SLIGHTLY-strength
+# PreferenceRule, and a lenient
 # instructor's overload finding).
 SOFT_SEVERITY_THRESHOLD = 200.0
 
@@ -90,6 +94,10 @@ PERSONS: dict[str, PersonRecord] = _load_config(
 PREFERENCES: dict[str, PreferenceRecord] = _load_config(
     load_preferences, CONFIG_DIR / "preferences.toml", "preferences.toml"
 )
+GLOBAL_RULES: tuple[PreferenceRule, ...] = _load_config(
+    load_global_rules, CONFIG_DIR / "preferences.toml",
+    "preferences.toml (global rules)", default=(),
+)
 SOLVER_CONFIG = solver_module.SolverConfig(
     persons=PERSONS,
     preferences=PREFERENCES,
@@ -105,6 +113,7 @@ SOLVER_CONFIG = solver_module.SolverConfig(
         solver_module.load_blackouts, CONFIG_DIR / "timeslot.toml",
         "timeslot.toml (blackouts)", default=[],
     ),
+    global_rules=GLOBAL_RULES,
 )
 
 
@@ -305,7 +314,7 @@ def _evaluate_schedule(schedule: Schedule) -> dict:
     ``check_conflicts``), soft (orange/yellow by penalty threshold)."""
     hard = check_conflicts(schedule)
     soft_total, soft_findings = check_soft_preferences(
-        schedule, PREFERENCES, PERSONS
+        schedule, PREFERENCES, PERSONS, GLOBAL_RULES
     )
     return {
         "hard": [_serialize_hard(v) for v in hard],

@@ -484,6 +484,73 @@ class PersonRecord:
     courses: tuple[str, ...] = ()
 
 
+# Reference scale for a PreferenceRule's `weight` -- purely documentation
+# for whoever is filling in preferences.toml (see its header comment for
+# the worked examples), not something the loader enforces. Picked to sit
+# alongside this module's other penalty constants: SLIGHTLY comfortably
+# beats the small fixed ones below (back_to_back/disliked_* at 20-50) and
+# solver.py's own room/time/instructor "prefer not to move things" costs
+# (10-30); HAVETO ties UNDER_LOAD_PENALTY, the strongest existing soft
+# term, rather than inventing a new ceiling above it.
+SLIGHTLY = 100.0
+VERYMUCH = 500.0
+HAVETO = 1000.0
+
+
+@dataclass(frozen=True)
+class PreferenceRule:
+    """One `[[rules]]` entry (top-level, applies regardless of
+    instructor) or `instructors.rules` entry (nested under one
+    `[[instructors]]` block, scoped to that instructor).
+
+    ``course`` ("SUBJECT NUMBER", matching persons.toml's own
+    convention), ``section``, ``room``, and ``time`` are all optional
+    match keys -- an unset key matches anything, so a rule can be as
+    broad ("this instructor generally avoids Corley") or as narrow ("this
+    exact course-section must land in this exact room") as its fields
+    specify. ``section`` only makes sense alongside ``course`` -- a bare
+    section code like "F01" repeats across unrelated courses.
+
+    ``direction`` is ``"prefer"`` (subtracts ``weight`` from a matching
+    candidate's cost -- a reward the solver seeks out) or ``"dislike"``
+    (adds it -- a penalty the solver avoids); ``weight`` is always a
+    positive magnitude, see SLIGHTLY/VERYMUCH/HAVETO above for the
+    recommended scale.
+    """
+
+    course: str | None = None
+    section: str | None = None
+    room: str | None = None
+    time: TimeWindow | None = None
+    direction: str = "dislike"
+    weight: float = 0.0
+
+    def matches(
+        self,
+        *,
+        course: str,
+        section: str,
+        building: str,
+        room: str,
+        days: str | None,
+        start: datetime.time | None,
+        end: datetime.time | None,
+    ) -> bool:
+        if self.course is not None and self.course != course:
+            return False
+        if self.section is not None and self.section != section:
+            return False
+        if self.room is not None and not location_matches(building, room, (self.room,)):
+            return False
+        if self.time is not None and not self.time.overlaps(days, start, end):
+            return False
+        return True
+
+    @property
+    def signed_weight(self) -> float:
+        return -self.weight if self.direction == "prefer" else self.weight
+
+
 @dataclass(frozen=True)
 class PreferenceRecord:
     """One preferences.toml entry for the current term.
@@ -502,6 +569,7 @@ class PreferenceRecord:
     disliked_locations: tuple[str, ...] = ()
     preferred_courses: tuple[str, ...] = ()
     disliked_courses: tuple[str, ...] = ()
+    rules: tuple[PreferenceRule, ...] = ()
 
 
 def load_persons(path: str | Path) -> dict[str, PersonRecord]:
@@ -537,9 +605,39 @@ def load_preferences(path: str | Path) -> dict[str, PreferenceRecord]:
             disliked_locations=tuple(entry.get("disliked_locations", ())),
             preferred_courses=tuple(entry.get("preferred_courses", ())),
             disliked_courses=tuple(entry.get("disliked_courses", ())),
+            rules=tuple(_parse_rule(r) for r in entry.get("rules", ())),
         )
         for entry in raw.get("instructors", ())
     }
+
+
+def load_global_rules(path: str | Path) -> tuple[PreferenceRule, ...]:
+    """Parse preferences.toml's top-level ``[[rules]]`` -- rules that
+    apply no matter which instructor ends up teaching the match (see
+    ``PreferenceRecord.rules`` for the per-instructor equivalent, nested
+    under ``instructors.rules``)."""
+    with open(path, "rb") as handle:
+        raw = tomllib.load(handle)
+    return tuple(_parse_rule(r) for r in raw.get("rules", ()))
+
+
+def _parse_rule(raw: Mapping[str, object]) -> PreferenceRule:
+    direction = str(raw.get("direction", "dislike"))
+    if direction not in ("prefer", "dislike"):
+        raise ValueError(
+            f"Rule direction must be 'prefer' or 'dislike', got {direction!r}"
+        )
+    section = raw.get("section")
+    if section is not None and "course" not in raw:
+        raise ValueError("A rule's 'section' requires 'course' to also be set")
+    return PreferenceRule(
+        course=str(raw["course"]) if "course" in raw else None,
+        section=str(section) if section is not None else None,
+        room=str(raw["room"]) if "room" in raw else None,
+        time=TimeWindow.from_config(raw["time"]) if "time" in raw else None,
+        direction=direction,
+        weight=float(raw.get("weight", 0.0)),
+    )
 
 
 @dataclass(frozen=True)
@@ -678,6 +776,7 @@ def check_soft_preferences(
     schedule: "Schedule",
     preferences: dict[str, PreferenceRecord],
     persons: dict[str, PersonRecord],
+    global_rules: tuple[PreferenceRule, ...] = (),
 ) -> tuple[float, list[SoftFinding]]:
     """Score a schedule against preferences.toml.
 
@@ -692,6 +791,13 @@ def check_soft_preferences(
     persons.toml's own ``courses`` convention) mirrors
     ``disliked_locations`` -- a mild nudge (``DISLIKED_COURSE_PENALTY``)
     when an instructor teaches a course they've listed as disliked.
+
+    ``global_rules`` plus each matching instructor's own ``rules`` (see
+    ``PreferenceRule``) are checked too, but only their ``"dislike"``
+    side -- a matching ``"prefer"`` rule still steers the solver (it's
+    scored in ``solver.py``'s ``_preference_cost``) but isn't reported
+    here, since a *satisfied* preference isn't a violation to surface
+    next to everything else this function returns.
     """
     findings: list[SoftFinding] = [
         SoftFinding(
@@ -723,6 +829,24 @@ def check_soft_preferences(
 
     for section in sections:
         preference = preferences.get(section.instructor)
+        course = f"{section.subject} {section.number}"
+        applicable_rules = list(global_rules)
+        if preference is not None:
+            applicable_rules.extend(preference.rules)
+        for rule in applicable_rules:
+            if rule.direction != "dislike":
+                continue
+            if rule.matches(
+                course=course, section=section.section,
+                building=section.building, room=section.room,
+                days=section.days, start=section.start, end=section.end,
+            ):
+                findings.append(SoftFinding(
+                    "custom_rule", section.instructor,
+                    f"{section.course_id}: matches a custom dislike rule "
+                    f"(weight {rule.weight:g})",
+                    rule.weight,
+                ))
         if preference is None:
             continue
         for window in preference.disliked_times:
@@ -733,7 +857,6 @@ def check_soft_preferences(
                     f"({window.reason or section.time_slot})",
                     DISLIKED_TIME_PENALTY,
                 ))
-        course = f"{section.subject} {section.number}"
         if course in preference.disliked_courses:
             findings.append(SoftFinding(
                 "disliked_course", section.instructor,
