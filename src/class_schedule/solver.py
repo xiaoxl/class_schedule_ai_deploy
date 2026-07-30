@@ -86,14 +86,25 @@ ROOM_CHANGE_COST = 10.0
 # instructor keeps some representation (needed e.g. to fix an overload by
 # reassigning). The cap itself depends on whether the section's class has
 # one row or two: a two-section class's pairwise validity check is
-# O(candidates_left x candidates_right), so it needs a tight cap to stay
-# tractable (a real 85-section schedule hit 1M+ constraints at 40/instructor,
-# ~38s just to build the model); a one-section class (NormalClass) never
-# gets compared against its own other half, so a much larger cap costs
-# nothing there and preserves the day/room variety needed to actually
-# resolve a conflict for an instructor who only qualifies for one course.
-MAX_CANDIDATES_PAIRED_SECTION = 20
-MAX_CANDIDATES_SINGLE_SECTION = 80
+# O(candidates_left x candidates_right), so it gets the tighter cap; a
+# one-section class (NormalClass) never gets compared against its own
+# other half, so it can afford a somewhat larger one.
+#
+# These specific numbers (halved from a prior 80/20) come from profiling
+# solve() against real production files after the add_no_overlap rewrite
+# (see _add_scheduling_constraints): even with conflicts no longer
+# enumerated pairwise, CP-SAT's own search-time memory for an 80/20 model
+# still peaked around 520 MB on a real ~60-class schedule -- over Render's
+# 512 MB instance limit -- and, worse, only reached a FEASIBLE (not
+# OPTIMAL) result in the full 60s budget, i.e. the larger candidate pool
+# was making the search *worse*, not just more expensive. At 40/10, the
+# same file peaked at ~216 MB and solved to OPTIMAL in ~15s. The
+# trade-off is real -- fewer candidates per instructor means a genuine
+# structural conflict has fewer chances to be resolved before solve()
+# gives up and raises NoFeasibleSchedule -- but it wasn't observed on
+# either real file profiled here.
+MAX_CANDIDATES_PAIRED_SECTION = 10
+MAX_CANDIDATES_SINGLE_SECTION = 40
 
 
 # ---- config: meeting patterns + rooms (config/timeslot.toml, config/locations.toml) ----
@@ -107,6 +118,7 @@ class MeetingPattern:
     days: str
     duration_minutes: int
     starts: tuple[datetime.time, ...]
+    types: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -124,6 +136,7 @@ def load_meeting_patterns(path: str | Path) -> list[MeetingPattern]:
             days=str(entry["days"]),
             duration_minutes=int(entry["duration_minutes"]),
             starts=tuple(record_utils.clock(s) for s in entry["starts"]),
+            types=frozenset(entry.get("types", ())),
         )
         for entry in raw.get("calendar", {}).get("meeting_patterns", ())
     ]
@@ -201,6 +214,30 @@ class SectionCandidate:
     cost: float
 
 
+# The one whitelisted coreq pair (class_model.CoreqClass.COURSE_PAIRS)
+# with mismatched credit hours -- MATH 1110 is 2 credits, not 3 like
+# every other whitelisted partner -- so its own legal meeting patterns
+# are the shorter "coreq_short" set (see timeslot.toml's own header
+# comment), not the "standard" set every other coreq pair searches.
+_COREQ_SHORT_PAIR = frozenset({"MATH 1113", "MATH 1110"})
+
+
+def _allowed_pattern_types(item: Class, section: Section) -> frozenset[str]:
+    """Which MeetingPattern ``types`` this section may search over (see
+    timeslot.toml's own header comment), per the scheduling convention
+    for its class kind."""
+    if isinstance(item, FourCreditClass):
+        return (
+            frozenset({"standard"}) if section.days == "MWF"
+            else frozenset({"four_credit_partial"})
+        )
+    if isinstance(item, CoreqClass):
+        course_ids = {f"{s.subject} {s.number}" for s in item.sections}
+        if course_ids == _COREQ_SHORT_PAIR:
+            return frozenset({"coreq_short"})
+    return frozenset({"standard"})
+
+
 def _candidate_instructors(
     section: Section, persons: dict[str, PersonRecord]
 ) -> list[str]:
@@ -264,7 +301,8 @@ def _preference_cost(
 
 
 def _section_candidates(
-    section: Section, config: SolverConfig, max_candidates: int
+    section: Section, config: SolverConfig, max_candidates: int,
+    allowed_types: frozenset[str],
 ) -> list[SectionCandidate]:
     course = f"{section.subject} {section.number}"
     current_cost = _preference_cost(
@@ -292,12 +330,14 @@ def _section_candidates(
         section.instructor
     ]
     patterns = [
-        p for p in config.meeting_patterns if p.duration_minutes == section.duration
+        p for p in config.meeting_patterns
+        if p.duration_minutes == section.duration and p.types & allowed_types
     ]
     if not patterns and section.days and section.start:
-        # Nothing in timeslot.toml matches this section's own duration --
-        # fall back to its current pattern so it isn't dropped from the
-        # search (an empty domain would make the whole model infeasible).
+        # Nothing in timeslot.toml matches this section's own duration
+        # *and* allowed_types -- fall back to its current pattern so it
+        # isn't dropped from the search (an empty domain would make the
+        # whole model infeasible).
         patterns = [MeetingPattern(
             days=section.days,
             duration_minutes=section.duration or 0,
@@ -741,6 +781,7 @@ def solve(
             MAX_CANDIDATES_SINGLE_SECTION
             if len(class_list[owner[i]].sections) == 1
             else MAX_CANDIDATES_PAIRED_SECTION,
+            _allowed_pattern_types(class_list[owner[i]], section),
         )
         for i, section in enumerate(sections)
     ]

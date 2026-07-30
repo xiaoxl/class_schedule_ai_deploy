@@ -45,6 +45,7 @@ class SolveResolvesConflictsTests(unittest.TestCase):
                 MeetingPattern(
                     days="MWF", duration_minutes=50,
                     starts=(datetime.time(9, 0), datetime.time(10, 0)),
+                    types=frozenset({"standard"}),
                 )
             ],
             rooms=[RoomRecord(building="Corley", room="101")],
