@@ -24,6 +24,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import pandas as pd
+import psutil
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
 
@@ -61,6 +62,18 @@ SOFT_SEVERITY_THRESHOLD = 200.0
 SOLVE_TIME_LIMIT_SECONDS = 60.0
 
 logger = logging.getLogger("class_schedule.webapp")
+
+# The solve endpoint is the one path that reproducibly drove production
+# RSS into the multi-GB range before _add_scheduling_constraints moved to
+# add_no_overlap (see solver.py) -- logging before/after RSS here, next
+# to the request that actually caused that incident, is cheap (one OS
+# call each way) and gives an ongoing record to compare against if it
+# ever creeps back up, without needing a one-off benchmark script.
+_PROCESS = psutil.Process()
+
+
+def _rss_mb() -> float:
+    return _PROCESS.memory_info().rss / (1024 * 1024)
 
 
 def _load_config(loader, path: Path, label: str, default=None):
@@ -141,6 +154,7 @@ def create_app() -> FastAPI:
         regenerate: bool = Form(False),
     ):
         filename, schedule = await _read_and_group(schedule_file)
+        rss_before = _rss_mb()
         try:
             solved = solver_module.solve(
                 schedule, SOLVER_CONFIG, time_limit_seconds=SOLVE_TIME_LIMIT_SECONDS,
@@ -157,13 +171,16 @@ def create_app() -> FastAPI:
             # (see solver.solve()'s docstring). app.js keys off this
             # status to keep "Solve Schedule" disabled until a new file
             # is chosen, instead of inviting a retry that can't succeed.
-            logger.warning("Could not solve %r: %s", filename, error)
+            logger.warning(
+                "Could not solve %r: %s (RSS %.1f -> %.1f MB)",
+                filename, error, rss_before, _rss_mb(),
+            )
             raise HTTPException(422, str(error)) from error
         changes = solver_module.diff_schedules(schedule, solved)
         violations = _evaluate_schedule(solved)
         logger.info(
-            "Solved %r cleanly (%d classes, %d field change(s))",
-            filename, len(solved), len(changes),
+            "Solved %r cleanly (%d classes, %d field change(s), RSS %.1f -> %.1f MB)",
+            filename, len(solved), len(changes), rss_before, _rss_mb(),
         )
         return {
             "count": len(solved),
