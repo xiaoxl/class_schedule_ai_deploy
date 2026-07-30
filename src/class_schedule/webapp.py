@@ -52,7 +52,7 @@ LOG_PATH = Path("output/logs/webapp.log")
 
 # A soft finding's penalty at or above this is rendered orange in the UI
 # (under_load, always weighted 90, a strict instructor's overload (flat
-# 100), a permissive one past OVERLOAD_FAR_THRESHOLD (10+80=90), and a
+# 100), a permissive one past OVERLOAD_FAR_THRESHOLD (10+60=70), and a
 # strongly weighted "dislike" PreferenceRule, land here); below it is
 # yellow (back_to_back/disliked_*, weighted 5-10, a permissive
 # instructor's ordinary overload (10), and a mildly weighted

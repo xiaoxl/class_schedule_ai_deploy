@@ -431,11 +431,11 @@ OVERLOAD_TOLERANCE = 2.0
 # value that does NOT trigger the extra penalty -- 4 is fine, 5 triggers
 # it (a strict "more than" comparison, exactly like OVERLOAD_TOLERANCE).
 # Stacked on top of the base penalty (10 for allow_overload=True), a
-# permissive instructor 5+ credit hours over lands at 60 -- clearly above
+# permissive instructor 5+ credit hours over lands at 70 -- clearly above
 # the small fixed penalties elsewhere (disliked_*/back_to_back at 5-10),
 # but well under a strict instructor's 100.
 OVERLOAD_FAR_THRESHOLD = 4
-OVERLOAD_FAR_PENALTY = 50.0
+OVERLOAD_FAR_PENALTY = 60.0
 
 # Every penalty in this system shares one 0-100 scale (see
 # PreferenceRecord.overload_penalty and PreferenceRule.weight) -- 100 is
