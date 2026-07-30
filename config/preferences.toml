@@ -49,7 +49,7 @@
 
 [[instructors]]
 name = "Bain, Leslie M."
-allow_overload = false
+allow_overload = true
 allow_back_to_back = true
 preferred_times = []
 disliked_times = []
