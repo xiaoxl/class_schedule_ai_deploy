@@ -871,7 +871,8 @@ def check_soft_preferences(
         ):
             findings.append(SoftFinding(
                 "disliked_location", section.instructor,
-                f"{section.course_id}: room {section.room!r} is a "
+                f"{section.course_id}: room "
+                f"{f'{section.building} {section.room}'.strip()!r} is a "
                 f"disliked location",
                 DISLIKED_LOCATION_PENALTY,
             ))

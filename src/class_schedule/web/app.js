@@ -390,7 +390,7 @@ function renderClass(item) {
 function renderSection(section) {
   return `<tr>
     <td>${esc(section["Time Slot"])}</td>
-    <td>${esc(section["Room"])}</td>
+    <td>${esc(roomLabel(section))}</td>
     <td>${esc(section["Instructor"])}</td>
     <td>${esc(section["Type"])}</td>
   </tr>`;
@@ -452,10 +452,17 @@ function groupByInstructor(data) {
   );
 }
 
+// Building + Room combined -- shown anywhere a room needs to be human-
+// readable, since a bare room number ("269") is ambiguous across
+// buildings but "Corley 269" isn't.
+function roomLabel(row) {
+  return [row["Building"], row["Room"]].filter(Boolean).join(" ");
+}
+
 function groupByRoom(data) {
   return groupBy(
     flattenSections(data),
-    (row) => [row["Building"], row["Room"]].filter(Boolean).join(" "),
+    roomLabel,
     "(Unassigned room / online)"
   ).map(([title, rows]) => [title, sortByDayThenTime(rows)]);
 }
@@ -479,14 +486,14 @@ const GROUP_COLUMNS = {
   course: [
     ["Section", (r) => r["Section"]],
     ["Time Slot", (r) => r["Time Slot"]],
-    ["Room", (r) => r["Room"]],
+    ["Room", (r) => roomLabel(r)],
     ["Instructor", (r) => r["Instructor"]],
     ["Type", (r) => r["Type"]],
   ],
   instructor: [
     ["Course", (r) => r.course_id],
     ["Time Slot", (r) => r["Time Slot"]],
-    ["Room", (r) => r["Room"]],
+    ["Room", (r) => roomLabel(r)],
     ["Type", (r) => r["Type"]],
   ],
   room: [
@@ -537,7 +544,7 @@ function renderErrorRow(record) {
     <td>${esc(record["Number"])}</td>
     <td>${esc(record["Section"])}</td>
     <td>${esc(record["Time Slot"])}</td>
-    <td>${esc(record["Room"])}</td>
+    <td>${esc(roomLabel(record))}</td>
     <td>${esc(record["Instructor"])}</td>
   </tr>`;
 }
