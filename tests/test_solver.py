@@ -3,6 +3,7 @@ import unittest
 
 from class_schedule.class_model import CrossListingClass, NormalClass, Section
 from class_schedule.schedule_model import (
+    PersonRecord,
     PreferenceRecord,
     PreferenceRule,
     Schedule,
@@ -123,6 +124,68 @@ class SolveHonorsPreferenceRulesTests(unittest.TestCase):
         solved_section = solved.classes[0].sections[0]
         self.assertEqual(
             f"{solved_section.building} {solved_section.room}".strip(), "Corley 269"
+        )
+
+
+class SolvePrefersOnlineTests(unittest.TestCase):
+    def test_prefers_an_instructor_without_an_online_preference_for_an_in_person_section(self):
+        # Bob is double-booked (same instructor, overlapping time) --
+        # only MATH 1113 has another qualified instructor, so resolving
+        # the conflict means reassigning it away from Bob to whichever of
+        # Alice/Carol the solver picks. Alice prefers online, Carol has
+        # no preference; both cost the same INSTRUCTOR_CHANGE_COST, so
+        # Alice's PREFERS_ONLINE_PENALTY (for landing on this in-person
+        # section) should make Carol the strictly cheaper pick.
+        moved = make_section(
+            subject="MATH", number="1113", section="001", instructor="Bob", room="101",
+        )
+        conflicting = make_section(
+            subject="MATH", number="2103", section="002", instructor="Bob", room="102",
+        )
+        schedule = Schedule([NormalClass((moved,)), NormalClass((conflicting,))])
+        config = empty_config(
+            persons={
+                "Bob": PersonRecord(name="Bob", max_load=15, courses=["MATH 2103"]),
+                "Alice": PersonRecord(name="Alice", max_load=15, courses=["MATH 1113"]),
+                "Carol": PersonRecord(name="Carol", max_load=15, courses=["MATH 1113"]),
+            },
+            preferences={
+                "Alice": PreferenceRecord(name="Alice", prefers_online=True),
+                "Carol": PreferenceRecord(name="Carol"),
+            },
+        )
+        solved = solve(schedule, config, time_limit_seconds=10.0)
+        self.assertEqual(check_conflicts(solved), [])
+        self.assertEqual(solved.get("MATH 1113-001").sections[0].instructor, "Carol")
+
+
+class SolveMaxBackToBackTests(unittest.TestCase):
+    def test_moves_a_class_to_break_an_over_cap_back_to_back_chain(self):
+        a = make_section(number="1113", section="001", instructor="Alice", room="101", time_slot="MWF 9:00am", duration=50)
+        b = make_section(number="1003", section="001", instructor="Alice", room="101", time_slot="MWF 9:50am", duration=50)
+        c = make_section(number="2914", section="001", instructor="Alice", room="101", time_slot="MWF 10:40am", duration=50)
+        schedule = Schedule([NormalClass((a,)), NormalClass((b,)), NormalClass((c,))])
+        config = empty_config(
+            meeting_patterns=[
+                MeetingPattern(
+                    days="MWF", duration_minutes=50,
+                    starts=(
+                        datetime.time(9, 0), datetime.time(9, 50),
+                        datetime.time(10, 40), datetime.time(13, 0),
+                    ),
+                    types=frozenset({"standard"}),
+                )
+            ],
+            rooms=[RoomRecord(building="Corley", room="101")],
+            preferences={"Alice": PreferenceRecord(
+                name="Alice", allow_back_to_back=True, max_back_to_back=2,
+            )},
+        )
+        solved = solve(schedule, config, time_limit_seconds=15.0)
+        self.assertEqual(check_conflicts(solved), [])
+        starts = sorted(item.sections[0].start for item in solved.classes)
+        self.assertNotEqual(
+            starts, [datetime.time(9, 0), datetime.time(9, 50), datetime.time(10, 40)],
         )
 
 

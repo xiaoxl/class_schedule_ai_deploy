@@ -5,82 +5,109 @@
 name = "Bain, Leslie M."
 max_load = 15
 aliases = ["Bain"]
-courses = ["MATH 0903", "MATH 1113", "STAT 2163"]
+courses = [
+  "MATH 0903", "MATH 1003", "MATH 1113", "MATH 1203", "MATH 1914",
+  "MATH 2243", "MATH 2914", "STAT 2163",
+]
 
 [[persons]]
 name = "Ballard, Kasey L."
 max_load = 12
 aliases = ["Ballard"]
-courses = ["MATH 0803", "MATH 1003", "MATH 1113"]
+courses = [
+  "MATH 0803", "MATH 1003", "MATH 1113", "MATH 1203", "MATH 1914",
+  "MATH 2223", "MATH 2243", "MATH 2703", "MATH 2914",
+]
 
 [[persons]]
 name = "Cox, Allie M."
 max_load = 15
 aliases = ["Cox"]
-courses = ["MATH 1110", "MATH 1113", "MATH 2223"]
+courses = [
+  "MATH 1110", "MATH 1113", "MATH 1203", "MATH 1914", "MATH 2223",
+  "MATH 2243", "MATH 2914",
+]
 
 [[persons]]
 name = "Growns, Landon C."
 max_load = 15
 aliases = ["Growns"]
-courses = ["MATH 0903", "MATH 1110", "MATH 1113"]
-
-[[persons]]
-name = "Hogan, Jessica L."
-max_load = 15
-aliases = ["Hogan"]
-courses = ["MATH 0903", "MATH 1110", "MATH 1113"]
+courses = [
+  "MATH 0903", "MATH 1003", "MATH 1110", "MATH 1113", "MATH 1203",
+  "MATH 1914", "MATH 2223", "MATH 2243", "MATH 2914",
+]
 
 [[persons]]
 name = "Jordan, Scott M."
 max_load = 12
 aliases = [{ short = "Jordan", subject = "STAT" }]
-courses = ["STAT 3153", "STAT 4113", "STAT 4163", "STAT 5113"]
+courses = [
+  "STAT 2163", "STAT 3113", "STAT 3153", "STAT 3183", "STAT 4113",
+  "STAT 4163", "STAT 4173", "STAT 5113", "STAT 5173",
+]
 
 [[persons]]
 name = "Jordan, Susan M."
 max_load = 15
 aliases = [{ short = "Jordan", subject = "MATH" }]
-courses = ["MATH 1914", "MATH 2703", "MATH 2914"]
+courses = ["MATH 1003", "MATH 1113", "MATH 1914", "MATH 2703", "MATH 2914"]
 
 [[persons]]
 name = "King, Jamie L."
 max_load = 15
 aliases = ["King"]
-courses = ["MATH 0903", "MATH 1113", "STAT 2163"]
+courses = ["MATH 0803", "MATH 0903", "MATH 1003", "MATH 1113", "STAT 2163"]
 
 [[persons]]
 name = "Limperis, Thomas G."
 max_load = 12
 aliases = ["Limperis"]
-courses = ["MATH 2914", "MATH 2934"]
-
-[[persons]]
-name = "Myers, Jeanine L."
-max_load = 15
-aliases = ["Myers"]
-courses = ["MATH 2914", "MATH 2924"]
+# MATH 3203/4123 are the now-confirmed "analysis"/"modeling" from his own
+# 26F wording (see examples/oldsrc/low-frequency-courses.md) -- his own
+# "abs.alge"/"discrete math" resolve to MATH 4033/MATH 2703, already
+# covered by the numeric course numbers below.
+courses = [
+  "MATH 2703", "MATH 2914", "MATH 2924", "MATH 2934", "MATH 3203",
+  "MATH 3243", "MATH 4033", "MATH 4123",
+]
 
 [[persons]]
 name = "Overduin, Matthew D."
 max_load = 12
 aliases = ["Overduin"]
-courses = ["MATH 2243", "MATH 2703", "MATH 3243"]
+# 26S's "MATH 4723" was a typo for MATH 4273 (Complex Variables) --
+# confirmed 2026-08-20, see examples/oldsrc/low-frequency-courses.md.
+courses = [
+  "MATH 2243", "MATH 2703", "MATH 2914", "MATH 2924", "MATH 2934",
+  "MATH 3203", "MATH 3243", "MATH 4003", "MATH 4033", "MATH 4273",
+]
 
 [[persons]]
 name = "Taylor, Teresa L."
 max_load = 15
 aliases = ["Taylor"]
-courses = ["MATH 2033", "MATH 2043", "MATH 3033"]
+courses = ["MATH 1113", "MATH 2033", "MATH 2043", "MATH 3033", "MATH 4703"]
 
 [[persons]]
 name = "Winn, Janet L."
 max_load = 15
 aliases = ["Winn"]
-courses = ["MATH 0903", "MATH 1003", "MATH 1113"]
+courses = ["MATH 0803", "MATH 0903", "MATH 1003", "MATH 1110", "MATH 1113", "MATH 1914"]
 
 [[persons]]
 name = "Xiao, Xinli"
 max_load = 12
 aliases = ["Xiao"]
-courses = ["MATH 3243", "MATH 4003", "MATH 4033", "STAT 4383", "STAT 5383"]
+courses = [
+  "MATH 2914", "MATH 2924", "MATH 2934", "MATH 3243", "MATH 4003",
+  "MATH 4033", "MATH 4971", "STAT 3113", "STAT 4383", "STAT 5383",
+]
+
+[[persons]]
+name = "Yousuf, Marium"
+max_load = 15
+aliases = ["Yousuf"]
+# New hire for 27S -- "various 1113" read as the course number itself
+# (all its coreq/hybrid/standalone forms are the same qualification,
+# not separate entries).
+courses = ["MATH 1113", "MATH 2914", "MATH 2924"]

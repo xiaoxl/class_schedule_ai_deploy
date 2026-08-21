@@ -11,6 +11,31 @@ run an OR-Tools solver to fix what it can.
 uv sync
 ```
 
+## Project layout
+
+Code is shared across every term; data is not -- kept apart on purpose
+so a term's own files are never mixed into the code, or into another
+term's files:
+
+```
+src/class_schedule/   shared code -- term-agnostic, never edited per term
+config/                durable, cross-term facts: persons.toml, preferences.toml,
+                       timeslot.toml, locations.toml (see "Config" below --
+                       preferences.toml is per-term *content* but stays here;
+                       see that section for why)
+inputs/TEMPLATE/       the reusable changes.toml template -- copy it per term
+inputs/<term>/         e.g. inputs/27S/ -- that term's own changes.toml, the
+                       schedule file it rolled over from, and its Cube1 export
+out/<term>/            e.g. out/27S/ -- that term's generated files: starting.csv,
+                       starting_noadding.csv, and anything else built for it
+docs/                  tool documentation (section_demand.md, ...)
+examples/              reference files not tied to any one term's rollover
+```
+
+`out/` is this project's per-term results; `output/` (already existed) is
+unrelated -- just the running web app's own log file. New terms add a new
+`inputs/<term>/` + `out/<term>/` pair; nothing under `src/` changes.
+
 ## Running the web app
 
 ```powershell
@@ -98,7 +123,12 @@ runnable script.
 
 ## Config
 
-Four files under `config/`, each with a different lifetime:
+Four files under `config/`, each with a different lifetime. All four
+stay here rather than moving into a term's own `inputs/<term>/` folder
+(see "Project layout" above) -- `solver.SolverConfig.load(config_dir)`
+and the live webapp both read all four from one hardcoded directory, so
+splitting `preferences.toml` out despite it being per-term *content*
+would break both. It just gets edited in place each term instead.
 
 - `persons.toml` -- contractual facts: `max_load`, name-matching
   `aliases` (optionally scoped by `subject`, e.g. MATH Jordan vs. STAT
@@ -109,7 +139,11 @@ Four files under `config/`, each with a different lifetime:
   never applies within 2 credit hours of `max_load` -- that's the
   definition of overload, not a leniency knob; see `OVERLOAD_TOLERANCE`/
   `OVERLOAD_FAR_THRESHOLD` in `schedule_model.py` for how far over
-  actually costs), `allow_back_to_back`,
+  actually costs), `allow_back_to_back`, `max_back_to_back` (an optional
+  cap on same-day consecutive meetings -- only meaningful when
+  `allow_back_to_back` is `true`; each meeting past the cap is its own
+  soft finding, same tier as a plain back-to-back), `prefers_online` (a
+  blanket, not course-scoped, soft affinity for online/hyflex sections),
   `preferred_times`/`disliked_times`, `preferred_locations`/
   `disliked_locations`, `preferred_courses`/`disliked_courses`, and
   free-form `rules` (course/section/room/time-scoped `prefer`/`dislike`
@@ -151,6 +185,85 @@ within `time_limit_seconds`).
 Pass `previous=` (typically the caller's own prior solve output) to
 guarantee the result differs from it by at least one section -- this is
 what powers the web UI's "solve again for a different option."
+
+## Rolling over to a new term
+
+Turn last term's schedule file into next term's starting draft from just
+two small lists -- who left, and what's newly offered/cancelled -- via
+`class_schedule.term_builder`:
+
+```powershell
+uv run python -m class_schedule.term_builder "inputs/27S/Course Schedule Report.csv" inputs/27S/changes.toml -o out/27S/27S_draft.xlsx
+```
+
+Copy `inputs/TEMPLATE/changes.toml` into `inputs/<term>/changes.toml` per
+term and fill in `departures`, `new_hires`, `cancel_courses`, and
+`new_courses` (see that file's own header for the format).
+`build_draft_schedule` then does the rest: cancelled courses are
+dropped, every section a departed instructor was teaching is reassigned
+to a placeholder ("Staff") rather than deleted -- so the course stays on
+the draft as *open*, not gone -- and new offerings are appended, grouped
+into four-credit/hybrid/coreq/cross-listed pairs automatically, exactly
+the way an uploaded CSV is grouped. The draft is a normal schedule file
+from there: upload it to the web app (or feed it to `solver.solve()`
+directly) to see conflicts and run the solver against the current
+roster.
+
+After solving, any section still assigned to "Staff" is nobody on staff
+being qualified/available for it -- a concrete hiring signal, not just a
+vague sense the department is stretched thin. `term_builder` never edits
+`config/persons.toml`/`preferences.toml` itself; `summarize_roster_impact`
+only checks whether each departure name matches a real persons.toml
+entry (a mismatch is almost always a typo) -- removing that person's
+block from both files is still a manual step.
+
+## Which courses need another section
+
+`class_schedule.section_demand` cross-references a schedule export
+against a Cube1-style enrollment headcount export (join key: CRN) and
+flags courses full enough to justify one more section:
+
+```powershell
+uv run python -m class_schedule.section_demand "inputs/27S/Course Schedule Report.csv" inputs/27S/Cube1.xlsx
+```
+
+See [`docs/section_demand.md`](docs/section_demand.md) for the exact
+input formats (both are specific, non-obvious shapes -- worth reading
+before pointing this at a new export) and the recommendation rule.
+
+## Building conflict-free starting CSVs
+
+`class_schedule.starting_template` runs `term_builder.build_draft_schedule`
+and adds two more passes on top, writing **two** files:
+`starting.csv` (the full draft, new courses included) and
+`starting_noadding.csv` (instructor changes only, nothing newly offered
+-- useful to see the roster impact on its own):
+
+1. **`place_new_hires`** seats each `changes.new_hires` name (see
+   `term_builder.TermChanges`) into the draft, up to their own
+   `persons.toml` `max_load`: first by taking over a placeholder
+   ("Staff") class they're qualified for, and only once none of those is
+   available by taking a class from an instructor currently over their
+   own max_load. Neither available for a given slot just stops there --
+   it never forces a bad fit.
+2. **`recolor_placeholder`** splits every class still on the placeholder
+   after that across as few distinct identities (`"Staff"`, `"Staff 2"`,
+   ...) as it takes to guarantee none of them overlap in time -- two
+   unrelated open positions landing at the same time otherwise reads as
+   a same-instructor double-booking that isn't real. However many
+   identities that still takes is a lower bound on *further* hires
+   beyond the ones already placed, available before running the solver
+   at all.
+
+```powershell
+uv run python -m class_schedule.starting_template `
+  "inputs/27S/Course Schedule Report.csv" inputs/27S/changes.toml `
+  -d out/27S --seed 42
+```
+
+See the module's own docstring in
+[`src/class_schedule/starting_template.py`](src/class_schedule/starting_template.py)
+for the full method.
 
 ## Tests
 

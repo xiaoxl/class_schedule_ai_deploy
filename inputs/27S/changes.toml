@@ -1,0 +1,141 @@
+# Per-term change list -- the two things you actually decide each
+# rollover: who left, and what's newly offered/cancelled. Everything else
+# (grouping four-credit/hybrid/coreq/cross-listed pairs, reassigning a
+# departed instructor's other sections, keeping section-vs-course
+# identity straight) is worked out automatically by
+# class_schedule.term_builder.build_draft_schedule from last term's
+# schedule file plus this file.
+#
+# Copy this file per term (e.g. changes/2027S.toml) and run:
+#
+#   uv run python -m class_schedule.term_builder 26S.xlsx changes/2027S.toml -o 27S_draft.xlsx
+#
+# The output is a *draft* -- upload it to the web app (or feed it to
+# solver.solve()) same as any other schedule file to see conflicts, run
+# the solver, and check overload. This file never touches
+# config/persons.toml or preferences.toml -- names in `departures` below
+# still need their [[persons]]/[[instructors]] blocks removed by hand
+# (term_builder.summarize_roster_impact will tell you if a name here
+# doesn't match anyone in persons.toml, which almost always means a
+# typo).
+
+# ---- who left ----------------------------------------------------------
+# Exact name as it appears in the *template* schedule's Instructor column
+# -- same spelling as persons.toml's own `name` field, e.g.
+# "Bain, Leslie M.", not the short alias "Bain". Every section this
+# person was teaching in the template gets reassigned to the placeholder
+# instructor below (left open, not deleted) rather than removed -- the
+# course is usually still needed, just needs a new teacher.
+departures = [
+  "Myers, Jeanine L.",
+  "Hogan, Jessica L.",
+]
+
+new_hires = [
+  "Yousuf, Marium",
+]
+
+# ---- courses to cancel --------------------------------------------------
+# Drop matching rows from the template outright. Omit `section` to cancel
+# every section of that course number.
+#
+# [[cancel_courses]]
+# subject = "MATH"
+# number = "0803"
+# section = "003"
+#
+# [[cancel_courses]]
+# subject = "MATH"
+# number = "2243"
+# # no section -> cancels every MATH 2243 section in the template
+
+# ---- new courses to add --------------------------------------------------
+# One table per CSV row -- same fields as an uploaded schedule file
+# (Subject/Number/Section required; "Time Slot" -- or Days+Start -- and
+# Duration -- or Credits -- needed for anything meeting in person). Leave
+# Instructor blank/omitted to have it filled with the placeholder
+# ("Staff" by default): after solving, any section still assigned to the
+# placeholder is exactly the "nobody on staff is qualified/available for
+# this" signal to act on -- add that course to an existing person's
+# `courses` list in persons.toml, or count it toward a hiring need. Give
+# it a real Days/Start/Duration, not "TBA" -- an online/TBA row is left
+# exactly as-is by the solver (no time/room/instructor search), so it
+# would never actually pick up a real instructor.
+#
+# Two rows with matching Subject/Number/Instructor/day-pattern (or a
+# shared Cross-List value) are grouped into one
+# four-credit/hybrid/coreq/cross-listed class automatically -- just list
+# both rows, same as in a CSV upload.
+#
+# [[new_courses]]
+# Subject = "MATH"
+# Number = "1013"
+# Section = "001"
+# Type = "Lecture"
+# Title = "NEW COURSE TITLE"
+# Credits = 3
+# "Time Slot" = "MWF 9:00am"
+# Duration = 50
+# Room = ""
+# Building = ""
+# Instructor = ""
+
+# section_demand flagged these three atomic courses as full enough to
+# support one more section (see docs/section_demand.md) -- MATH 1003
+# standalone, the MATH 0803/1003 coreq pair (two rows, same section
+# code "004", back-to-back with matching blank rooms so
+# CoreqClass.is_valid_schedule accepts the pairing), and STAT 2163.
+# Times are staggered so none of these three collide with each other
+# once they're all sitting on the shared "Staff" placeholder.
+
+[[new_courses]]
+Subject = "MATH"
+Number = "1003"
+Section = "007"
+Type = "Lecture"
+Title = "COLLEGE MATHEMATICS"
+Credits = 3
+"Time Slot" = "MWF 1:00pm"
+Duration = 50
+Room = ""
+Building = ""
+Instructor = ""
+
+[[new_courses]]
+Subject = "MATH"
+Number = "0803"
+Section = "004"
+Type = "Lecture"
+Title = "FOUNDATIONS OF COLLEGE MATH"
+Credits = 3
+"Time Slot" = "MWF 11:00am"
+Duration = 50
+Room = ""
+Building = ""
+Instructor = ""
+
+[[new_courses]]
+Subject = "MATH"
+Number = "1003"
+Section = "004"
+Type = "Lecture"
+Title = "COLLEGE MATHEMATICS"
+Credits = 3
+"Time Slot" = "MWF 11:50am"
+Duration = 50
+Room = ""
+Building = ""
+Instructor = ""
+
+[[new_courses]]
+Subject = "STAT"
+Number = "2163"
+Section = "004"
+Type = "Lecture"
+Title = "INTRO/STATISTICAL METHODS"
+Credits = 3
+"Time Slot" = "MWF 2:00pm"
+Duration = 50
+Room = ""
+Building = ""
+Instructor = ""

@@ -6,7 +6,13 @@ import time
 from collections.abc import Mapping
 
 
-_EMPTY_VALUES = frozenset({"", "none", "nan", "nat"})
+# "unassigned" is ATU's "Course Schedule Report" export's own placeholder
+# for "no room/building" (see examples/Course Schedule Report_*.csv) --
+# without it, a TBA/online row's literal Room="Unassigned" reads as a
+# truthy room value, which breaks HybridClass's `bool(left.room) !=
+# bool(right.room)` room-presence check against its genuinely-in-person
+# other half.
+_EMPTY_VALUES = frozenset({"", "none", "nan", "nat", "unassigned"})
 _SLOT_PATTERN = re.compile(
     r"^(?P<days>M|T|W|R|F|MW|TR|MWF)\s+"
     r"(?P<clock>(?:0?[1-9]|1[0-2]):[0-5]\d\s*(?:am|pm))$",
@@ -16,7 +22,12 @@ _SLOT_PATTERN = re.compile(
 # Canonical field name -> every column header seen in the wild that means
 # the same thing. "Meeting Days"/"Beginning Time"/"Ending Time"/"Schedule
 # Type"/"Course Credit Hours"/"Instructor Name"/"XL Group Code" are the
-# names used by ATU's Banner "Course_Catalog" export; the rest are the
+# names used by ATU's Banner "Course_Catalog" export; "Meeting_Days" is
+# the same field spelled with an underscore in ATU's "Course Schedule
+# Report" export (see examples/Course Schedule Report_*.csv -- that
+# export's Meeting_Times column needs its own split, handled separately
+# in normalize_columns below, since it packs Start and End into one
+# "9:30 am-10:50 am" string rather than two columns); the rest are the
 # original legacy names this codebase started with. Cross-List and XL
 # Group Code are both accepted as cross-listing signals -- whichever
 # column a given file actually populates is the one that counts (see
@@ -26,7 +37,7 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "Number": ("Number",),
     "Section": ("Section",),
     "Time Slot": ("Time Slot", "TimeSlot", "time_slot"),
-    "Days": ("Days", "Meeting Days"),
+    "Days": ("Days", "Meeting Days", "Meeting_Days"),
     "Start": ("Start", "Beginning Time"),
     "End": ("End", "Ending Time"),
     "Duration": ("Duration", "Duration Minutes", "duration_minutes"),
@@ -56,6 +67,24 @@ def value(row: Mapping[str, object], *names: str) -> object:
     return None
 
 
+def split_time_range(value: object) -> tuple[str, str]:
+    """Split a combined "9:30 am-10:50 am"-style range into (start, end)
+    clock-time text, the shape ``normalize_columns``'s Start/End columns
+    already expect. This is ATU's "Course Schedule Report" export's
+    Meeting_Times column (see examples/Course Schedule Report_*.csv) --
+    unlike Banner's separate Beginning Time/Ending Time columns, it packs
+    both into one field, so a rename alone (like Meeting_Days -> Days)
+    isn't enough. TBA, blank, or anything without exactly one ``-``
+    returns ``("", "")`` -- a blank Start already reads as an online/TBA
+    meeting everywhere else in this codebase, so there's no separate
+    "unparseable" case to raise on.
+    """
+    parts = text(value).split("-")
+    if len(parts) != 2:
+        return "", ""
+    return parts[0].strip(), parts[1].strip()
+
+
 def normalize_columns(row: Mapping[str, object]) -> dict[str, object]:
     """Rename a CSV row's columns to their canonical name.
 
@@ -71,7 +100,11 @@ def normalize_columns(row: Mapping[str, object]) -> dict[str, object]:
     one being non-empty is enough to mark it, so the first non-empty
     value between them wins (rather than one silently shadowing the
     other because of column order). For other duplicate aliases, the
-    first value encountered wins.
+    first value encountered wins. A Meeting_Times column (see
+    ``split_time_range``) is split into Start/End as a last step, but
+    only when the row has no Start/Time Slot of its own already -- so a
+    file that happens to carry a stray "Meeting_Times"-named column
+    alongside real Start/Time Slot data is never overridden by it.
     """
     alias_to_canonical = {
         alias: canonical
@@ -96,6 +129,14 @@ def normalize_columns(row: Mapping[str, object]) -> dict[str, object]:
             result[canonical] = item
             continue
         result.setdefault(canonical, item)
+    if (
+        "Meeting_Times" in result
+        and not text(result.get("Start"))
+        and not text(result.get("Time Slot"))
+    ):
+        start, end = split_time_range(result.pop("Meeting_Times"))
+        result["Start"] = start
+        result["End"] = end
     return result
 
 

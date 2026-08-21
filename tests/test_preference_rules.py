@@ -145,6 +145,107 @@ name = "Xiao, Xinli"
             load_preferences(path)
 
 
+class LoadPreferencesNewFieldsTests(unittest.TestCase):
+    def test_parses_prefers_online_and_max_back_to_back(self):
+        path = write_toml("""
+[[instructors]]
+name = "Xiao, Xinli"
+prefers_online = true
+max_back_to_back = 2
+""")
+        self.addCleanup(path.unlink)
+        preference = load_preferences(path)["Xiao, Xinli"]
+        self.assertTrue(preference.prefers_online)
+        self.assertEqual(preference.max_back_to_back, 2)
+
+    def test_both_default_to_off(self):
+        path = write_toml("""
+[[instructors]]
+name = "Xiao, Xinli"
+""")
+        self.addCleanup(path.unlink)
+        preference = load_preferences(path)["Xiao, Xinli"]
+        self.assertFalse(preference.prefers_online)
+        self.assertIsNone(preference.max_back_to_back)
+
+
+class PrefersOnlineTests(unittest.TestCase):
+    def test_in_person_section_is_penalized(self):
+        section = make_section(instructor="Alice")
+        schedule = Schedule([NormalClass((section,))])
+        preferences = {"Alice": PreferenceRecord(name="Alice", prefers_online=True)}
+        total, findings = check_soft_preferences(schedule, preferences, {})
+        self.assertEqual(total, 5.0)
+        self.assertTrue(any(f.rule == "online_preference" for f in findings))
+
+    def test_online_section_is_not_penalized(self):
+        section = make_section(instructor="Alice", **{"time_slot": "TBA", "duration": None})
+        schedule = Schedule([NormalClass((section,))])
+        preferences = {"Alice": PreferenceRecord(name="Alice", prefers_online=True)}
+        total, findings = check_soft_preferences(schedule, preferences, {})
+        self.assertEqual(total, 0.0)
+        self.assertFalse(any(f.rule == "online_preference" for f in findings))
+
+    def test_default_false_is_never_penalized(self):
+        section = make_section(instructor="Alice")
+        schedule = Schedule([NormalClass((section,))])
+        preferences = {"Alice": PreferenceRecord(name="Alice")}
+        total, findings = check_soft_preferences(schedule, preferences, {})
+        self.assertFalse(any(f.rule == "online_preference" for f in findings))
+
+
+class MaxBackToBackTests(unittest.TestCase):
+    def test_run_of_exactly_cap_is_unflagged(self):
+        # Two back-to-back 50-minute classes, 9:00-9:50 and 9:50-10:40.
+        a = make_section(number="1113", section="001", instructor="Alice", **{"time_slot": "MWF 9:00am"}, duration=50)
+        b = make_section(number="1003", section="001", instructor="Alice", **{"time_slot": "MWF 9:50am"}, duration=50)
+        schedule = Schedule([NormalClass((a,)), NormalClass((b,))])
+        preferences = {"Alice": PreferenceRecord(name="Alice", allow_back_to_back=True, max_back_to_back=2)}
+        total, findings = check_soft_preferences(schedule, preferences, {})
+        self.assertEqual([f for f in findings if f.rule == "back_to_back"], [])
+
+    def test_third_in_a_row_is_flagged_once(self):
+        a = make_section(number="1113", section="001", instructor="Alice", **{"time_slot": "MWF 9:00am"}, duration=50)
+        b = make_section(number="1003", section="001", instructor="Alice", **{"time_slot": "MWF 9:50am"}, duration=50)
+        c = make_section(number="2914", section="001", instructor="Alice", **{"time_slot": "MWF 10:40am"}, duration=50)
+        schedule = Schedule([NormalClass((a,)), NormalClass((b,)), NormalClass((c,))])
+        preferences = {"Alice": PreferenceRecord(name="Alice", allow_back_to_back=True, max_back_to_back=2)}
+        total, findings = check_soft_preferences(schedule, preferences, {})
+        b2b = [f for f in findings if f.rule == "back_to_back"]
+        self.assertEqual(len(b2b), 1)
+
+    def test_fourth_in_a_row_is_flagged_twice(self):
+        a = make_section(number="1113", section="001", instructor="Alice", **{"time_slot": "MWF 9:00am"}, duration=50)
+        b = make_section(number="1003", section="001", instructor="Alice", **{"time_slot": "MWF 9:50am"}, duration=50)
+        c = make_section(number="2914", section="001", instructor="Alice", **{"time_slot": "MWF 10:40am"}, duration=50)
+        d = make_section(number="2924", section="001", instructor="Alice", **{"time_slot": "MWF 11:30am"}, duration=50)
+        schedule = Schedule([NormalClass((a,)), NormalClass((b,)), NormalClass((c,)), NormalClass((d,))])
+        preferences = {"Alice": PreferenceRecord(name="Alice", allow_back_to_back=True, max_back_to_back=2)}
+        total, findings = check_soft_preferences(schedule, preferences, {})
+        b2b = [f for f in findings if f.rule == "back_to_back"]
+        self.assertEqual(len(b2b), 2)
+
+    def test_allow_back_to_back_false_ignores_the_cap(self):
+        # A cap can't loosen allow_back_to_back=False -- every pair is
+        # still flagged, even a run that would be within the cap.
+        a = make_section(number="1113", section="001", instructor="Alice", **{"time_slot": "MWF 9:00am"}, duration=50)
+        b = make_section(number="1003", section="001", instructor="Alice", **{"time_slot": "MWF 9:50am"}, duration=50)
+        schedule = Schedule([NormalClass((a,)), NormalClass((b,))])
+        preferences = {"Alice": PreferenceRecord(name="Alice", allow_back_to_back=False, max_back_to_back=2)}
+        total, findings = check_soft_preferences(schedule, preferences, {})
+        self.assertEqual(len([f for f in findings if f.rule == "back_to_back"]), 1)
+
+    def test_gap_between_classes_does_not_chain(self):
+        a = make_section(number="1113", section="001", instructor="Alice", **{"time_slot": "MWF 9:00am"}, duration=50)
+        b = make_section(number="1003", section="001", instructor="Alice", **{"time_slot": "MWF 11:00am"}, duration=50)
+        c = make_section(number="2914", section="001", instructor="Alice", **{"time_slot": "MWF 11:50am"}, duration=50)
+        schedule = Schedule([NormalClass((a,)), NormalClass((b,)), NormalClass((c,))])
+        preferences = {"Alice": PreferenceRecord(name="Alice", allow_back_to_back=True, max_back_to_back=2)}
+        total, findings = check_soft_preferences(schedule, preferences, {})
+        # a is isolated (gap before b); b, c form a run of 2 -- still within cap.
+        self.assertEqual([f for f in findings if f.rule == "back_to_back"], [])
+
+
 class LoadGlobalRulesTests(unittest.TestCase):
     def test_parses_top_level_rules_regardless_of_instructor(self):
         path = write_toml("""

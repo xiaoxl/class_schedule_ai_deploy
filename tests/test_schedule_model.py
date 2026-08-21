@@ -1,6 +1,6 @@
 import unittest
 
-from class_schedule.class_model import CrossListingClass, FourCreditClass, NormalClass, Section
+from class_schedule.class_model import CrossListingClass, FourCreditClass, HybridClass, NormalClass, Section
 from class_schedule.schedule_model import (
     GroupingError,
     PersonRecord,
@@ -111,6 +111,37 @@ class GroupingTests(unittest.TestCase):
         records = [make_record() for _ in range(3)]
         with self.assertRaises(GroupingError):
             Schedule.from_records(records)
+
+    def test_course_schedule_report_shaped_hybrid_pair_groups_correctly(self):
+        # Shaped exactly like ATU's "Course Schedule Report" export (see
+        # examples/Course Schedule Report_*.csv): Meeting_Days/
+        # Meeting_Times instead of Time Slot/Duration, and "Unassigned"
+        # (not blank) for the online row's Room/Building. Both quirks
+        # used to make this look like two same-course-same-instructor
+        # rows with no time at all (an ambiguous, wrongly-rejected
+        # four-credit attempt) instead of a real Hybrid pair.
+        records = [
+            {
+                "Subject": "MATH", "Number": "1113", "Section": "F01",
+                "Meeting_Days": "TBA", "Meeting_Times": "TBA",
+                "Room": "Unassigned", "Building": "Unassigned",
+                "Instructor": "Hogan, Jessica L.",
+            },
+            {
+                "Subject": "MATH", "Number": "1113", "Section": "F01",
+                "Meeting_Days": "MWF", "Meeting_Times": "10:00 am-10:50 am",
+                "Room": "269", "Building": "Corley",
+                "Instructor": "Hogan, Jessica L.",
+            },
+        ]
+        schedule = Schedule.from_records(records)
+        self.assertEqual(len(schedule), 1)
+        self.assertIsInstance(schedule.classes[0], HybridClass)
+        online, in_person = schedule.classes[0].sections
+        self.assertTrue(online.is_online)
+        self.assertEqual(in_person.time_slot, "MWF 10:00am")
+        self.assertEqual(in_person.duration, 50)
+        self.assertEqual(in_person.room, "269")
 
     def test_ambiguous_coreq_pairing_is_grouping_error(self):
         # MATH 1113-001 is a whitelisted coreq partner for *both*

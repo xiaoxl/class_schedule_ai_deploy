@@ -449,6 +449,10 @@ BACK_TO_BACK_PENALTY = 10.0
 DISLIKED_TIME_PENALTY = 5.0
 DISLIKED_LOCATION_PENALTY = 5.0
 DISLIKED_COURSE_PENALTY = 5.0
+# Same mild-nudge tier as the DISLIKED_* penalties above -- prefers_online
+# is the same shape of preference (a soft affinity about *how* a section
+# is taught), just phrased as a "prefer" instead of a "dislike".
+PREFERS_ONLINE_PENALTY = 5.0
 
 
 def weekday_time_overlap(
@@ -578,11 +582,31 @@ class PreferenceRecord:
     the actual flat scoring penalty from it -- 10 when ``allow_overload``
     is ``True``, 100 (this system's practical ceiling) when it's
     ``False``.
+
+    ``prefers_online`` is a blanket affinity for online/hyflex sections --
+    a mild scored nudge (``PREFERS_ONLINE_PENALTY``) against any
+    in-person assignment, on the same tier as the ``disliked_*`` fields.
+    It's blanket, not course-scoped -- someone who only wants a *specific*
+    course online (not every section they teach) needs a note in
+    ``rules`` instead; this field can't express that.
+
+    ``max_back_to_back`` caps how many consecutive same-day meetings this
+    instructor tolerates before it's scored -- ``None`` means no cap
+    (``allow_back_to_back`` alone decides, as before). It only applies
+    when ``allow_back_to_back`` is ``True``: back-to-back is already
+    scored at every occurrence when it's ``False``, and a cap can't loosen
+    that -- "no back-to-back at all" is a stricter statement than "no more
+    than N in a row" ever needs to override. A run of exactly
+    ``max_back_to_back`` meetings is fine; each meeting past that is its
+    own scored finding (``BACK_TO_BACK_PENALTY`` again), so a longer run
+    costs more than a run of ``max_back_to_back + 1``.
     """
 
     name: str
     allow_overload: bool = True
     allow_back_to_back: bool = True
+    max_back_to_back: int | None = None
+    prefers_online: bool = False
     preferred_times: tuple[TimeWindow, ...] = ()
     disliked_times: tuple[TimeWindow, ...] = ()
     preferred_locations: tuple[str, ...] = ()
@@ -619,6 +643,12 @@ def load_preferences(path: str | Path) -> dict[str, PreferenceRecord]:
             name=entry["name"],
             allow_overload=bool(entry.get("allow_overload", True)),
             allow_back_to_back=bool(entry.get("allow_back_to_back", True)),
+            max_back_to_back=(
+                int(entry["max_back_to_back"])
+                if entry.get("max_back_to_back") is not None
+                else None
+            ),
+            prefers_online=bool(entry.get("prefers_online", False)),
             preferred_times=tuple(
                 TimeWindow.from_config(w) for w in entry.get("preferred_times", ())
             ),
@@ -706,6 +736,59 @@ def is_back_to_back(left: Section, right: Section) -> bool:
     if not (set(left.days or "") & set(right.days or "")):
         return False
     return left.end == right.start or right.end == left.start
+
+
+_WEEKDAY_LETTERS = "MTWRF"
+
+
+def _capped_back_to_back_findings(
+    instructor: str, sections: list[Section], cap: int
+) -> list[SoftFinding]:
+    """Flag every meeting past the ``cap``-th in an instructor's own
+    consecutive same-day run.
+
+    Unlike ``is_back_to_back`` (any shared weekday between two possibly
+    multi-day sections), a "run" here is built per single calendar day --
+    the only way to walk a chain of 3+ meetings in order without a
+    multi-day section like "MWF" ambiguously joining two unrelated runs.
+    A run of exactly ``cap`` is unflagged; the (cap+1)-th meeting is one
+    finding, the (cap+2)-th is another, and so on -- so a longer run
+    always scores strictly more than a shorter one, same as stacking
+    ``BACK_TO_BACK_PENALTY`` per over-cap join.
+
+    A multi-day pattern like "MWF" walks the same run once per letter it
+    spans (M, then W, then F) and finds the identical join each time --
+    deduped by the course-id pair involved, so a genuine MWF run is one
+    finding, not three, matching how the plain (uncapped) pairwise check
+    already treats one back-to-back class-pair as a single finding
+    regardless of how many shared weekdays it recurs on.
+    """
+    findings: list[SoftFinding] = []
+    seen_joins: set[tuple[str, str]] = set()
+    for day in _WEEKDAY_LETTERS:
+        day_sections = sorted(
+            (s for s in sections if s.days and day in s.days and s.start is not None),
+            key=lambda s: (s.start.hour, s.start.minute),
+        )
+        run: list[Section] = []
+        for section in day_sections:
+            if run and run[-1].end == section.start:
+                run.append(section)
+            else:
+                run = [section]
+            if len(run) > cap:
+                join = (run[-2].course_id, run[-1].course_id)
+                if join in seen_joins:
+                    continue
+                seen_joins.add(join)
+                findings.append(SoftFinding(
+                    "back_to_back", instructor,
+                    f"{instructor}: {run[-2].course_id} and "
+                    f"{run[-1].course_id} extend a same-day run past "
+                    f"the {cap}-in-a-row cap",
+                    BACK_TO_BACK_PENALTY,
+                ))
+    return findings
 
 
 @dataclass(frozen=True)
@@ -896,6 +979,13 @@ def check_soft_preferences(
                 f"teaching {course}",
                 DISLIKED_COURSE_PENALTY,
             ))
+        if preference.prefers_online and not section.is_online:
+            findings.append(SoftFinding(
+                "online_preference", section.instructor,
+                f"{section.course_id}: {section.instructor} prefers "
+                f"online/hyflex sections but this one meets in person",
+                PREFERS_ONLINE_PENALTY,
+            ))
         if section.is_online:
             continue
         if preference.disliked_locations and location_matches(
@@ -915,17 +1005,22 @@ def check_soft_preferences(
             by_instructor.setdefault(section.instructor, []).append(section)
     for instructor, instructor_sections in by_instructor.items():
         preference = preferences.get(instructor)
-        if preference is None or preference.allow_back_to_back:
+        if preference is None:
             continue
-        for i, left in enumerate(instructor_sections):
-            for right in instructor_sections[i + 1:]:
-                if is_back_to_back(left, right):
-                    findings.append(SoftFinding(
-                        "back_to_back", instructor,
-                        f"{instructor}: {left.course_id} and "
-                        f"{right.course_id} are back-to-back",
-                        BACK_TO_BACK_PENALTY,
-                    ))
+        if not preference.allow_back_to_back:
+            for i, left in enumerate(instructor_sections):
+                for right in instructor_sections[i + 1:]:
+                    if is_back_to_back(left, right):
+                        findings.append(SoftFinding(
+                            "back_to_back", instructor,
+                            f"{instructor}: {left.course_id} and "
+                            f"{right.course_id} are back-to-back",
+                            BACK_TO_BACK_PENALTY,
+                        ))
+        elif preference.max_back_to_back is not None:
+            findings.extend(_capped_back_to_back_findings(
+                instructor, instructor_sections, preference.max_back_to_back
+            ))
 
     total = sum(finding.penalty for finding in findings)
     return total, findings

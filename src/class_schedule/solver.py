@@ -58,6 +58,7 @@ from .schedule_model import (
     DISLIKED_COURSE_PENALTY,
     DISLIKED_LOCATION_PENALTY,
     DISLIKED_TIME_PENALTY,
+    PREFERS_ONLINE_PENALTY,
     PersonRecord,
     PreferenceRecord,
     PreferenceRule,
@@ -300,6 +301,11 @@ def _preference_cost(
         cost += DISLIKED_LOCATION_PENALTY
     if course in preference.disliked_courses:
         cost += DISLIKED_COURSE_PENALTY
+    # An online/arranged candidate has no clock time at all -- see
+    # _build_slots' identical days/start check -- so `days is None` is
+    # the same "is this candidate online" signal used there.
+    if preference.prefers_online and days is not None:
+        cost += PREFERS_ONLINE_PENALTY
     return cost
 
 
@@ -504,6 +510,35 @@ def _build_slots(
     return slots
 
 
+def _back_to_back_chains(
+    start: int,
+    length: int,
+    slots: list[_Slot],
+    by_start: dict[datetime.time, list[int]],
+    used_classes: frozenset[int],
+) -> list[tuple[int, ...]]:
+    """Every back-to-back chain of exactly ``length`` slot indices
+    starting at ``start`` -- each next slot begins exactly when the
+    previous one ends, and no two slots in one chain belong to the same
+    class (mirrors the plain pairwise back-to-back check's own
+    class_index exemption, extended across the whole chain rather than
+    just one pair)."""
+    if length == 1:
+        return [(start,)]
+    current = slots[start]
+    chains: list[tuple[int, ...]] = []
+    for next_index in by_start.get(current.end, ()):
+        next_slot = slots[next_index]
+        if next_slot.class_index in used_classes:
+            continue
+        for rest in _back_to_back_chains(
+            next_index, length - 1, slots, by_start,
+            used_classes | {next_slot.class_index},
+        ):
+            chains.append((start,) + rest)
+    return chains
+
+
 def _add_scheduling_constraints(
     slots: list[_Slot],
     chosen: list[list],
@@ -588,35 +623,72 @@ def _add_scheduling_constraints(
             _add_bucket_no_overlap(indices)
 
     objective_terms = []
+    # Shared across every (instructor, day) bucket below, not reset per
+    # bucket -- a multi-day pattern like "MWF" puts the same slot indices
+    # in the M, W, and F buckets alike, so without a bucket-spanning
+    # dedupe here the same physical chain would be found (and penalized)
+    # once per day it recurs on, unlike schedule_model.py's
+    # _capped_back_to_back_findings, which counts one such chain once
+    # regardless of how many shared weekdays it spans. (The existing
+    # plain-pairwise branch just below has an analogous per-bucket
+    # `seen_pairs` that does reset every bucket -- left as-is here since
+    # it's pre-existing, shipped behavior this change isn't meant to
+    # touch, but it means that branch currently *does* over-count a
+    # multi-day back-to-back pair relative to check_soft_preferences.)
+    seen_chains: set[tuple[int, ...]] = set()
     for (instructor, _day), indices in by_instructor_day.items():
         if len(indices) > 1:
             _add_bucket_no_overlap(indices)
         preference = preferences.get(instructor)
-        if preference is None or preference.allow_back_to_back:
+        if preference is None:
             continue
         by_start: dict[datetime.time, list[int]] = {}
         for i in indices:
             by_start.setdefault(slots[i].start, []).append(i)
-        seen_pairs: set[tuple[int, int]] = set()
-        for i in indices:
-            a = slots[i]
-            for j in by_start.get(a.end, ()):
-                b = slots[j]
-                if a.class_index == b.class_index:
-                    continue
-                key = (i, j) if i < j else (j, i)
-                if key in seen_pairs:
-                    continue
-                seen_pairs.add(key)
-                both = model.new_bool_var(
-                    f"b2b_{a.section}_{a.candidate}_{b.section}_{b.candidate}"
-                )
-                model.add(both <= chosen[a.section][a.candidate])
-                model.add(both <= chosen[b.section][b.candidate])
-                model.add(
-                    both >= chosen[a.section][a.candidate] + chosen[b.section][b.candidate] - 1
-                )
-                objective_terms.append(BACK_TO_BACK_PENALTY * both)
+        if not preference.allow_back_to_back:
+            seen_pairs: set[tuple[int, int]] = set()
+            for i in indices:
+                a = slots[i]
+                for j in by_start.get(a.end, ()):
+                    b = slots[j]
+                    if a.class_index == b.class_index:
+                        continue
+                    key = (i, j) if i < j else (j, i)
+                    if key in seen_pairs:
+                        continue
+                    seen_pairs.add(key)
+                    both = model.new_bool_var(
+                        f"b2b_{a.section}_{a.candidate}_{b.section}_{b.candidate}"
+                    )
+                    model.add(both <= chosen[a.section][a.candidate])
+                    model.add(both <= chosen[b.section][b.candidate])
+                    model.add(
+                        both >= chosen[a.section][a.candidate] + chosen[b.section][b.candidate] - 1
+                    )
+                    objective_terms.append(BACK_TO_BACK_PENALTY * both)
+        elif preference.max_back_to_back is not None:
+            # A run of exactly max_back_to_back is fine; every chain one
+            # meeting longer is its own penalized "all chosen together"
+            # term, mirroring schedule_model._capped_back_to_back_findings
+            # -- a chain of cap+2 contains two overlapping (cap+1)-chains,
+            # so it's penalized twice, same escalation as that function.
+            chain_length = preference.max_back_to_back + 1
+            for i in indices:
+                for chain in _back_to_back_chains(
+                    i, chain_length, slots, by_start, frozenset({slots[i].class_index})
+                ):
+                    key = tuple(sorted(chain))
+                    if key in seen_chains:
+                        continue
+                    seen_chains.add(key)
+                    chain_vars = [chosen[slots[k].section][slots[k].candidate] for k in chain]
+                    all_chosen = model.new_bool_var(
+                        "chain_" + "_".join(f"{slots[k].section}_{slots[k].candidate}" for k in chain)
+                    )
+                    for var in chain_vars:
+                        model.add(all_chosen <= var)
+                    model.add(all_chosen >= sum(chain_vars) - (len(chain_vars) - 1))
+                    objective_terms.append(BACK_TO_BACK_PENALTY * all_chosen)
     return objective_terms
 
 

@@ -1,0 +1,92 @@
+# Per-term change list -- the two things you actually decide each
+# rollover: who left, and what's newly offered/cancelled. Everything else
+# (grouping four-credit/hybrid/coreq/cross-listed pairs, reassigning a
+# departed instructor's other sections, keeping section-vs-course
+# identity straight) is worked out automatically by
+# class_schedule.term_builder.build_draft_schedule from last term's
+# schedule file plus this file.
+#
+# Copy this file per term (e.g. changes/2027S.toml) and run:
+#
+#   uv run python -m class_schedule.term_builder 26S.xlsx changes/2027S.toml -o 27S_draft.xlsx
+#
+# The output is a *draft* -- upload it to the web app (or feed it to
+# solver.solve()) same as any other schedule file to see conflicts, run
+# the solver, and check overload. This file never touches
+# config/persons.toml or preferences.toml -- names in `departures` below
+# still need their [[persons]]/[[instructors]] blocks removed by hand
+# (term_builder.summarize_roster_impact will tell you if a name here
+# doesn't match anyone in persons.toml, which almost always means a
+# typo).
+
+# ---- who left ----------------------------------------------------------
+# Exact name as it appears in the *template* schedule's Instructor column
+# -- same spelling as persons.toml's own `name` field, e.g.
+# "Bain, Leslie M.", not the short alias "Bain". Every section this
+# person was teaching in the template gets reassigned to the placeholder
+# instructor below (left open, not deleted) rather than removed -- the
+# course is usually still needed, just needs a new teacher.
+departures = [
+  # "Bain, Leslie M.",
+]
+
+# ---- who's newly hired --------------------------------------------------
+# Exact name as it appears in persons.toml's own `name` field. Doesn't
+# touch the draft schedule by itself (unlike departures above) -- read by
+# term_builder.starting_template.place_new_hires, which tries to seat
+# each of these people into the draft up to their own max_load: first by
+# taking over an open ("Staff") position they're qualified for, then --
+# only if no open position is qualified/non-conflicting -- by taking a
+# position from an instructor currently over their own max_load. If
+# neither is possible for a given slot, placement just stops there rather
+# than forcing an assignment; whatever's left unplaced stays open for the
+# solver to sort out later. A name added to persons.toml for future
+# planning but not actually confirmed hired yet should NOT go here.
+new_hires = [
+  # "Yousuf, Marium",
+]
+
+# ---- courses to cancel --------------------------------------------------
+# Drop matching rows from the template outright. Omit `section` to cancel
+# every section of that course number.
+#
+# [[cancel_courses]]
+# subject = "MATH"
+# number = "0803"
+# section = "003"
+#
+# [[cancel_courses]]
+# subject = "MATH"
+# number = "2243"
+# # no section -> cancels every MATH 2243 section in the template
+
+# ---- new courses to add --------------------------------------------------
+# One table per CSV row -- same fields as an uploaded schedule file
+# (Subject/Number/Section required; "Time Slot" -- or Days+Start -- and
+# Duration -- or Credits -- needed for anything meeting in person). Leave
+# Instructor blank/omitted to have it filled with the placeholder
+# ("Staff" by default): after solving, any section still assigned to the
+# placeholder is exactly the "nobody on staff is qualified/available for
+# this" signal to act on -- add that course to an existing person's
+# `courses` list in persons.toml, or count it toward a hiring need. Give
+# it a real Days/Start/Duration, not "TBA" -- an online/TBA row is left
+# exactly as-is by the solver (no time/room/instructor search), so it
+# would never actually pick up a real instructor.
+#
+# Two rows with matching Subject/Number/Instructor/day-pattern (or a
+# shared Cross-List value) are grouped into one
+# four-credit/hybrid/coreq/cross-listed class automatically -- just list
+# both rows, same as in a CSV upload.
+#
+# [[new_courses]]
+# Subject = "MATH"
+# Number = "1013"
+# Section = "001"
+# Type = "Lecture"
+# Title = "NEW COURSE TITLE"
+# Credits = 3
+# "Time Slot" = "MWF 9:00am"
+# Duration = 50
+# Room = ""
+# Building = ""
+# Instructor = ""
