@@ -310,7 +310,7 @@ function renderExcelDownloads(excel) {
 const CHANGE_FIELD_LABELS = { instructor: "Instructor", time: "Time", room: "Room" };
 const CHANGE_FIELD_ORDER = ["time", "room", "instructor"];
 
-// changes only carries fields that actually differ (see solver.py's
+// changes only carries fields that actually differ (see solver/result.py's
 // diff_schedules) -- to show the other, unchanged fields alongside them
 // we look the section back up in the current render's own data.
 function currentSectionByCourseId(courseId) {

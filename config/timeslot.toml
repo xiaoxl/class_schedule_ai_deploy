@@ -2,7 +2,7 @@
 # plus periods that generated candidates may not overlap.
 #
 # `types` tags which scheduling situation(s) a pattern is legal for --
-# solver.py's `_allowed_pattern_types` decides which tag(s) apply to a
+# solver/candidates.py's `allowed_pattern_types` decides which tag(s) apply to a
 # given section (by its class kind, and for CoreqClass, which whitelisted
 # course pair it is) and only searches patterns carrying a matching tag:
 #   - "standard": NormalClass, HybridClass, CrossListingClass, a

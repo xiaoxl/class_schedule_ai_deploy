@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "term": "27S",
+  "version": "ver4",
+  "parent": "ver3",
+  "created_at": "2026-08-22T21:51:24.496836+00:00",
+  "input": {
+    "path": "work\\27S\\draft\\starting.csv",
+    "sha256": "f7d9999617228fec835093888b90fdd3df4f80b3cb3f4c3367103d38328f05fb"
+  },
+  "configuration": {
+    "version": "b23b6042112a",
+    "files": [
+      {
+        "path": "config\\persons.toml",
+        "sha256": "449e69760401de3e84376d28e7efad175c25923ba53f2bd75f238c9ee8240913"
+      },
+      {
+        "path": "config\\preferences.toml",
+        "sha256": "823aeaab9aa0129f501c7a205e16eab48348a556ba043927fa0efa4cb78b7306"
+      },
+      {
+        "path": "config\\timeslot.toml",
+        "sha256": "9c11402bfdfa66f8d109320f1a75c62f1ffba1e123f5d9ff59299660ede8e22f"
+      },
+      {
+        "path": "config\\locations.toml",
+        "sha256": "a7793c98d7dce6425530886a73d9ac47e5f5909570b413c76378c22c6bd26f34"
+      }
+    ]
+  },
+  "overrides_sha256": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c",
+  "selected_attempt": 1,
+  "solver": {
+    "status": "feasible",
+    "objective": -360.0,
+    "best_bound": -1270.0,
+    "random_seed": 445614713,
+    "time_limit_seconds": 20.0,
+    "attempts": 1
+  },
+  "validation": {
+    "hard_violations": 0,
+    "soft_penalty": 385.0,
+    "worst_overload": 6.0
+  },
+  "files": {
+    "27S_ver4.csv": "bf4cf3afe6300cf2b3fe22bcea3e3b728136d6cb8a772a784c02e465aa905def",
+    "report.md": "d1b98aed22b6a87fd161eba00c2251415f66c6bcb3b24af455471b76479275d5",
+    "attempts.csv": "95af8a118c3b40a175fff1a821812445ed3b18e51019f47d6f03b7daf180a8db",
+    "changes.csv": "d7536800eba25aee2226993dc62c1dadec9c4a687dc29912a515e7779abea779",
+    "overrides.toml": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c"
+  }
+}

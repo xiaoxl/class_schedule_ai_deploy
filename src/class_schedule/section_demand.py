@@ -4,10 +4,10 @@ a schedule export's enrollment against a Cube1-style headcount export.
 Two inputs, joined on CRN:
 
   - a schedule export (see ``load_schedule_rows`` and
-    ``docs/section_demand.md`` for the exact required shape -- the same
+    ``docs/demand-analysis.md`` for the exact required shape -- the same
     "Course Schedule Report" CSV format ``term_builder`` reads);
   - a Cube1 headcount export (see ``load_headcounts`` /
-    ``docs/section_demand.md``) -- one row per CRN with a
+    ``docs/demand-analysis.md``) -- one row per CRN with a
     "Course Start Date Headcount" and a "Final Headcount".
 
 **Atomic course grouping.** This is the same "atomic class" grouping
@@ -127,14 +127,14 @@ def load_headcounts(path: str | Path) -> dict[str, tuple[float, float]]:
     merged title row) and the "Value" sub-header row right below it are
     skipped automatically. Reading stops at the first row whose first
     column isn't a plain CRN number (Cube exports end with a
-    "Total by COLUMNS" summary row) -- see ``docs/section_demand.md`` for
+    "Total by COLUMNS" summary row) -- see ``docs/demand-analysis.md`` for
     the exact expected shape.
     """
     raw = pd.read_excel(path, header=None)
     header_rows = raw.index[raw[0].astype(str).str.strip() == "CRN"]
     if len(header_rows) == 0:
         raise ValueError(
-            f"{path}: no 'CRN' header row found -- see docs/section_demand.md "
+            f"{path}: no 'CRN' header row found -- see docs/demand-analysis.md "
             "for the expected Cube1 export shape"
         )
     data_start = header_rows[0] + 2  # header row itself, then the "Value" sub-header row
@@ -163,7 +163,7 @@ def load_schedule_rows(path: str | Path) -> pd.DataFrame:
     ``Schedule.from_dataframe`` itself already requires for grouping).
     Raises ``ValueError`` naming exactly what's missing rather than a
     bare ``KeyError`` deeper in the pipeline -- see
-    ``docs/section_demand.md`` for the required shape.
+    ``docs/demand-analysis.md`` for the required shape.
     """
     path = Path(path)
     dataframe = (
@@ -171,11 +171,13 @@ def load_schedule_rows(path: str | Path) -> pd.DataFrame:
         if path.suffix.lower() == ".csv"
         else pd.read_excel(path, dtype=str)
     )
+    if "Seats_Avail" not in dataframe.columns and "Seats Available" in dataframe.columns:
+        dataframe = dataframe.rename(columns={"Seats Available": "Seats_Avail"})
     missing = [c for c in REQUIRED_SCHEDULE_COLUMNS if c not in dataframe.columns]
     if missing:
         raise ValueError(
             f"{path}: missing required column(s) {missing} -- "
-            "see docs/section_demand.md for the required schedule export shape"
+            "see docs/demand-analysis.md for the required schedule export shape"
         )
     return dataframe.dropna(how="all")
 
@@ -364,7 +366,7 @@ def _main() -> None:
         description=(
             "Flag courses that could support one more section, by "
             "cross-referencing a schedule export against a Cube1-style "
-            "enrollment headcount export. See docs/section_demand.md."
+            "enrollment headcount export. See docs/demand-analysis.md."
         )
     )
     parser.add_argument("schedule", help="schedule export (CSV/XLSX)")

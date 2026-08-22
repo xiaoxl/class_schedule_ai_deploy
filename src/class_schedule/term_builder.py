@@ -10,8 +10,8 @@ Two inputs feed ``build_draft_schedule``:
     ``load_changes``. See ``inputs/TEMPLATE/changes.toml`` for the file format
     and a full walkthrough.
 
-The result is a draft ``Schedule`` ready to upload to the web app or feed
-straight into ``solver.solve()``: cancelled courses are dropped, every
+The result is a draft ``Schedule`` ready for the CLI solve stage or a direct
+``solver.solve()`` call: cancelled courses are dropped, every
 section a departed instructor was teaching is reassigned to a
 placeholder instructor (so the solver treats it as open rather than
 pinned to someone who's gone), and newly offered courses are appended,
@@ -19,7 +19,7 @@ grouped exactly the way ``Schedule.from_records`` groups any other CSV
 rows -- a four-credit/hybrid/coreq/cross-listed new offering is
 recognized automatically from its own two rows, same as an upload.
 
-This module never touches config/persons.toml or preferences.toml --
+This module never writes persons.toml or preferences.toml --
 ``summarize_roster_impact`` only reports whether ``departures`` matches
 real persons.toml names, it never writes either file. A departed
 person's max_load/preferences entry still needs to be removed by hand.
@@ -236,7 +236,7 @@ def build_draft(
     """Read last term's schedule file plus this term's change-list TOML,
     and return next term's draft ``Schedule`` plus a report of what
     changed. Pass ``output_path`` to also write the draft out as an
-    Excel file, ready to re-upload to the web app or feed straight into
+    Excel file, ready to feed into the CLI solve stage or directly into
     ``solver.solve()``.
     """
     template_path = Path(template_path)

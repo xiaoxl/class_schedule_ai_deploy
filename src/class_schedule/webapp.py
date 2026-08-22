@@ -67,7 +67,7 @@ logger = logging.getLogger("class_schedule.webapp")
 
 # The solve endpoint is the one path that reproducibly drove production
 # RSS into the multi-GB range before _add_scheduling_constraints moved to
-# add_no_overlap (see solver.py) -- logging before/after RSS here, next
+# add_no_overlap (see solver/constraints.py) -- logging before/after RSS here, next
 # to the request that actually caused that incident, is cheap (one OS
 # call each way) and gives an ongoing record to compare against if it
 # ever creeps back up, without needing a one-off benchmark script.

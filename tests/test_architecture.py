@@ -62,6 +62,13 @@ class StrictConfigurationTests(unittest.TestCase):
 
 
 class SolverArchitectureTests(unittest.TestCase):
+    def test_solver_public_api_is_backed_by_the_split_package(self):
+        import class_schedule.solver as solver_package
+
+        self.assertEqual(Path(solver_package.__file__).name, "__init__.py")
+        self.assertEqual(SolverConfig.__module__, "class_schedule.solver.config")
+        self.assertEqual(solve_detailed.__module__, "class_schedule.solver.engine")
+
     def _config(self, courses=("MATH 1113",)):
         from class_schedule.schedule_model import PersonRecord
 

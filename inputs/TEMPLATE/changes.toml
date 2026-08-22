@@ -10,10 +10,10 @@
 #
 #   uv run python -m class_schedule.term_builder 26S.xlsx changes/2027S.toml -o 27S_draft.xlsx
 #
-# The output is a *draft* -- upload it to the web app (or feed it to
-# solver.solve()) same as any other schedule file to see conflicts, run
-# the solver, and check overload. This file never touches
-# config/persons.toml or preferences.toml -- names in `departures` below
+# The output is a *draft* -- pass it to `class-schedule solve` (or feed it
+# to solver.solve()) to see conflicts, run the solver, and check overload.
+# This file never writes persons.toml or preferences.toml -- names in
+# `departures` below
 # still need their [[persons]]/[[instructors]] blocks removed by hand
 # (term_builder.summarize_roster_impact will tell you if a name here
 # doesn't match anyone in persons.toml, which almost always means a

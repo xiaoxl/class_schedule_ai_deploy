@@ -406,7 +406,7 @@ def _take_coreqs(
 # (room/instructor double-booking). Coreq/four-credit/hybrid scheduling
 # legality never needs its own runtime check here: it's guaranteed both at
 # ``Class`` construction time (each kind's own ``validate()``) and, for the
-# solver's output specifically, by ``solver.py``'s hard pairwise-exclusion
+# solver's output specifically, by ``solver/constraints.py``'s hard pairwise-exclusion
 # (an invalid coreq/four-credit/hybrid pairing is never a legal candidate
 # combination in the first place).
 #
@@ -860,7 +860,7 @@ def _overload_statuses(
     plus ``OVERLOAD_FAR_PENALTY`` on top when they're *also* more than
     ``OVERLOAD_FAR_THRESHOLD`` credit hours over their own max_load *and*
     ``allow_overload`` -- see the module comment above
-    ``OVERLOAD_TOLERANCE``. Mirrors ``solver.py``'s ``_add_load_terms``
+    ``OVERLOAD_TOLERANCE``. Mirrors ``solver/constraints.py``'s load model
     exactly so the web UI's reported penalty matches what the solver
     actually optimized for.
     """
@@ -956,7 +956,7 @@ def check_soft_preferences(
     ``global_rules`` plus each matching instructor's own ``rules`` (see
     ``PreferenceRule``) are checked too, but only their ``"dislike"``
     side -- a matching ``"prefer"`` rule still steers the solver (it's
-    scored in ``solver.py``'s ``_preference_cost``) but isn't reported
+    scored in ``solver/candidates.py``'s ``preference_cost``) but isn't reported
     here, since a *satisfied* preference isn't a violation to surface
     next to everything else this function returns.
     """

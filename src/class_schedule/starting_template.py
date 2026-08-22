@@ -79,13 +79,14 @@ def _conflicts_with_any(item: Class, others: list[Class]) -> bool:
 
 
 def _qualifies(item: Class, person: PersonRecord) -> bool:
-    return any(f"{s.subject} {s.number}" in person.courses for s in item.sections)
+    courses = {f"{s.subject} {s.number}" for s in item.sections}
+    return courses.issubset(person.courses)
 
 
 def _teaching_loads(schedule: Schedule) -> dict[str, float]:
     """Total credit hours per instructor -- one class counts once per
     distinct instructor teaching it, matching the load contract
-    ``schedule_model.check_soft_preferences`` and ``solver.py`` both use."""
+    ``schedule_model.check_soft_preferences`` and ``solver`` both use."""
     totals: dict[str, float] = {}
     for item in schedule.classes:
         instructors = {s.instructor for s in item.sections if s.instructor}
@@ -122,6 +123,7 @@ def place_new_hires(
                 (
                     item for item in result.classes
                     if any(s.instructor == placeholder for s in item.sections)
+                    and load + item.credit_hours <= person.max_load
                     and _qualifies(item, person)
                     and not _conflicts_with_any(item, assigned)
                 ),
@@ -135,6 +137,7 @@ def place_new_hires(
                         if (holder := persons.get(item.sections[0].instructor)) is not None
                         and holder.name != hire_name
                         and loads.get(holder.name, 0.0) > holder.max_load
+                        and load + item.credit_hours <= person.max_load
                         and _qualifies(item, person)
                         and not _conflicts_with_any(item, assigned)
                     ),

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
-import tempfile
+import shutil
+import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -16,6 +20,7 @@ from .schedule_model import (
     check_conflicts,
     check_soft_preferences,
 )
+from .overrides import OverrideFile, apply_overrides, load_overrides
 from .solver import (
     InfeasibleSchedule,
     SolveResult,
@@ -42,8 +47,8 @@ class Attempt:
             return (float("inf"), float("inf"), float("inf"))
         return (
             self.worst_overload or 0.0,
-            self.soft_penalty or 0.0,
             self.result.objective,
+            self.soft_penalty or 0.0,
         )
 
 
@@ -55,6 +60,9 @@ class RunBundle:
     schedule_path: Path
     report_path: Path
     attempts_path: Path
+    changes_path: Path
+    manifest_path: Path
+    overrides_path: Path
     best_attempt: Attempt
     attempts: tuple[Attempt, ...]
 
@@ -84,6 +92,10 @@ def next_version(term_dir: Path) -> str:
             if path.is_dir() and match:
                 versions.append(int(match.group(1)))
     return f"ver{max(versions, default=0) + 1}"
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _evaluate_attempt(number: int, result: SolveResult, config: SolverConfig) -> Attempt:
@@ -158,8 +170,8 @@ def _report(
         "",
         f"Ran {len(attempts)} independent attempt(s), each with a "
         f"{per_attempt_seconds:g}s CP-SAT budget. Selected attempt {best.number} "
-        "by lowest worst instructor overload, then lowest reported soft "
-        "penalty, then lowest solver objective.",
+        "by lowest worst instructor overload, then lowest solver objective, "
+        "then lowest reported soft penalty.",
         "",
         "## Selected result",
         "",
@@ -252,6 +264,8 @@ def run_term(
     version: str | None = None,
     attempts: int = 5,
     time_limit_seconds: float = 45.0,
+    overrides_path: str | Path | None = None,
+    parent: str | None = None,
 ) -> RunBundle:
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
@@ -268,15 +282,18 @@ def run_term(
     if destination.exists():
         raise FileExistsError(f"Refusing to overwrite existing result: {destination}")
 
-    config = SolverConfig.load(config_dir)
+    config = SolverConfig.load(config_dir, term=term)
     dataframe = pd.read_csv(input_path, dtype=str) if input_path.suffix.lower() == ".csv" else pd.read_excel(input_path, dtype=str)
-    starting = Schedule.from_dataframe(dataframe.dropna(how="all"), persons=config.persons)
+    source_schedule = Schedule.from_dataframe(dataframe.dropna(how="all"), persons=config.persons)
+    overrides = load_overrides(overrides_path) if overrides_path else OverrideFile()
+    starting = apply_overrides(source_schedule, overrides)
 
     attempt_results: list[Attempt] = []
     for number in range(1, attempts + 1):
         try:
             result = solve_detailed(
-                starting, config, time_limit_seconds=time_limit_seconds
+                starting, config, time_limit_seconds=time_limit_seconds,
+                locks=overrides.locks,
             )
             attempt_results.append(_evaluate_attempt(number, result, config))
         except SolveTimeout as error:
@@ -292,22 +309,81 @@ def run_term(
     assert best.result is not None
 
     term_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=f".{version}-", dir=term_dir) as folder:
-        staging = Path(folder)
+    staging = term_dir / f".{version}-staging-{uuid.uuid4().hex}"
+    staging.mkdir()
+    try:
         base = f"{term}_{version}"
         schedule_path = staging / f"{base}.csv"
         report_path = staging / "report.md"
         attempts_path = staging / "attempts.csv"
+        changes_path = staging / "changes.csv"
+        manifest_path = staging / "manifest.json"
+        saved_overrides_path = staging / "overrides.toml"
         best.result.schedule.to_dataframe().to_csv(schedule_path, index=False)
         pd.DataFrame(_attempt_rows(attempts_tuple)).to_csv(attempts_path, index=False)
+        changes = list(dict.fromkeys(diff_schedules(source_schedule, best.result.schedule)))
+        pd.DataFrame(
+            ({"Course ID": item.course_id, "Field": item.field,
+              "Before": item.before, "After": item.after} for item in changes),
+            columns=("Course ID", "Field", "Before", "After"),
+        ).to_csv(changes_path, index=False)
+        if overrides_path:
+            saved_overrides_path.write_bytes(Path(overrides_path).read_bytes())
+        else:
+            saved_overrides_path.write_text(
+                "# No manual edits or locks were applied to this version.\n",
+                encoding="utf-8",
+            )
         report_path.write_text(
             _report(
-                term, version, input_path, starting, config, attempts_tuple,
+                term, version, input_path, source_schedule, config, attempts_tuple,
                 best, time_limit_seconds,
             ),
             encoding="utf-8",
         )
-        Path(folder).replace(destination)
+        artifact_names = (schedule_path.name, report_path.name, attempts_path.name,
+                          changes_path.name, saved_overrides_path.name)
+        manifest = {
+            "schema_version": 1,
+            "term": term,
+            "version": version,
+            "parent": parent,
+            "created_at": datetime.now(UTC).isoformat(),
+            "input": {"path": str(input_path), "sha256": _sha256(input_path)},
+            "configuration": {
+                "version": config.version,
+                "files": [
+                    {"path": name, "sha256": _sha256(Path(name))}
+                    for name in config.source_paths
+                ],
+            },
+            "overrides_sha256": _sha256(saved_overrides_path),
+            "selected_attempt": best.number,
+            "solver": {
+                "status": best.result.status.value,
+                "objective": best.result.objective,
+                "best_bound": best.result.best_bound,
+                "random_seed": best.result.random_seed,
+                "time_limit_seconds": time_limit_seconds,
+                "attempts": attempts,
+            },
+            "validation": {
+                "hard_violations": len(best.hard_violations),
+                "soft_penalty": best.soft_penalty,
+                "worst_overload": best.worst_overload,
+            },
+            "files": {
+                name: _sha256(staging / name) for name in artifact_names
+            },
+        }
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+        staging.replace(destination)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
 
     return RunBundle(
         term=term,
@@ -316,6 +392,9 @@ def run_term(
         schedule_path=destination / f"{term}_{version}.csv",
         report_path=destination / "report.md",
         attempts_path=destination / "attempts.csv",
+        changes_path=destination / "changes.csv",
+        manifest_path=destination / "manifest.json",
+        overrides_path=destination / "overrides.toml",
         best_attempt=best,
         attempts=attempts_tuple,
     )
@@ -334,6 +413,8 @@ def _main() -> None:
     parser.add_argument("--version", help="explicit version such as ver3; defaults to next available")
     parser.add_argument("--attempts", type=int, default=5)
     parser.add_argument("--seconds", type=float, default=45.0, help="CP-SAT budget per attempt")
+    parser.add_argument("--overrides", help="manual edits/locks TOML")
+    parser.add_argument("--parent", help="parent version, for example ver3")
     args = parser.parse_args()
 
     bundle = run_term(
@@ -344,6 +425,8 @@ def _main() -> None:
         version=args.version,
         attempts=args.attempts,
         time_limit_seconds=args.seconds,
+        overrides_path=args.overrides,
+        parent=args.parent,
     )
     best = bundle.best_attempt
     print(f"Wrote {bundle.output_dir}")
