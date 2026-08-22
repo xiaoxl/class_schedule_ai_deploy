@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pandas as pd
 from openpyxl import Workbook
+from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from . import record_utils
@@ -1100,6 +1101,22 @@ def _weekly_workbook(schedule: "Schedule", *, group: str) -> Workbook:
     return workbook
 
 
+def _merged_anchor(ws, row: int, column: int):
+    """The writable top-left cell for ``(row, column)`` -- itself if it
+    isn't part of a merge, otherwise that merged range's own anchor cell
+    (the only one of its cells whose ``.value`` isn't read-only)."""
+    cell = ws.cell(row, column)
+    if not isinstance(cell, MergedCell):
+        return cell
+    for merged_range in ws.merged_cells.ranges:
+        if (
+            merged_range.min_row <= row <= merged_range.max_row
+            and merged_range.min_col <= column <= merged_range.max_col
+        ):
+            return ws.cell(merged_range.min_row, merged_range.min_col)
+    return cell  # pragma: no cover -- a MergedCell always belongs to some range
+
+
 def _build_weekly_sheet(
     ws, resource: str, entries: list[tuple[Class, Section]], group: str
 ) -> None:
@@ -1185,7 +1202,15 @@ def _build_weekly_sheet(
             if occupants == {id(item)}:
                 # The same atomic class's own companion meeting -- merge
                 # into the existing block instead of flagging anything.
-                anchor = ws.cell(start_row, column)
+                # start_row is this meeting's *own* row, which can land
+                # inside (not at the top of) an already-merged block --
+                # e.g. an 80-minute meeting rounds up to a 90-visual-minute
+                # block (see visual_slots above), so a back-to-back
+                # companion meeting immediately after it starts at a row
+                # already swallowed by that rounding. ws.cell() on such a
+                # row returns a read-only MergedCell, so resolve to the
+                # block's real top-left anchor first.
+                anchor = _merged_anchor(ws, start_row, column)
                 if section.course_id not in (anchor.value or ""):
                     anchor.value = f"{anchor.value}\n/ {section.course_id}".strip()
                 occupied |= {cell: id(item) for cell in cells}
@@ -1195,7 +1220,8 @@ def _build_weekly_sheet(
                 # a real scheduling conflict. Keep both visible rather
                 # than silently overwriting one: append to the existing
                 # cell and flag it red instead of creating a second block.
-                anchor = ws.cell(start_row, column)
+                # Same MergedCell hazard as above.
+                anchor = _merged_anchor(ws, start_row, column)
                 anchor.value = f"{anchor.value or ''}\nCONFLICT: {text}".strip()
                 anchor.fill = PatternFill("solid", fgColor="FF0000")
                 anchor.font = Font(size=9, bold=True, color="FFFFFF")

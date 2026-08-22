@@ -63,6 +63,17 @@
 #   direction = "prefer"
 #   weight = 100
 
+# 27S: MATH 1113-F01 stays in Corley 269 regardless of who ends up
+# teaching it -- weighted at this system's practical ceiling since it's
+# meant as close to a hard requirement as the soft-preference mechanism
+# gets (there's no true hard room constraint in this system).
+[[rules]]
+course = "MATH 1113"
+section = "F01"
+room = "Corley 269"
+direction = "prefer"
+weight = 100
+
 [[instructors]]
 name = "Bain, Leslie M."
 allow_overload = true
@@ -307,6 +318,11 @@ preferred_locations = []
 disliked_locations = []
 preferred_courses = []
 disliked_courses = []
+
+  [[instructors.rules]]
+  course = "MATH 2934"
+  direction = "dislike"
+  weight = 10
 
 [[instructors]]
 name = "Yousuf, Marium"

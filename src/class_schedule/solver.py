@@ -110,6 +110,29 @@ ROOM_CHANGE_COST = 5.0
 MAX_CANDIDATES_PAIRED_SECTION = 10
 MAX_CANDIDATES_SINGLE_SECTION = 40
 
+# ---- hard load ceiling: a genuine CP-SAT constraint, not just a penalty ----
+#
+# schedule_model.py's overload penalty is deliberately flat past
+# OVERLOAD_TOLERANCE/OVERLOAD_FAR_THRESHOLD rather than scaled by how many
+# credit hours over (see the module comment above OVERLOAD_TOLERANCE) --
+# that's a real, benchmarked trade-off for a *reported* finding. But
+# nothing in the objective alone stops CP-SAT from exploiting that
+# flatness: eliminating several other instructors' UNDER_LOAD_PENALTY
+# findings (90 each) by dumping all their hours onto one already-overloaded
+# but broadly-qualified instructor costs that instructor the same flat 100
+# whether they land 1 or 15 credit hours over -- observed in practice on a
+# real 27S draft, reproducibly across independent solves, pushing one
+# instructor to ~2x their own max_load. HARD_LOAD_CAP_TOLERANCE closes that
+# loophole with an unconditional constraint (every instructor's total stays
+# at or under max_load + this many credit hours, no matter their
+# allow_overload preference) -- generous enough to leave the ordinary
+# "slightly over" cases solver.py already handles untouched, tight enough
+# to rule out the runaway-concentration failure mode above. Distinct from
+# OVERLOAD_FAR_THRESHOLD on purpose: that one's just a second, still-soft
+# penalty tier for allow_overload=True instructors specifically; this is a
+# blanket hard ceiling for everyone with a persons.toml record.
+HARD_LOAD_CAP_TOLERANCE = 6.0
+
 
 # ---- config: meeting patterns + rooms (config/timeslot.toml, config/locations.toml) ----
 #
@@ -726,6 +749,11 @@ def _add_load_terms(
     predicate already forces the two sections of FourCreditClass/CoreqClass
     to share one instructor; HybridClass/CrossListingClass don't enforce
     that, so a mismatched second section is a rare, accepted edge case.
+
+    Also adds one unconditional hard constraint per instructor -- total
+    load never exceeds max_load + HARD_LOAD_CAP_TOLERANCE, regardless of
+    ``allow_overload`` -- see that constant's own comment for why the soft
+    penalty alone isn't enough to prevent a runaway concentration.
     """
     load_scale = 10
     per_instructor: dict[str, list] = {}
@@ -747,6 +775,8 @@ def _add_load_terms(
         total = sum(terms)
         target = int(round(person.max_load * load_scale))
         limit = int(round((person.max_load + OVERLOAD_TOLERANCE) * load_scale))
+        hard_cap = int(round((person.max_load + HARD_LOAD_CAP_TOLERANCE) * load_scale))
+        model.add(total <= hard_cap)
         preference = preferences.get(instructor)
         penalty_weight = preference.overload_penalty if preference else 0.0
         if penalty_weight:
