@@ -60,6 +60,12 @@ button:disabled { opacity: 0.6; cursor: default; }
 .results { margin-top: 28px; }
 .results-summary { margin-bottom: 12px; color: #4a4a68; }
 
+.solver-summary {
+  margin: -6px 0 14px;
+  color: #5d6470;
+  font-size: 0.875rem;
+}
+
 .changes-summary {
   border-radius: 10px;
   padding: 10px 14px;

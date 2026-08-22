@@ -58,9 +58,9 @@ new_hires = [
 # placeholder is exactly the "nobody on staff is qualified/available for
 # this" signal to act on -- add that course to an existing person's
 # `courses` list in persons.toml, or count it toward a hiring need. Give
-# it a real Days/Start/Duration, not "TBA" -- an online/TBA row is left
-# exactly as-is by the solver (no time/room/instructor search), so it
-# would never actually pick up a real instructor.
+# it a real Days/Start/Duration when a physical meeting must be scheduled.
+# ONLINE/TBA rows keep their delivery/time/room unchanged, but the solver
+# can still replace Staff with a qualified instructor.
 #
 # Two rows with matching Subject/Number/Instructor/day-pattern (or a
 # shared Cross-List value) are grouped into one

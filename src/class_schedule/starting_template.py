@@ -233,9 +233,9 @@ def build_starting_templates(
         if template_path.suffix.lower() == ".csv"
         else pd.read_excel(template_path, dtype=str)
     )
-    template = Schedule.from_dataframe(dataframe.dropna(how="all"))
-    changes = load_changes(changes_path)
     persons = load_persons(persons_path)
+    template = Schedule.from_dataframe(dataframe.dropna(how="all"), persons=persons)
+    changes = load_changes(changes_path)
     output_dir = Path(output_dir)
 
     results: dict[str, dict[str, object]] = {}

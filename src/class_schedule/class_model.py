@@ -14,6 +14,7 @@ table -- e.g. ``Schedule`` -- not to this module.
 from __future__ import annotations
 
 import datetime
+from enum import StrEnum
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import ClassVar
@@ -24,6 +25,14 @@ from . import record_utils
 # (e.g. "1914" -> 4 credits, "0803" -> 3 credits); a few numbers don't
 # follow that convention.
 _CREDIT_HOUR_OVERRIDES: dict[str, int] = {"1110": 2}
+
+
+class DeliveryMode(StrEnum):
+    """How a section is delivered, independent of whether its time is known."""
+
+    IN_PERSON = "in_person"
+    ONLINE = "online"
+    ARRANGED = "arranged"
 
 
 def _infer_credit_hours(number: str) -> int:
@@ -75,7 +84,24 @@ class Section:
 
     @property
     def is_online(self) -> bool:
+        """Compatibility predicate for sections with no physical meeting.
+
+        Historically this included TBA and blank slots. New code should use
+        ``delivery_mode``/``has_meeting_time`` when that distinction matters.
+        """
         return self.time_slot.upper() in {"", "ONLINE", "TBA"}
+
+    @property
+    def delivery_mode(self) -> DeliveryMode:
+        if self.time_slot.upper() == "ONLINE":
+            return DeliveryMode.ONLINE
+        if self.time_slot.upper() in {"", "TBA"}:
+            return DeliveryMode.ARRANGED
+        return DeliveryMode.IN_PERSON
+
+    @property
+    def has_meeting_time(self) -> bool:
+        return self.days is not None and self.start is not None
 
     @property
     def days(self) -> str | None:
@@ -214,7 +240,7 @@ class NormalClass:
         return tuple(item.time_slot for item in self.sections)
 
     @property
-    def credit_hours(self) -> int:
+    def credit_hours(self) -> float:
         """Credit hours for this atomic class.
 
         A class always represents one course a student enrolls in once,
@@ -223,7 +249,8 @@ class NormalClass:
         from the first section's course number. ``CoreqClass`` overrides
         this since it links two distinct courses.
         """
-        return _infer_credit_hours(self.sections[0].number)
+        credits = self.sections[0].credits
+        return credits if credits is not None else _infer_credit_hours(self.sections[0].number)
 
     def to_records(self) -> list[dict[str, object]]:
         """Return one or two dictionaries ready for ``csv.DictWriter``."""
@@ -369,6 +396,17 @@ class CrossListingClass(SpecialClass):
         return CrossListingClass.is_honors_pair(left, right)
 
     @staticmethod
+    def is_shared_meeting(left: Section, right: Section) -> bool:
+        """Whether two cross-listed records describe one physical meeting."""
+        return (
+            left.instructor == right.instructor
+            and left.time_slot == right.time_slot
+            and left.duration == right.duration
+            and left.room == right.room
+            and left.building == right.building
+        )
+
+    @staticmethod
     def is_honors_pair(left: Section, right: Section) -> bool:
         """Same course, one regular section and one 'H'-prefixed honors
         section with the same trailing digits (e.g. '001' / 'H01'),
@@ -415,11 +453,16 @@ class CoreqClass(SpecialClass):
             )
 
     @property
-    def credit_hours(self) -> int:
+    def credit_hours(self) -> float:
         # Unlike the other two-record kinds, a coreq pair is two distinct
         # courses a student enrolls in separately, so their hours add up.
         left, right = self.sections
-        return _infer_credit_hours(left.number) + _infer_credit_hours(right.number)
+        return sum(
+            section.credits
+            if section.credits is not None
+            else _infer_credit_hours(section.number)
+            for section in (left, right)
+        )
 
     @classmethod
     def is_coreq_pair(cls, left: Section, right: Section) -> bool:

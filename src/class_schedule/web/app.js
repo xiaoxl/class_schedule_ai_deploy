@@ -214,10 +214,32 @@ function render(data, changesOverride = data.changes) {
   lastData = data;
   $("#results").classList.remove("hidden");
   $("#countLabel").textContent = `Parsed ${data.count} classes`;
+  renderSolverSummary(data.solver);
   renderChanges(changesOverride);
   renderExcelDownloads(data.excel);
   renderViolations(data.violations);
   renderView();
+}
+
+function renderSolverSummary(metadata) {
+  const box = $("#solverSummary");
+  if (!metadata) {
+    box.classList.add("hidden");
+    box.textContent = "";
+    return;
+  }
+  const optimality = metadata.status === "optimal" ? "Optimal" : "Feasible";
+  const gap = Math.max(0, metadata.objective - metadata.best_bound);
+  box.textContent = [
+    optimality,
+    `score ${metadata.objective.toFixed(1)}`,
+    `bound ${metadata.best_bound.toFixed(1)}`,
+    `gap ${gap.toFixed(1)}`,
+    `${metadata.solve_seconds.toFixed(2)}s`,
+    `${metadata.candidate_count} candidates`,
+    `config ${metadata.config_version || "unversioned"}`,
+  ].join(" · ");
+  box.classList.remove("hidden");
 }
 
 // ---- attempt history: every solve's full response, browsable via tabs ----

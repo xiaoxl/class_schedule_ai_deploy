@@ -39,9 +39,6 @@ from .schedule_model import (
     SoftFinding,
     check_conflicts,
     check_soft_preferences,
-    load_global_rules,
-    load_persons,
-    load_preferences,
 )
 
 PACKAGE_WEB = Path(__file__).with_name("web")
@@ -81,41 +78,12 @@ def _rss_mb() -> float:
     return _PROCESS.memory_info().rss / (1024 * 1024)
 
 
-def _load_config(loader, path: Path, label: str, default=None):
-    try:
-        return loader(path)
-    except (FileNotFoundError, OSError, ValueError) as error:
-        logger.warning("Could not load %s from %r: %s", label, str(path), error)
-        return {} if default is None else default
-
-
-PERSONS: dict[str, PersonRecord] = _load_config(
-    load_persons, CONFIG_DIR / "persons.toml", "persons.toml"
-)
-PREFERENCES: dict[str, PreferenceRecord] = _load_config(
-    load_preferences, CONFIG_DIR / "preferences.toml", "preferences.toml"
-)
-GLOBAL_RULES: tuple[PreferenceRule, ...] = _load_config(
-    load_global_rules, CONFIG_DIR / "preferences.toml",
-    "preferences.toml (global rules)", default=(),
-)
-SOLVER_CONFIG = solver_module.SolverConfig(
-    persons=PERSONS,
-    preferences=PREFERENCES,
-    meeting_patterns=_load_config(
-        solver_module.load_meeting_patterns, CONFIG_DIR / "timeslot.toml",
-        "timeslot.toml (meeting patterns)", default=[],
-    ),
-    rooms=_load_config(
-        solver_module.load_rooms, CONFIG_DIR / "locations.toml",
-        "locations.toml (rooms)", default=[],
-    ),
-    blackouts=_load_config(
-        solver_module.load_blackouts, CONFIG_DIR / "timeslot.toml",
-        "timeslot.toml (blackouts)", default=[],
-    ),
-    global_rules=GLOBAL_RULES,
-)
+# Configuration errors are deployment errors, not a reason to silently run
+# without qualifications/preferences. Fail startup with a precise schema error.
+SOLVER_CONFIG = solver_module.SolverConfig.load(CONFIG_DIR)
+PERSONS: dict[str, PersonRecord] = SOLVER_CONFIG.persons
+PREFERENCES: dict[str, PreferenceRecord] = SOLVER_CONFIG.preferences
+GLOBAL_RULES: tuple[PreferenceRule, ...] = SOLVER_CONFIG.global_rules
 
 
 def _configure_logging() -> None:
@@ -149,6 +117,7 @@ def create_app() -> FastAPI:
         logger.info("Parsed %r into %d classes", filename, len(schedule))
         return {
             "count": len(schedule),
+            "config_version": SOLVER_CONFIG.version,
             "classes": _serialize_schedule(schedule),
             "violations": _evaluate_schedule(schedule),
             "excel": {
@@ -166,7 +135,7 @@ def create_app() -> FastAPI:
         filename, schedule = await _read_and_group(schedule_file)
         rss_before = _rss_mb()
         try:
-            solved = solver_module.solve(
+            solve_result = solver_module.solve_detailed(
                 schedule, SOLVER_CONFIG, time_limit_seconds=SOLVE_TIME_LIMIT_SECONDS,
                 # On a "regenerate" re-solve, `schedule` is already the
                 # caller's own previous solve output (see app.js's
@@ -175,6 +144,13 @@ def create_app() -> FastAPI:
                 # different one.
                 previous=schedule if regenerate else None,
             )
+            solved = solve_result.schedule
+        except solver_module.SolveTimeout as error:
+            logger.warning(
+                "Solve timed out for %r: %s (RSS %.1f -> %.1f MB)",
+                filename, error, rss_before, _rss_mb(),
+            )
+            raise HTTPException(504, str(error)) from error
         except solver_module.NoFeasibleSchedule as error:
             # 422, not 400: the request itself was well-formed -- there's
             # just no conflict-free assignment to offer for this input
@@ -194,9 +170,18 @@ def create_app() -> FastAPI:
         )
         return {
             "count": len(solved),
+            "config_version": SOLVER_CONFIG.version,
             "classes": _serialize_schedule(solved),
             "violations": violations,
             "changes": [_serialize_change(c) for c in changes],
+            "solver": {
+                "status": solve_result.status.value,
+                "objective": solve_result.objective,
+                "best_bound": solve_result.best_bound,
+                "solve_seconds": solve_result.solve_seconds,
+                "candidate_count": solve_result.candidate_count,
+                "config_version": solve_result.config_version,
+            },
             "excel": {
                 "raw": _excel_base64(solved, "to_raw_excel"),
                 "instructor": _excel_base64(solved, "to_instructor_excel"),
@@ -246,7 +231,7 @@ async def _read_and_group(schedule_file: UploadFile) -> tuple[str, Schedule]:
     del content  # no longer needed once parsed; drop it before the solve path holds `schedule`
 
     try:
-        schedule = Schedule.from_dataframe(dataframe)
+        schedule = Schedule.from_dataframe(dataframe, persons=PERSONS)
     except GroupingError as error:
         logger.warning(
             "Failed to group %r into classes: %s (%d record(s))",

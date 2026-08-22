@@ -34,9 +34,11 @@ valid final state via an invalid intermediate one on two-section classes.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import random
 import tomllib
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from pathlib import Path
 
 from ortools.sat.python import cp_model
@@ -50,6 +52,7 @@ from .class_model import (
     HybridClass,
     Section,
 )
+from .config_schema import LocationsFileSchema, TimeslotFileSchema
 from .schedule_model import (
     OVERLOAD_TOLERANCE,
     OVERLOAD_FAR_THRESHOLD,
@@ -75,6 +78,30 @@ from .schedule_model import (
 class NoFeasibleSchedule(RuntimeError):
     """No assignment exists with zero hard violations, or the solver
     couldn't find one within the time limit."""
+
+
+class InfeasibleSchedule(NoFeasibleSchedule):
+    """The candidate model was proven infeasible."""
+
+
+class SolveTimeout(NoFeasibleSchedule):
+    """The search budget expired before any feasible assignment was found."""
+
+
+class SolveStatus(StrEnum):
+    OPTIMAL = "optimal"
+    FEASIBLE = "feasible"
+
+
+@dataclass(frozen=True)
+class SolveResult:
+    schedule: Schedule
+    status: SolveStatus
+    objective: float
+    best_bound: float
+    solve_seconds: float
+    candidate_count: int
+    config_version: str
 
 
 # ---- stability tiebreaker: "prefer not to move things" -- on the same
@@ -157,25 +184,25 @@ class RoomRecord:
 def load_meeting_patterns(path: str | Path) -> list[MeetingPattern]:
     """Parse ``timeslot.toml``'s ``[[calendar.meeting_patterns]]``."""
     with open(path, "rb") as handle:
-        raw = tomllib.load(handle)
+        raw = TimeslotFileSchema.model_validate(tomllib.load(handle))
     return [
         MeetingPattern(
-            days=str(entry["days"]),
-            duration_minutes=int(entry["duration_minutes"]),
-            starts=tuple(record_utils.clock(s) for s in entry["starts"]),
-            types=frozenset(entry.get("types", ())),
+            days=entry.days,
+            duration_minutes=entry.duration_minutes,
+            starts=tuple(record_utils.clock(s) for s in entry.starts),
+            types=frozenset(entry.types),
         )
-        for entry in raw.get("calendar", {}).get("meeting_patterns", ())
+        for entry in raw.calendar.meeting_patterns
     ]
 
 
 def load_blackouts(path: str | Path) -> list[TimeWindow]:
     """Parse ``timeslot.toml``'s ``[[calendar.blackouts]]``."""
     with open(path, "rb") as handle:
-        raw = tomllib.load(handle)
+        raw = TimeslotFileSchema.model_validate(tomllib.load(handle))
     return [
-        TimeWindow.from_config(window)
-        for window in raw.get("calendar", {}).get("blackouts", ())
+        TimeWindow.from_config(window.model_dump())
+        for window in raw.calendar.blackouts
     ]
 
 
@@ -186,13 +213,13 @@ def load_rooms(path: str | Path) -> list[RoomRecord]:
     ``Section``'s own convention) and ``location`` is just the building.
     """
     with open(path, "rb") as handle:
-        raw = tomllib.load(handle)
+        raw = LocationsFileSchema.model_validate(tomllib.load(handle))
     rooms = []
-    for entry in raw.get("rooms", ()):
-        if not entry.get("available", True):
+    for entry in raw.rooms:
+        if not entry.available:
             continue
-        name = str(entry["name"])
-        building = str(entry.get("location", ""))
+        name = entry.name
+        building = entry.location
         room = (
             name[len(building):].strip()
             if building and name.startswith(building)
@@ -212,18 +239,48 @@ class SolverConfig:
     rooms: list[RoomRecord]
     blackouts: list[TimeWindow]
     global_rules: tuple[PreferenceRule, ...] = ()
+    version: str = ""
 
     @classmethod
     def load(cls, config_dir: str | Path) -> "SolverConfig":
         config_dir = Path(config_dir)
-        return cls(
+        paths = tuple(config_dir / name for name in (
+            "persons.toml", "preferences.toml", "timeslot.toml", "locations.toml"
+        ))
+        config = cls(
             persons=load_persons(config_dir / "persons.toml"),
             preferences=load_preferences(config_dir / "preferences.toml"),
             meeting_patterns=load_meeting_patterns(config_dir / "timeslot.toml"),
             rooms=load_rooms(config_dir / "locations.toml"),
             blackouts=load_blackouts(config_dir / "timeslot.toml"),
             global_rules=load_global_rules(config_dir / "preferences.toml"),
+            version=hashlib.sha256(
+                b"\0".join(path.read_bytes() for path in paths)
+            ).hexdigest()[:12],
         )
+        config.validate_references()
+        return config
+
+    def validate_references(self) -> None:
+        unknown = sorted(set(self.preferences) - set(self.persons))
+        if unknown:
+            raise ValueError(f"Preferences reference unknown instructors: {unknown}")
+        room_names = {room.room for room in self.rooms}
+        buildings = {room.building for room in self.rooms}
+        full_names = {f"{room.building} {room.room}".strip() for room in self.rooms}
+        known_locations = room_names | buildings | full_names
+        referenced = {
+            location
+            for preference in self.preferences.values()
+            for location in (
+                *preference.preferred_locations,
+                *preference.disliked_locations,
+                *(rule.room for rule in preference.rules if rule.room),
+            )
+        } | {rule.room for rule in self.global_rules if rule.room}
+        invalid_locations = sorted(referenced - known_locations)
+        if invalid_locations:
+            raise ValueError(f"Preferences reference unknown rooms: {invalid_locations}")
 
 
 # ---- candidates: legal (instructor, time, room) options per section ----
@@ -354,9 +411,31 @@ def _section_candidates(
         cost=current_cost,
     )
     if section.is_online:
-        # Arranged/online meetings have no time or room to search over --
-        # leave them exactly as they are.
-        return [current]
+        # A meeting without a physical slot keeps its delivery/time/room,
+        # but its instructor is still assignable. Freezing the entire row
+        # used to leave newly-added online sections permanently on Staff.
+        instructors = _candidate_instructors(section, config.persons) or [
+            section.instructor
+        ]
+        candidates = [
+            SectionCandidate(
+                instructor=instructor,
+                time_slot=section.time_slot,
+                duration=section.duration,
+                days=None,
+                start=None,
+                end=None,
+                room=section.room,
+                building=section.building,
+                cost=(INSTRUCTOR_CHANGE_COST if instructor != section.instructor else 0.0)
+                + _preference_cost(
+                    instructor, None, None, None, section.building, section.room,
+                    course, section.section, config.preferences, config.global_rules,
+                ),
+            )
+            for instructor in instructors
+        ]
+        return sorted(candidates, key=lambda candidate: candidate.cost)
 
     instructors = _candidate_instructors(section, config.persons) or [
         section.instructor
@@ -461,10 +540,7 @@ def _predicate_for(item: Class):
     if isinstance(item, CoreqClass):
         return CoreqClass.is_valid_schedule
     if isinstance(item, CrossListingClass):
-        left, right = item.sections
-        if left.cross_list and left.cross_list == right.cross_list:
-            return None
-        return CrossListingClass.is_honors_pair
+        return CrossListingClass.is_shared_meeting
     return None
 
 
@@ -646,19 +722,14 @@ def _add_scheduling_constraints(
             _add_bucket_no_overlap(indices)
 
     objective_terms = []
-    # Shared across every (instructor, day) bucket below, not reset per
-    # bucket -- a multi-day pattern like "MWF" puts the same slot indices
-    # in the M, W, and F buckets alike, so without a bucket-spanning
-    # dedupe here the same physical chain would be found (and penalized)
-    # once per day it recurs on, unlike schedule_model.py's
-    # _capped_back_to_back_findings, which counts one such chain once
-    # regardless of how many shared weekdays it spans. (The existing
-    # plain-pairwise branch just below has an analogous per-bucket
-    # `seen_pairs` that does reset every bucket -- left as-is here since
-    # it's pre-existing, shipped behavior this change isn't meant to
-    # touch, but it means that branch currently *does* over-count a
-    # multi-day back-to-back pair relative to check_soft_preferences.)
+    # Shared across every (instructor, day) bucket below. A multi-day
+    # pattern enters several buckets, but both solving and evaluation must
+    # score the same physical pair/chain only once.
     seen_chains: set[tuple[int, ...]] = set()
+    # Slot indices are shared by every weekday bucket a multi-day pattern
+    # enters. Keep this across buckets so an MWF pair is scored once, just
+    # like schedule_model.check_soft_preferences reports it.
+    seen_pairs: set[tuple[int, int]] = set()
     for (instructor, _day), indices in by_instructor_day.items():
         if len(indices) > 1:
             _add_bucket_no_overlap(indices)
@@ -669,7 +740,6 @@ def _add_scheduling_constraints(
         for i in indices:
             by_start.setdefault(slots[i].start, []).append(i)
         if not preference.allow_back_to_back:
-            seen_pairs: set[tuple[int, int]] = set()
             for i in indices:
                 a = slots[i]
                 for j in by_start.get(a.end, ()):
@@ -856,13 +926,13 @@ def diff_schedules(before: Schedule, after: Schedule) -> list[SectionChange]:
     return changes
 
 
-def solve(
+def solve_detailed(
     schedule: Schedule,
     config: SolverConfig,
     *,
     time_limit_seconds: float = 30.0,
     previous: Schedule | None = None,
-) -> Schedule:
+) -> SolveResult:
     """Return a new ``Schedule`` with the best reassignment found.
 
     "Hard" requirements (room/instructor conflicts -- see
@@ -908,7 +978,7 @@ def solve(
     ]
     empty = [sections[i].course_id for i, c in enumerate(candidates) if not c]
     if empty:
-        raise NoFeasibleSchedule(f"No legal candidates for: {', '.join(empty)}")
+        raise InfeasibleSchedule(f"No legal candidates for: {', '.join(empty)}")
 
     sections_by_class: dict[int, list[int]] = {}
     for i, class_index in enumerate(owner):
@@ -990,11 +1060,36 @@ def solve(
     solver.parameters.num_search_workers = 1
     solver.parameters.random_seed = random.SystemRandom().randrange(1, 2**31 - 1)
     status = solver.solve(model)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        raise NoFeasibleSchedule(
-            f"No feasible schedule found (solver status: {solver.status_name(status)})"
+    if status == cp_model.INFEASIBLE:
+        raise InfeasibleSchedule("The candidate model is infeasible")
+    if status == cp_model.UNKNOWN:
+        raise SolveTimeout(
+            f"No feasible schedule found within {time_limit_seconds:g} seconds"
         )
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        raise NoFeasibleSchedule(f"Solver failed: {solver.status_name(status)}")
 
-    return _apply_solution(
-        class_list, sections, sections_by_class, candidates, chosen, solver
+    return SolveResult(
+        schedule=_apply_solution(
+            class_list, sections, sections_by_class, candidates, chosen, solver
+        ),
+        status=SolveStatus.OPTIMAL if status == cp_model.OPTIMAL else SolveStatus.FEASIBLE,
+        objective=solver.objective_value,
+        best_bound=solver.best_objective_bound,
+        solve_seconds=solver.wall_time,
+        candidate_count=sum(len(items) for items in candidates),
+        config_version=config.version,
     )
+
+
+def solve(
+    schedule: Schedule,
+    config: SolverConfig,
+    *,
+    time_limit_seconds: float = 30.0,
+    previous: Schedule | None = None,
+) -> Schedule:
+    """Compatibility wrapper returning only the solved schedule."""
+    return solve_detailed(
+        schedule, config, time_limit_seconds=time_limit_seconds, previous=previous
+    ).schedule

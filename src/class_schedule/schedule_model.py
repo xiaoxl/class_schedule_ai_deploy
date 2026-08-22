@@ -27,6 +27,7 @@ from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from . import record_utils
+from .config_schema import PersonsFileSchema, PreferencesFileSchema
 from .class_model import (
     Class,
     CoreqClass,
@@ -68,15 +69,23 @@ class Schedule:
 
     @classmethod
     def from_records(
-        cls, records: Iterable[Mapping[str, object]]
+        cls,
+        records: Iterable[Mapping[str, object]],
+        *,
+        persons: Mapping[str, "PersonRecord"] | None = None,
     ) -> "Schedule":
         """Group a complete table of CSV records into atomic classes."""
-        return cls(_group_records(records))
+        return cls(_group_records(records, persons=persons))
 
     @classmethod
-    def from_dataframe(cls, dataframe: pd.DataFrame) -> "Schedule":
+    def from_dataframe(
+        cls,
+        dataframe: pd.DataFrame,
+        *,
+        persons: Mapping[str, "PersonRecord"] | None = None,
+    ) -> "Schedule":
         """Group a complete DataFrame into atomic classes."""
-        return cls.from_records(dataframe.to_dict(orient="records"))
+        return cls.from_records(dataframe.to_dict(orient="records"), persons=persons)
 
     # ---- export (Schedule -> CSV records/DataFrame) ----
 
@@ -193,7 +202,11 @@ class Schedule:
         return self
 
 
-def _group_records(records: Iterable[Mapping[str, object]]) -> list[Class]:
+def _group_records(
+    records: Iterable[Mapping[str, object]],
+    *,
+    persons: Mapping[str, "PersonRecord"] | None = None,
+) -> list[Class]:
     """Group raw CSV records into atomic classes.
 
     Classification happens as part of the scan itself -- there is no
@@ -213,13 +226,19 @@ def _group_records(records: Iterable[Mapping[str, object]]) -> list[Class]:
     remaining: list[Section] = []
     for row in records:
         normalized = record_utils.normalize_columns(row)
+        if persons:
+            instructor = record_utils.text(record_utils.value(normalized, "Instructor"))
+            subject = record_utils.text(record_utils.value(normalized, "Subject")).upper()
+            resolved = resolve_person_name(instructor, persons, subject=subject)
+            if resolved is not None:
+                normalized["Instructor"] = resolved
         section_code = record_utils.text(
             record_utils.value(normalized, "Section")
         ).upper()
         if section_code.startswith(_IGNORED_SECTION_PREFIXES):
             continue
         try:
-            remaining.append(Section.from_record(row))
+            remaining.append(Section.from_record(normalized))
         except ValueError as error:
             raise GroupingError(str(error), [dict(row)]) from error
 
@@ -510,12 +529,19 @@ class TimeWindow:
 
 
 @dataclass(frozen=True)
+class PersonAlias:
+    short: str
+    subject: str | None = None
+
+
+@dataclass(frozen=True)
 class PersonRecord:
     """One persons.toml entry -- contractual facts about an instructor."""
 
     name: str
     max_load: float
     courses: tuple[str, ...] = ()
+    aliases: tuple[PersonAlias, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -624,45 +650,64 @@ class PreferenceRecord:
 def load_persons(path: str | Path) -> dict[str, PersonRecord]:
     """Parse ``persons.toml`` into ``{name: PersonRecord}``."""
     with open(path, "rb") as handle:
-        raw = tomllib.load(handle)
+        raw = PersonsFileSchema.model_validate(tomllib.load(handle))
     return {
-        entry["name"]: PersonRecord(
-            name=entry["name"],
-            max_load=float(entry["max_load"]),
-            courses=tuple(entry.get("courses", ())),
+        entry.name: PersonRecord(
+            name=entry.name,
+            max_load=entry.max_load,
+            courses=tuple(entry.courses),
+            aliases=tuple(
+                PersonAlias(alias, None)
+                if isinstance(alias, str)
+                else PersonAlias(alias.short, alias.subject)
+                for alias in entry.aliases
+            ),
         )
-        for entry in raw.get("persons", ())
+        for entry in raw.persons
     }
+
+
+def resolve_person_name(
+    value: str, persons: Mapping[str, PersonRecord], *, subject: str | None = None
+) -> str | None:
+    """Resolve an exact person name or a configured, optionally scoped alias."""
+    if value in persons:
+        return value
+    matches = {
+        person.name
+        for person in persons.values()
+        for alias in person.aliases
+        if alias.short == value and (alias.subject is None or alias.subject == subject)
+    }
+    if len(matches) > 1:
+        raise ValueError(f"Ambiguous instructor alias {value!r}: {sorted(matches)}")
+    return next(iter(matches), None)
 
 
 def load_preferences(path: str | Path) -> dict[str, PreferenceRecord]:
     """Parse ``preferences.toml`` into ``{name: PreferenceRecord}``."""
     with open(path, "rb") as handle:
-        raw = tomllib.load(handle)
+        raw = PreferencesFileSchema.model_validate(tomllib.load(handle))
     return {
-        entry["name"]: PreferenceRecord(
-            name=entry["name"],
-            allow_overload=bool(entry.get("allow_overload", True)),
-            allow_back_to_back=bool(entry.get("allow_back_to_back", True)),
-            max_back_to_back=(
-                int(entry["max_back_to_back"])
-                if entry.get("max_back_to_back") is not None
-                else None
-            ),
-            prefers_online=bool(entry.get("prefers_online", False)),
+        entry.name: PreferenceRecord(
+            name=entry.name,
+            allow_overload=entry.allow_overload,
+            allow_back_to_back=entry.allow_back_to_back,
+            max_back_to_back=entry.max_back_to_back,
+            prefers_online=entry.prefers_online,
             preferred_times=tuple(
-                TimeWindow.from_config(w) for w in entry.get("preferred_times", ())
+                TimeWindow.from_config(w.model_dump()) for w in entry.preferred_times
             ),
             disliked_times=tuple(
-                TimeWindow.from_config(w) for w in entry.get("disliked_times", ())
+                TimeWindow.from_config(w.model_dump()) for w in entry.disliked_times
             ),
-            preferred_locations=tuple(entry.get("preferred_locations", ())),
-            disliked_locations=tuple(entry.get("disliked_locations", ())),
-            preferred_courses=tuple(entry.get("preferred_courses", ())),
-            disliked_courses=tuple(entry.get("disliked_courses", ())),
-            rules=tuple(_parse_rule(r) for r in entry.get("rules", ())),
+            preferred_locations=tuple(entry.preferred_locations),
+            disliked_locations=tuple(entry.disliked_locations),
+            preferred_courses=tuple(entry.preferred_courses),
+            disliked_courses=tuple(entry.disliked_courses),
+            rules=tuple(_parse_rule(r.model_dump(exclude_none=True)) for r in entry.rules),
         )
-        for entry in raw.get("instructors", ())
+        for entry in raw.instructors
     }
 
 
@@ -672,8 +717,8 @@ def load_global_rules(path: str | Path) -> tuple[PreferenceRule, ...]:
     ``PreferenceRecord.rules`` for the per-instructor equivalent, nested
     under ``instructors.rules``)."""
     with open(path, "rb") as handle:
-        raw = tomllib.load(handle)
-    return tuple(_parse_rule(r) for r in raw.get("rules", ()))
+        raw = PreferencesFileSchema.model_validate(tomllib.load(handle))
+    return tuple(_parse_rule(r.model_dump(exclude_none=True)) for r in raw.rules)
 
 
 def _parse_rule(raw: Mapping[str, object]) -> PreferenceRule:
