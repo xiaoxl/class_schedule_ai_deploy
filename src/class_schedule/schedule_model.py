@@ -1,8 +1,9 @@
-"""Schedule: a collection of atomic classes, backed by a DataFrame boundary.
+"""Schedule: an in-memory collection of atomic classes.
 
 This module owns everything ``class_model`` deliberately does not: grouping
-many CSV rows into many atomic classes, and converting the whole collection
-to/from a pandas DataFrame. It composes ``class_model``'s public API --
+many table records into atomic classes, editing and evaluating the grouped
+collection, and serializing it to/from a pandas DataFrame. Disk access remains
+in ``schedule_io``. This module composes ``class_model``'s public API --
 ``Section``, the ``Class`` hierarchy, and each kind's recognition predicate
 (``is_four_credit``, ``is_hybrid``, ``is_cross_listing``, ``is_coreq_pair``)
 -- without re-implementing any of their rules. Editing a class's time, room,
@@ -85,7 +86,9 @@ class Schedule:
         persons: Mapping[str, "PersonRecord"] | None = None,
     ) -> "Schedule":
         """Group a complete DataFrame into atomic classes."""
-        return cls.from_records(dataframe.to_dict(orient="records"), persons=persons)
+        return cls.from_records(
+            dataframe.to_dict(orient="records"), persons=persons,
+        )
 
     # ---- export (Schedule -> CSV records/DataFrame) ----
 
@@ -104,7 +107,7 @@ class Schedule:
 
     # ---- export (Schedule -> Excel workbooks) ----
     #
-    # Three operational views, each its own file: the flat as-parsed
+    # Three operational views, each its own file: the flat normalized
     # table, and two weekly-grid workbooks (one worksheet per instructor,
     # one per room). All three still export even when the schedule has
     # conflicts -- see ``_build_weekly_sheet``.
@@ -213,7 +216,7 @@ def _group_records(
     separate "infer" step. Each pass below both finds candidate rows
     *and* decides which kind they become, using that kind's own public
     recognition predicate from ``class_model``. Precedence, highest
-    first: same-course pairs (four-credit/HyFlex) beat cross-listed
+    first: same-course pairs (four-credit/Hybrid) beat cross-listed
     pairs, which beat coreq pairs; anything left over is a single class.
     Construction always re-validates through the target class's own
     ``validate`` -- a pair that matches a scan (e.g. the coreq whitelist)
@@ -226,6 +229,10 @@ def _group_records(
     remaining: list[Section] = []
     for row in records:
         normalized = record_utils.normalize_columns(row)
+        if record_utils.text(normalized.get("Cross-List")).startswith("configured:"):
+            # Normalize the supported ``configured:`` compatibility marker;
+            # known pairs are recognized directly by CrossListingClass.
+            normalized["Cross-List"] = ""
         if persons:
             instructor = record_utils.text(record_utils.value(normalized, "Instructor"))
             subject = record_utils.text(record_utils.value(normalized, "Subject")).upper()
@@ -240,7 +247,7 @@ def _group_records(
         try:
             remaining.append(Section.from_record(normalized))
         except ValueError as error:
-            raise GroupingError(str(error), [dict(row)]) from error
+            raise GroupingError(str(error), [dict(normalized)]) from error
 
     result: list[Class] = []
     same_course, remaining = _take_same_course(remaining)
@@ -291,6 +298,8 @@ def _take_cross_listed(
     remaining: list[Section],
 ) -> tuple[list[Class], list[Section]]:
     found, remaining = _take_cross_list_column(remaining)
+    more, remaining = _take_known_cross_list_pairs(remaining)
+    found.extend(more)
     more, remaining = _take_honors_pairs(remaining)
     found.extend(more)
     return found, remaining
@@ -323,6 +332,34 @@ def _take_cross_list_column(
             consumed.update(id(section) for section in group)
     return found, [
         section for section in remaining if id(section) not in consumed
+    ]
+
+
+def _take_known_cross_list_pairs(
+    remaining: list[Section],
+) -> tuple[list[Class], list[Section]]:
+    """Group built-in cross-list course pairs without a source marker."""
+    matches: list[tuple[int, int]] = []
+    for left_index, left in enumerate(remaining):
+        for right_index in range(left_index + 1, len(remaining)):
+            if CrossListingClass.is_known_pair(left, remaining[right_index]):
+                matches.append((left_index, right_index))
+
+    involved = [index for pair in matches for index in pair]
+    if len(involved) != len(set(involved)):
+        raise GroupingError(
+            "Ambiguous known cross-list pairing: one course matches multiple pairs",
+            [remaining[index].to_record() for index in sorted(set(involved))],
+        )
+
+    consumed = set(involved)
+    found = [
+        CrossListingClass((remaining[left], remaining[right]))
+        for left, right in matches
+    ]
+    return found, [
+        section for index, section in enumerate(remaining)
+        if index not in consumed
     ]
 
 
@@ -399,64 +436,32 @@ def _take_coreqs(
 
 # ---- config-driven evaluation (config/persons.toml, config/preferences.toml) ----
 #
-# persons.toml is contractual fact about a person (currently just
-# max_load); preferences.toml is this term's wishes for an instructor.
-# Nothing here is a hard requirement any more -- ``check_hard_requirements``
-# was deleted; the only hard-violation source left is ``check_conflicts``
-# (room/instructor double-booking). Coreq/four-credit/hybrid scheduling
-# legality never needs its own runtime check here: it's guaranteed both at
-# ``Class`` construction time (each kind's own ``validate()``) and, for the
-# solver's output specifically, by ``solver/constraints.py``'s hard pairwise-exclusion
-# (an invalid coreq/four-credit/hybrid pairing is never a legal candidate
-# combination in the first place).
+# persons.toml holds contractual identity, qualification, alias, and load
+# facts; preferences.toml holds this term's wishes for an instructor.
+# ``evaluate_schedule`` gets hard violations only from ``check_conflicts``
+# (room/instructor double-booking). Atomic-class legality is enforced at
+# ``Class`` construction and by the solver's pairwise validity constraints,
+# so invalid four-credit/Hybrid/cross-list/coreq combinations cannot become
+# a Schedule or a solved result.
 #
-# max_load is a per-instructor TARGET from persons.toml, not just a
-# ceiling -- the contract says roughly "you teach max_load credit hours",
-# so both going over AND falling short matter, and both are *always* soft
-# findings now, never hard:
+# max_load is a per-instructor target from persons.toml, not just a ceiling.
+# Evaluation reports both over- and under-load as soft findings; the solver
+# separately enforces its absolute max_load + HARD_LOAD_CAP_TOLERANCE bound.
+# The reported/scored rules are:
 #   - within OVERLOAD_TOLERANCE credit hours over max_load: fine, not
-#     overload at all -- this is the definition of overload, not a
-#     leniency knob.
-#   - more than that over: a soft "overload" finding, always. Its penalty
-#     is ``preference.overload_penalty`` -- derived from ``allow_overload``
-#     (this term's per-instructor overload tolerance: ``True`` means
-#     "fine with it", ``False`` means "avoid it") -- flat and one-time,
-#     deliberately NOT scaled by how many credit hours over: an earlier
-#     version tried both a continuous excess-times-rate calculation and a
-#     multi-tier cumulative boolean scheme, and both measurably slowed
-#     CP-SAT's search on a real schedule (the same problem stopped
-#     reaching a proven-optimal solution within the same time budget it
-#     used to, and reverting this flat scheme is what brought that back)
-#     -- this system doesn't have a way to reward "further over" that
-#     doesn't cost real solve performance, at least not one found so far.
-#     The one exception: OVERLOAD_FAR_PENALTY, a *second*, independent
-#     flat charge (not tiered/cumulative logic) that also applies once an
-#     instructor goes more than OVERLOAD_FAR_THRESHOLD credit hours over
-#     their own max_load -- identical convention to OVERLOAD_TOLERANCE
-#     above (the constant is the last value that's still fine, not the
-#     first that triggers), just a second, further-out line -- on top of
-#     the base penalty above -- for ``allow_overload=True`` only, since
-#     ``allow_overload=False`` already sits at this system's 100-point
-#     ceiling and has nowhere higher to go.
+#     overload at all.
+#   - above that: one flat ``preference.overload_penalty``. For permissive
+#     instructors only, excess above OVERLOAD_FAR_THRESHOLD adds the second
+#     flat OVERLOAD_FAR_PENALTY.
 #     An instructor with no preferences.toml entry defaults to a penalty
 #     of 0 (no opinion on record).
-#   - under max_load by any amount: also a soft finding, weighted very
-#     high (UNDER_LOAD_PENALTY) -- "must reach max_load" is meant to
-#     dominate ordinary soft preferences. It's still soft, though: if
-#     every other instructor is already at or over capacity and nothing
-#     else is wrong, one instructor coming up short is accepted rather
-#     than forced.
+#   - under max_load by any amount: one UNDER_LOAD_PENALTY soft finding.
 OVERLOAD_TOLERANCE = 2.0
 # Same convention as OVERLOAD_TOLERANCE: the last credit-hour-over-max_load
 # value that does NOT trigger the extra penalty -- 4 is fine, 5 triggers
 # it (a strict "more than" comparison, exactly like OVERLOAD_TOLERANCE).
-# Stacked on top of the base penalty (10 for allow_overload=True), a
-# permissive instructor 5+ credit hours over lands at 60 -- clearly above
-# the small fixed penalties elsewhere (disliked_*/back_to_back at 5-10),
-# but well under a strict instructor's 100. Tested and confirmed CP-SAT-
-# solve-safe on the real production file at this value; 60 (10+60=70)
-# reproducibly degraded the same file's solve from OPTIMAL to FEASIBLE
-# within a 60s cap -- don't bump this without re-benchmarking.
+# Stacked on the 10-point permissive overload cost, this makes a
+# permissive instructor above the far threshold cost 60 points.
 OVERLOAD_FAR_THRESHOLD = 4
 OVERLOAD_FAR_PENALTY = 50.0
 
@@ -561,9 +566,9 @@ class PreferenceRule:
     ``direction`` is ``"prefer"`` (subtracts ``weight`` from a matching
     candidate's cost -- a reward the solver seeks out) or ``"dislike"``
     (adds it -- a penalty the solver avoids); ``weight`` is always a
-    positive magnitude, on the same 0-100 scale as every other penalty in
-    this system -- 100 is this system's practical ceiling, just below
-    ``UNDER_LOAD_PENALTY``.
+    non-negative magnitude, on the same 0-100 scale as the other soft
+    costs. A weight of 100 is stronger than the 90-point under-load cost,
+    but remains a soft objective rather than a hard constraint.
     """
 
     course: str | None = None
@@ -610,16 +615,16 @@ class PreferenceRecord:
     is ``True``, 100 (this system's practical ceiling) when it's
     ``False``.
 
-    ``prefers_online`` is a blanket affinity for online/hyflex sections --
-    a mild scored nudge (``PREFERS_ONLINE_PENALTY``) against any
-    in-person assignment, on the same tier as the ``disliked_*`` fields.
+    ``prefers_online`` is a blanket affinity for records without a physical
+    meeting -- a mild scored nudge (``PREFERS_ONLINE_PENALTY``) against any
+    physical assignment, on the same tier as the ``disliked_*`` fields.
     It's blanket, not course-scoped -- someone who only wants a *specific*
     course online (not every section they teach) needs a note in
     ``rules`` instead; this field can't express that.
 
     ``max_back_to_back`` caps how many consecutive same-day meetings this
     instructor tolerates before it's scored -- ``None`` means no cap
-    (``allow_back_to_back`` alone decides, as before). It only applies
+    (``allow_back_to_back`` alone decides). It only applies
     when ``allow_back_to_back`` is ``True``: back-to-back is already
     scored at every occurrence when it's ``False``, and a cap can't loosen
     that -- "no back-to-back at all" is a stricter statement than "no more
@@ -755,12 +760,12 @@ class SoftFinding:
     penalty: float
 
 
-def _teaching_loads(schedule: "Schedule") -> dict[str, float]:
-    """Total credit hours per instructor.
+def teaching_loads(schedule: "Schedule") -> dict[str, float]:
+    """Authoritative total credit hours per instructor.
 
-    Matches the webapp UI's per-instructor aggregation: a class's hours
-    count once per distinct instructor teaching it, no matter how many
-    CSV rows (sections) it has.
+    A class's hours count once per distinct instructor teaching it, no matter
+    how many CSV rows (sections) it has. Callers must not reproduce this from
+    flattened records.
     """
     totals: dict[str, float] = {}
     for item in schedule:
@@ -865,7 +870,7 @@ def _overload_statuses(
     actually optimized for.
     """
     statuses: list[_OverloadStatus] = []
-    for instructor, load in sorted(_teaching_loads(schedule).items()):
+    for instructor, load in sorted(teaching_loads(schedule).items()):
         person = persons.get(instructor)
         if person is None:
             continue
@@ -946,8 +951,8 @@ def check_soft_preferences(
     ``max_load`` -- see the module comment above ``OVERLOAD_TOLERANCE`` for
     the full over/under contract. Being outside a
     ``preferred_times``/``preferred_locations``/``preferred_courses``
-    window is not scored: those are informational affinities, not
-    something whose *absence* is treated as a violation.
+    match is not reported as a violation: matching candidates receive a
+    reward in the solver, while absence of a match adds no report finding.
     ``disliked_courses`` (subject + number, e.g. "MATH 0903", matching
     persons.toml's own ``courses`` convention) mirrors
     ``disliked_locations`` -- a mild nudge (``DISLIKED_COURSE_PENALTY``)
@@ -970,7 +975,7 @@ def check_soft_preferences(
         for status in _overload_statuses(schedule, persons, preferences)
     ]
 
-    loads = _teaching_loads(schedule)
+    loads = teaching_loads(schedule)
     for instructor, person in sorted(persons.items()):
         load = loads.get(instructor, 0.0)
         if load < person.max_load:
@@ -1029,7 +1034,7 @@ def check_soft_preferences(
             findings.append(SoftFinding(
                 "online_preference", section.instructor,
                 f"{section.course_id}: {section.instructor} prefers "
-                f"online/hyflex sections but this one meets in person",
+                f"a non-physical section but this one meets in person",
                 PREFERS_ONLINE_PENALTY,
             ))
         if section.is_online:
@@ -1072,12 +1077,42 @@ def check_soft_preferences(
     return total, findings
 
 
+@dataclass(frozen=True)
+class ScheduleEvaluation:
+    """All deterministic statistics derived from one grouped schedule."""
+
+    atomic_classes: int
+    row_count: int
+    loads: dict[str, float]
+    hard_violations: tuple[HardViolation, ...]
+    soft_penalty: float
+    soft_findings: tuple[SoftFinding, ...]
+
+
+def evaluate_schedule(
+    schedule: "Schedule",
+    preferences: dict[str, PreferenceRecord],
+    persons: dict[str, PersonRecord],
+    global_rules: tuple[PreferenceRule, ...] = (),
+) -> ScheduleEvaluation:
+    """Evaluate only domain objects; raw CSV rows are not accepted here."""
+    soft_penalty, soft_findings = check_soft_preferences(
+        schedule, preferences, persons, global_rules
+    )
+    return ScheduleEvaluation(
+        atomic_classes=len(schedule),
+        row_count=len(schedule.to_records()),
+        loads=teaching_loads(schedule),
+        hard_violations=tuple(check_conflicts(schedule)),
+        soft_penalty=soft_penalty,
+        soft_findings=tuple(soft_findings),
+    )
+
+
 # ---- Excel workbook builders ----
 #
-# Adapted from the archived ``.dep/class_schedule_old/reports.py`` (``export_excel`` /
-# ``export_schedule_views`` / ``_weekly_workbook``), which did the same
-# job against the old pandas-row model. Working from ``Section`` objects
-# directly here instead needs none of that code's ``pd.notna`` guarding.
+# The weekly views work directly from grouped Class/Section objects, so
+# companion rows can be distinguished from genuine scheduling conflicts.
 
 _WEEKDAYS = (
     ("M", "Monday"), ("T", "Tuesday"), ("W", "Wednesday"),
@@ -1125,7 +1160,7 @@ def _weekly_workbook(schedule: "Schedule", *, group: str) -> Workbook:
     groups: dict[str, list[tuple[Class, Section]]] = {}
     for item, section in entries:
         if group == "room" and section.is_online:
-            continue  # nowhere to place an online meeting on a room grid
+            continue  # no physical meeting to place on a room grid
         key = key_of(section)
         if not key:
             continue
@@ -1165,7 +1200,7 @@ def _merged_anchor(ws, row: int, column: int):
 def _build_weekly_sheet(
     ws, resource: str, entries: list[tuple[Class, Section]], group: str
 ) -> None:
-    # Restart the old ten-colour palette for every instructor/room sheet.
+    # Restart the ten-colour palette for every instructor/room sheet.
     # Colour belongs to the atomic Class object, so all of its component
     # sections and meeting rows stay visually tied together.
     color_by_class: dict[int, str] = {}

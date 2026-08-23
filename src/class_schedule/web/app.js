@@ -29,7 +29,7 @@ let attempts = [];
 let solvedOnce = false;
 let activeAttemptIndex = -1;
 // Set when /api/solve comes back 422 (no conflict-free assignment exists
-// for this input -- see solver.solve()'s docstring): retrying the same
+// for this input -- see the backend's InfeasibleSchedule handling): retrying the same
 // input can't succeed, so "Solve Schedule" stays disabled until a fresh
 // file is chosen instead of inviting a pointless re-click.
 let solveBlocked = false;

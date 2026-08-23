@@ -1,11 +1,4 @@
-"""Small, memorable API for editing and validating class schedules.
-
-The legacy ``models``/``schedule`` stack (and everything only reachable
-through it -- ``agent``, ``algorithm``, ``config``, ``checks``,
-``conflicts``, ``solver``, ``changingsections``) has been archived under
-``.dep/class_schedule_old/`` and is not re-exported here. This package
-now exposes the ``class_model``/``schedule_model`` stack instead.
-"""
+"""Public API for grouped schedule editing, validation, and file input."""
 
 from .class_model import (
     Class,
@@ -18,7 +11,8 @@ from .class_model import (
     Section,
     SpecialClass,
 )
-from .schedule_model import Schedule
+from .schedule_model import Schedule, evaluate_schedule, teaching_loads
+from .schedule_io import read_schedule
 
 __all__ = [
     "Class",
@@ -31,4 +25,7 @@ __all__ = [
     "Schedule",
     "Section",
     "SpecialClass",
+    "teaching_loads",
+    "evaluate_schedule",
+    "read_schedule",
 ]

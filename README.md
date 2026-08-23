@@ -2,7 +2,7 @@
 
 面向学期排课的离线流水线：清洗 CSV/XLSX，构造原子课程，应用学期变更和
 教师偏好，使用 OR-Tools CP-SAT 求解，再输出不可覆盖、可审计、便于手调的
-`out/<term>/<version>/` 版本目录。
+`out/<term>/verN/` 不可变版本目录，以及可重复刷新的 `out/<term>/final/` 发布目录。
 
 ## 快速开始
 
@@ -17,17 +17,29 @@ uv run class-schedule --config config draft 27S `
 
 uv run class-schedule --config config solve 27S `
   --input work/27S/draft/starting.csv --attempts 5 --seconds 45
+
+# 编辑 out/27S/ver10/overrides.toml，启用 edit/lock 后刷新 final
+uv run class-schedule --config config final 27S ver10
 ```
+
+`verN` 是不覆盖的自动求解快照；`final` 是从指定 ver 应用人工调整后可反复
+刷新的发布目录。空 override 不会生成 final。final 的 `changes.csv` 始终直接
+比较父 ver 保存的 `baseline.csv` 与最终 Schedule，因此中间变动会自动抵消或
+合并，而不是把 ver 和手调的两张 changes 表直接拼接。
 
 输出示例：
 
 ```text
-out/27S/ver4/
-  27S_ver4.csv
+out/27S/ver10/
+  27S_ver10.csv
+  27S_ver10_instructor.xlsx
+  27S_ver10_room.xlsx
   report.md
   attempts.csv
-  changes.csv
-  overrides.toml
+  changes.csv              # 从最初 baseline 到当前结果的化简累计变动
+  baseline.csv             # 该版本使用的 baseline 快照
+  overrides.toml          # 可编辑，随后用于刷新 final
+  applied_overrides.toml  # 生成本 ver 时实际使用的配置
   manifest.json
 ```
 
@@ -46,5 +58,5 @@ out/27S/ver4/
 uv run python -m unittest discover -s tests
 ```
 
-旧的网络界面代码仍保留，但当前生产入口是 `class-schedule` CLI；本轮架构
-和文档不以 Web UI 为交付目标。
+`class-schedule` CLI 是离线生产入口。Web 界面仍是可部署的辅助入口，并与 CLI
+共享同一套 `Schedule`、solver、校验和 Excel 导出实现。

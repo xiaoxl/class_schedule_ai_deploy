@@ -6,16 +6,6 @@ from .candidates import (
     MAX_CANDIDATES_SINGLE_SECTION,
     ROOM_CHANGE_COST,
     TIME_CHANGE_COST,
-    _allowed_pattern_types,
-    _apply_candidate,
-    _candidate_instructors,
-    _preference_cost,
-    _section_candidates,
-    allowed_pattern_types,
-    apply_candidate,
-    candidate_instructors,
-    preference_cost,
-    section_candidates,
 )
 from .config import (
     SolverConfig,

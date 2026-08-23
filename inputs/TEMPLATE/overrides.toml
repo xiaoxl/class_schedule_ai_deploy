@@ -1,0 +1,36 @@
+# Final publication source: TEMPLATE/ver1
+# Manual revision file. Every published verN receives one automatically.
+# A version-bound file can also be generated with:
+#
+#   class-schedule --config config override-template 27S ver10
+#
+# Place the completed file at out/TERM/verN/overrides.toml, then run:
+#
+#   class-schedule --config config final 27S ver10
+#
+# These two values prevent accidentally applying the file to another term
+# or source version. Update both when copying this generic example.
+term = "TEMPLATE"
+source_version = "ver1"
+
+# An edit changes the starting value. Omit record to edit every row in the
+# atomic class; use record = 0 or record = 1 for one row of a two-row class.
+# [[edits]]
+# course_id = "MATH 1113-F01"
+# instructor = "Taylor, Teresa L."
+# time_slot = "TR 9:30am"
+# building = "Corley"
+# room = "269"
+
+# A lock tells the solver which edited values it must preserve. Supported
+# fields are instructor, time, building, and room. An edit without a lock is
+# only a new starting value and may be changed again during optimization.
+# [[locks]]
+# course_id = "MATH 1113-F01"
+# fields = ["instructor", "time", "building", "room"]
+
+# Unassigning replaces the current instructor with a placeholder. Lock the
+# instructor separately only when that placeholder identity must be retained.
+# [[unassign]]
+# course_id = "STAT 2163-004"
+# placeholder = "Staff"

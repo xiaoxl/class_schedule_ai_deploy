@@ -10,13 +10,15 @@ uv run python -m class_schedule.section_demand `
   -o work/27S/demand.csv
 ```
 
-schedule 侧需要 `Subject`、`Number`、`Section`、`CRN`、`Seats_Avail`，
+schedule 侧需要 `Subject`、`Number`、`Section`、`Instructor`、`CRN`、`Seats_Avail`，
 并需要足够的时间/时长字段让 `Schedule` 完成原子分组。清洗后的
 `sections.csv` 使用 `Seats Available`，原始报表通常使用 `Seats_Avail`；
 命令同时接受两种名称。
 
 `Seats_Avail` 原值为 `seats_available / max_enrolled / room_capacity`，算法
-使用第三项 room capacity。在线/TBA 无实际 room capacity 时按 30 计算。
+使用第三项 room capacity。缺少或无法解析该值时按 30 计算；这通常对应
+ONLINE/TBA/空时间记录，但物理课容量缺失也会进入同一 fallback，并计入输出的
+`OnlineSections` 字段，因此应在采用建议前检查源数据。
 
 Cube1 XLSX 不是普通表：程序寻找首列恰为 `CRN` 的行作为表头，跳过下一行
 子表头，从后续纯数字 CRN 行读取 `Course Start Date Headcount` 和

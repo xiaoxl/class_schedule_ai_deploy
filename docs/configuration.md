@@ -19,6 +19,11 @@ config/
 inputs/
   27S/
     changes.toml
+
+out/
+  27S/
+    ver10/
+      overrides.toml
 ```
 
 为兼容现有项目，缺少推荐路径时逐文件回退到
@@ -124,9 +129,9 @@ weight = 100
 - `allow_back_to_back = false` 对每个相邻连续课惩罚；为 true 且设置
   `max_back_to_back = N` 时，从同日连续第 `N+1` 门开始逐门惩罚。
 - `prefers_online = true` 会惩罚其每个物理课候选。
-- 当前 `preferred_times`、`preferred_locations`、`preferred_courses` 仅记录
-  信息，不计分。需要实际影响求解时必须写 `direction = "prefer"` 的 rule。
-- `disliked_*` 会计分。
+- `preferred_times`、`preferred_locations`、`preferred_courses` 匹配候选时各奖励
+  5 分（目标成本减 5）；未匹配不会作为违规写入报告。
+- `disliked_times`、`disliked_locations`、`disliked_courses` 匹配候选时各惩罚 5 分。
 - rule 的 `course`、`section`、`room`、`time` 都是可选匹配条件；条件之间
   是 AND。`section` 必须与 `course` 同时出现。
 - 顶层 `[[rules]]` 对所有教师生效；嵌套 `[[instructors.rules]]` 只对该教师。
@@ -164,4 +169,95 @@ Room = ""
 
 ## overrides.toml
 
-该文件属于一次求解请求，格式详见 [手调与版本](manual-adjustments.md)。
+每个由当前代码发布的 `out/<term>/verN/` 都自动包含一个绑定该版本的
+`overrides.toml`。这是唯一允许在版本目录中人工编辑的文件；用于从该 ver
+生成或刷新 `out/<term>/final/`。
+
+完整示例：
+
+```toml
+term = "27S"
+source_version = "ver10"
+
+[[edits]]
+course_id = "MATH 1113-F01"
+record = 1
+instructor = "Taylor, Teresa L."
+time_slot = "TR 9:30am"
+building = "Corley"
+room = "269"
+
+[[locks]]
+course_id = "MATH 1113-F01"
+record = 1
+fields = ["instructor", "time", "building", "room"]
+
+[[unassign]]
+course_id = "STAT 2163-004"
+placeholder = "Staff"
+```
+
+### 顶层字段
+
+| 字段 | 类型 | 规则 |
+|---|---|---|
+| `term` | string | 生成模板时写入学期；final 必须与命令中的 term 相同 |
+| `source_version` | string | 严格为 `ver数字`；final 必须与选定父版本相同 |
+| `[[edits]]` | table array | 修改源 ver 的字段值 |
+| `[[locks]]` | table array | 限制求解器不得再改指定字段 |
+| `[[unassign]]` | table array | 把教师改成 Staff 类占位身份 |
+
+解析器拒绝所有未知顶层键。通用 `solve --overrides` 允许省略 term/version，
+但版本内自动生成的模板始终包含二者；final 工作流不要删除。
+
+### edits
+
+| 字段 | 是否必填 | 规则 |
+|---|---|---|
+| `course_id` | 是 | 精确格式 `SUBJECT NUMBER-SECTION`，必须存在于源 Schedule |
+| `record` | 否 | 零起始非负整数；只操作双行原子课中的指定 CSV 记录 |
+| `instructor` | 否 | string；使用 persons 中的正式姓名或 Staff 占位身份 |
+| `time_slot` | 否 | string，例如 `MWF 9:00am`、`ONLINE`、`TBA` 或空字符串 |
+| `building` | 否 | string；允许 `""` 清空 |
+| `room` | 否 | string；允许 `""` 清空 |
+
+每个 edit 至少设置一个可修改字段；字段值必须是字符串。省略 `record` 时，edit
+同时作用于原子课全部记录。多个 edit 按文件顺序执行，每一步都会重新运行原子
+课类型验证，因此不能用一个暂时非法的中间状态等待后续 edit 修复；双行课程要
+整体修改时优先省略 record。
+
+edit 只改变求解起点，不自动锁定。没有对应 lock 时，求解器可以再次改变这个
+值。设置为空字符串是明确清空，不等于省略字段。
+
+### locks
+
+`fields` 必须是非空 string array，只接受：
+
+| 值 | 锁定内容 |
+|---|---|
+| `instructor` | 教师或具体 Staff 身份 |
+| `time` | 完整 `time_slot` |
+| `building` | building |
+| `room` | room |
+
+lock 可以与 edit 配对，也可以单独使用：单独 lock 表示冻结源 ver 的现值。
+省略 record 时锁定原子课全部记录；指定 record 时只锁对应记录。多个 lock 的
+fields 会合并。锁定后如果候选生成找不到完全匹配的候选，求解以
+`No legal candidates` 失败，不会偷偷放松锁。
+
+### unassign
+
+`course_id` 必填，`record` 规则与 edit 相同，`placeholder` 默认为 `Staff`。
+它等价于 instructor edit。未锁定时 Staff 池仍会自动增加、合并和重编号；若
+必须保留具体 `Staff N`，还要增加 `fields = ["instructor"]` 的 lock。
+
+### final 前置检查
+
+- 空模板（没有启用 edit/unassign 且没有 lock）拒绝生成 final；
+- term/source_version 不匹配立即失败；
+- course ID 或 record 不存在立即失败；
+- 非法时间格式、非法双行组合在进入求解前失败；
+- final 只读取 `out/<term>/verN/overrides.toml`，不读取 inputs 中的同名文件。
+
+模板末尾自动包含该版本所有原子课及 record 对照表。完整工作流、累计变化
+化简和输出目录见 [手调与版本](manual-adjustments.md)。

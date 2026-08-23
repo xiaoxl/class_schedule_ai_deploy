@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -28,6 +30,8 @@ class OverrideEdit:
 class OverrideFile:
     edits: tuple[OverrideEdit, ...] = ()
     locks: LockMap | None = None
+    term: str | None = None
+    source_version: str | None = None
 
 
 def _check_keys(table: Mapping[str, object], allowed: set[str], label: str) -> None:
@@ -46,7 +50,20 @@ def _record_number(item: Mapping[str, object], label: str) -> int | None:
 def load_overrides(path: str | Path) -> OverrideFile:
     with open(path, "rb") as handle:
         raw = tomllib.load(handle)
-    _check_keys(raw, {"edits", "locks", "unassign"}, "top-level override")
+    _check_keys(
+        raw,
+        {"term", "source_version", "edits", "locks", "unassign"},
+        "top-level override",
+    )
+    term = raw.get("term")
+    if term is not None and (not isinstance(term, str) or not term.strip()):
+        raise ValueError("term must be a non-empty string")
+    source_version = raw.get("source_version")
+    if source_version is not None and (
+        not isinstance(source_version, str)
+        or re.fullmatch(r"ver\d+", source_version) is None
+    ):
+        raise ValueError("source_version must have the form 'verN'")
     edits: list[OverrideEdit] = []
     for index, item in enumerate(raw.get("edits", []), start=1):
         _check_keys(
@@ -88,7 +105,79 @@ def load_overrides(path: str | Path) -> OverrideFile:
             raise ValueError(f"locks[{index}] has invalid fields: {invalid}")
         key = (course_id, _record_number(item, f"locks[{index}]"))
         locks[key] = locks.get(key, frozenset()) | fields
-    return OverrideFile(tuple(edits), locks)
+    return OverrideFile(
+        edits=tuple(edits),
+        locks=locks,
+        term=term.strip() if isinstance(term, str) else None,
+        source_version=source_version,
+    )
+
+
+def validate_override_context(
+    overrides: OverrideFile,
+    *,
+    term: str,
+    source_version: str | None,
+) -> None:
+    """Reject a revision file applied to a different term or source version."""
+    if overrides.term is not None and overrides.term != term:
+        raise ValueError(
+            f"Override term {overrides.term!r} does not match requested term {term!r}"
+        )
+    if overrides.source_version is not None and overrides.source_version != source_version:
+        actual = source_version or "an unversioned input"
+        raise ValueError(
+            f"Override source_version {overrides.source_version!r} does not match {actual!r}"
+        )
+
+
+def render_override_template(
+    schedule: Schedule,
+    *,
+    term: str,
+    source_version: str,
+) -> str:
+    """Render a no-op TOML revision file plus a record-index reference map."""
+    quoted_term = json.dumps(term, ensure_ascii=True)
+    quoted_version = json.dumps(source_version, ensure_ascii=True)
+    lines = [
+        f"# Final publication source: {term}/{source_version}",
+        "# Reproducible manual revision. All examples below are commented out.",
+        "# Apply with:",
+        f"# class-schedule --config config final {term} {source_version}",
+        "",
+        f"term = {quoted_term}",
+        f"source_version = {quoted_version}",
+        "",
+        "# Edit values first, then lock every field the solver must preserve.",
+        "# [[edits]]",
+        '# course_id = "MATH 1113-F01"',
+        '# instructor = "Taylor, Teresa L."',
+        '# time_slot = "TR 9:30am"',
+        '# building = "Corley"',
+        '# room = "269"',
+        "",
+        "# [[locks]]",
+        '# course_id = "MATH 1113-F01"',
+        '# fields = ["instructor", "time", "building", "room"]',
+        "",
+        "# [[unassign]]",
+        '# course_id = "STAT 2163-004"',
+        '# placeholder = "Staff"',
+        "",
+        "# Atomic-class record map. record is zero-based and is only needed",
+        "# when an edit or lock should target one row of a two-row class.",
+    ]
+    for item in schedule.classes:
+        atomic_id = item.course_ids[0]
+        for record, section in enumerate(item.sections):
+            lines.append(
+                f"# {atomic_id} | record={record} | {section.course_id} | "
+                f"{section.instructor or '(blank)'} | {section.time_slot or '(blank)'} | "
+                f"{section.building} {section.room}".rstrip()
+            )
+    lines.append("")
+    return "\n".join(lines)
 
 
 def apply_overrides(schedule: Schedule, overrides: OverrideFile) -> Schedule:

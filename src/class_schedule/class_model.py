@@ -84,10 +84,10 @@ class Section:
 
     @property
     def is_online(self) -> bool:
-        """Compatibility predicate for sections with no physical meeting.
+        """Compatibility name for ONLINE, TBA, or blank non-physical records.
 
-        Historically this included TBA and blank slots. New code should use
-        ``delivery_mode``/``has_meeting_time`` when that distinction matters.
+        Use ``delivery_mode`` or ``has_meeting_time`` when online and arranged
+        records must be distinguished.
         """
         return self.time_slot.upper() in {"", "ONLINE", "TBA"}
 
@@ -108,11 +108,11 @@ class Section:
         return record_utils.parse_slot(self.time_slot)[0]
 
     @property
-    def start(self) -> "datetime.time | None":
+    def start(self) -> datetime.time | None:
         return record_utils.parse_slot(self.time_slot)[1]
 
     @property
-    def end(self) -> "datetime.time | None":
+    def end(self) -> datetime.time | None:
         if self.start is None or self.duration is None:
             return None
         return record_utils.add_minutes(self.start, self.duration)
@@ -236,10 +236,6 @@ class NormalClass:
         return tuple(dict.fromkeys(item.course_id for item in self.sections))
 
     @property
-    def time_slots(self) -> tuple[str, ...]:
-        return tuple(item.time_slot for item in self.sections)
-
-    @property
     def credit_hours(self) -> float:
         """Credit hours for this atomic class.
 
@@ -256,7 +252,7 @@ class NormalClass:
         """Return one or two dictionaries ready for ``csv.DictWriter``."""
         return [section.to_record() for section in self.sections]
 
-    # ---- modification (carried over unchanged; kind-specific behavior TBD) ----
+    # ---- modification (subclasses may enforce kind-specific behavior) ----
 
     def change_time(
         self, time_slot: str, *, record: int | None = None
@@ -344,8 +340,8 @@ class FourCreditClass(SpecialClass):
 
 @dataclass(slots=True)
 class HybridClass(SpecialClass):
-    """Two same-course rows in an M- or F-prefixed section: one in-person
-    (has a room), one online (no room)."""
+    """Two same-course rows in an M- or F-prefixed section: one physical
+    meeting with a room, and one non-physical meeting without a room."""
 
     def validate(self) -> None:
         super(HybridClass, self).validate()
@@ -358,7 +354,8 @@ class HybridClass(SpecialClass):
         if not self.is_hybrid(left, right):
             raise ValueError(
                 "Hybrid requires an M- or F-prefixed section with one "
-                "record having a room and one without "
+                "physical record having a room and one ONLINE/TBA/blank "
+                "record without a room "
                 f"({left.course_id})"
             )
 
@@ -366,12 +363,22 @@ class HybridClass(SpecialClass):
     def is_hybrid(left: Section, right: Section) -> bool:
         if not left.section.upper().startswith(("M", "F")):
             return False
-        return bool(left.room) != bool(right.room)
+        return (
+            left.has_meeting_time != right.has_meeting_time
+            and all(
+                section.has_meeting_time == bool(section.room)
+                for section in (left, right)
+            )
+        )
 
 
 @dataclass(slots=True)
 class CrossListingClass(SpecialClass):
-    """Two different-course rows sharing the same non-empty Cross-List value."""
+    """Two catalog rows that represent one cross-listed offering."""
+
+    COURSE_PAIRS: ClassVar[list[set[str]]] = [
+        {"MATH 5173", "STAT 4173"},
+    ]
 
     def validate(self) -> None:
         super(CrossListingClass, self).validate()
@@ -384,8 +391,9 @@ class CrossListingClass(SpecialClass):
         if not self.is_cross_listing(left, right):
             raise ValueError(
                 "Cross-listing rows require the same non-empty Cross-List "
-                "value, or an honors-section pair (e.g. '001'/'H01') with "
-                "the same instructor, room, and time "
+                "value, a known course pair with the same section, or an "
+                "honors-section pair (e.g. '001'/'H01') with the same "
+                "instructor, room, and time "
                 f"({left.course_id} / {right.course_id})"
             )
 
@@ -393,7 +401,21 @@ class CrossListingClass(SpecialClass):
     def is_cross_listing(left: Section, right: Section) -> bool:
         if bool(left.cross_list) and left.cross_list == right.cross_list:
             return True
-        return CrossListingClass.is_honors_pair(left, right)
+        return (
+            CrossListingClass.is_known_pair(left, right)
+            or CrossListingClass.is_honors_pair(left, right)
+        )
+
+    @classmethod
+    def is_known_pair(cls, left: Section, right: Section) -> bool:
+        courses = {
+            f"{left.subject} {left.number}",
+            f"{right.subject} {right.number}",
+        }
+        return (
+            left.section == right.section
+            and any(courses == pair for pair in cls.COURSE_PAIRS)
+        )
 
     @staticmethod
     def is_shared_meeting(left: Section, right: Section) -> bool:
@@ -447,9 +469,11 @@ class CoreqClass(SpecialClass):
         if not self.is_valid_schedule(left, right):
             raise ValueError(
                 "Coreq meetings must share an instructor, and (unless "
-                "both are online) be either back-to-back with a gap of "
-                "15 minutes or less in the same room, or start within 30 "
-                f"minutes of each other ({left.course_id} / {right.course_id})"
+                "both lack a physical meeting) be either back-to-back with a gap of "
+                "15 minutes or less in the same non-empty building/room "
+                "on a shared weekday, or start within 30 minutes of each "
+                "other on disjoint weekdays "
+                f"({left.course_id} / {right.course_id})"
             )
 
     @property
@@ -485,13 +509,13 @@ class CoreqClass(SpecialClass):
     def is_valid_schedule(left: Section, right: Section) -> bool:
         """Same instructor, plus:
 
-        - both sides online (e.g. a "TC"-prefixed web coreq pair): no
-          physical time or room to check, so same-instructor alone is
-          sufficient;
-        - otherwise, either back-to-back in the same room (gap of 15
-          minutes or less) or starting within 30 minutes of each other in
-          any room -- the latter covers the common MWF+TR/MW lecture
-          pattern, which routinely uses two different rooms.
+        - both sides lack a physical meeting (ONLINE, TBA, or blank): no
+          time or room to check, so same-instructor alone is sufficient;
+        - otherwise, either back-to-back on at least one shared weekday in
+          the same building/room (gap of 15 minutes or less), or starting
+          within 30 minutes of each other on disjoint weekdays in any room --
+          the latter covers the common MWF+TR/MW lecture pattern, which
+          routinely uses two different rooms.
         """
         if left.instructor != right.instructor:
             return False
@@ -503,13 +527,18 @@ class CoreqClass(SpecialClass):
         right_start = right.start.hour * 60 + right.start.minute
         left_end = left_start + (left.duration or 0)
         right_end = right_start + (right.duration or 0)
-        back_to_back = (
+        shared_days = bool(set(left.days or "") & set(right.days or ""))
+        back_to_back = shared_days and (
             0 <= right_start - left_end <= 15
             or 0 <= left_start - right_end <= 15
         )
         if back_to_back:
-            return left.room == right.room
-        if set(left.days or "") & set(right.days or ""):
+            return (
+                bool(left.room)
+                and left.room == right.room
+                and left.building == right.building
+            )
+        if shared_days:
             # Same weekday on both sides but not back-to-back: the two
             # meetings would overlap or nearly overlap on a shared day --
             # a real conflict, not a valid coreq pairing.
@@ -528,5 +557,6 @@ class CoreqClass(SpecialClass):
         return super(CoreqClass, self).change_time(time_slot, record=record)
 
 
-# Compatibility alias: the hierarchy's root stands in for the old flat type.
+# Every atomic class kind derives from NormalClass, so this is the shared
+# root type used by collection and solver annotations.
 Class = NormalClass

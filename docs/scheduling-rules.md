@@ -8,17 +8,34 @@ double-booking。
 
 1. `FourCreditClass`：同一课程/section 的两行，一行 `MWF`、一行 `T` 或
    `R`，同一教师。
-2. `HybridClass`：同一课程/section，section 以 `M` 或 `F` 开头，一行有
-   room、一行无 room。
-3. `CrossListingClass`：不同课程共享非空 `Cross-List`；或同课程普通/
-   honors section（如 `001`/`H01`）共享教师、时间和 room。
-4. `CoreqClass`：代码白名单中的课程对、相同 section/教师，并符合物理
-   back-to-back 或全在线 TC 配对规则。
+2. `HybridClass`：同一课程/section，section 以 `M` 或 `F` 开头；一行必须
+   是有实际时间和 room 的物理会议，另一行必须是无 room 的
+   `ONLINE`/`TBA`/空时间记录。只有 room 一有一无但两行都有物理时间时不成立。
+3. `CrossListingClass`：不同课程共享非空 `Cross-List`；内置已知课程对
+   `MATH 5173`/`STAT 4173` 且 section 相同；或同课程普通/honors section
+   （如 `001`/`H01`）共享教师、时间和 room。
+4. `CoreqClass`：代码白名单中的课程对、相同 section/教师。两行均无物理会议
+   时合法；否则必须是在至少一个共同上课日中前后相接不超过 15 分钟且
+   building/room 完全相同，或上课日完全不相交且开始时间相差不超过 30 分钟。
 5. 其余每行是 `NormalClass`。
 
 同一课程优先于 cross-list，cross-list 优先于 coreq。以 `P`、`ET`、`A`
 开头的 section 在进入分组前删除。显式 cross-list 的输入两行可以暂时
 不共享会议；求解器的组合约束要求输出必须共享教师、时间、时长和教室。
+`MATH 5173`/`STAT 4173` 是 `CrossListingClass.COURSE_PAIRS` 中的固定领域
+规则，不依赖源文件标记或配置文件，也不会向输出伪造 Cross-List 值。旧版本
+中遗留的 `configured:` 合成标记会在导入时清空，再按此内置规则分组。
+
+教学负载必须通过 `schedule_model.teaching_loads()` 基于原子课程统计，不能
+按 CSV 行相加。普通双行课、hybrid、cross-list 都只计一次；coreq 覆盖
+`credit_hours`，按两门不同课程的学分合计。草案放置、软规则报告和版本报告
+共享这一实现；CP-SAT 负载模型同样只在每个原子课程的 primary section 上
+建立一次负载变量。
+
+`schedule_model.evaluate_schedule()` 是统一统计入口，返回原子课数、展开行数、
+`teaching_loads()` 结果、hard violations、soft penalty 和 soft findings。
+CLI validate、求解尝试评估、版本报告和 Web API 都使用这组领域统计；不得在
+调用端另写一套按行统计。
 
 ## 候选如何产生
 
@@ -38,6 +55,14 @@ double-booking。
 
 手调 lock 在候选生成最后过滤：锁了某字段就只保留与手调后当前值一致的
 候选。若全部候选被过滤，求解直接报 `No legal candidates`。
+
+`Staff` 是一个可伸缩的占位教师池。求解前和求解后都会对所有
+`Staff`/`Staff N` 课程建立时间冲突图并重新着色：同时重叠越严重，需要的
+编号身份越多；调整时间后冲突减少，则重新使用较小编号并尽量合并多余的
+`Staff N`。不同占位身份之间的改名成本为 0。重着色使用贪心算法，保证同一
+身份没有时间冲突，但不承诺得到理论最少身份数；若某个占位教师的 instructor
+字段被 lock，则保留人工指定身份，
+不自动重着色。
 
 ## 硬约束
 
@@ -66,6 +91,7 @@ double-booking。
 | 更换教师 | 10 |
 | 更换时间 | 5 |
 | 更换 building/room 组合 | 5 |
+| preferred time/location/course 匹配 | 每项 `-5` |
 | disliked time/location/course | 每项 5 |
 | prefers online 但安排物理课 | 5 |
 | 不允许 back-to-back，或超过连续课上限 | 每处 10 |

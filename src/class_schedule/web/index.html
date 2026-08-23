@@ -18,10 +18,10 @@
     <section class="upload-panel">
       <form id="uploadForm">
         <label class="drop-zone" id="dropZone">
-          <input id="scheduleFile" name="schedule_file" type="file" accept=".csv,.xlsx,.xls" required>
+          <input id="scheduleFile" name="schedule_file" type="file" accept=".csv,.xlsx" required>
           <span class="upload-mark">+</span>
           <strong id="fileLabel">Drop a schedule file here, or click to choose one</strong>
-          <small>Supports CSV, XLSX, XLS, up to 50 MB</small>
+          <small>Supports CSV and XLSX, up to 50 MB</small>
         </label>
         <button id="submitButton" type="submit" disabled>Solve Schedule</button>
       </form>
@@ -39,7 +39,7 @@
         <a id="downloadRoom" download="schedule_room.xlsx">Download Schedule (By Room)</a>
       </div>
       <div id="violationsSummary" class="violations-summary hidden"></div>
-      <div class="view-switcher" id="viewSwitcher" role="tablist">
+      <div class="view-switcher" role="tablist">
         <button type="button" class="view-tab" data-view="atomic">Atomic Classes</button>
         <button type="button" class="view-tab" data-view="course">By Course</button>
         <button type="button" class="view-tab active" data-view="instructor">By Instructor</button>

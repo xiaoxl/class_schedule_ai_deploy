@@ -1,5 +1,5 @@
-# Stable person records. max_load is contractual; aliases normalize imported
-# abbreviated instructor names. An alias may include subject to disambiguate it.
+# Stable person records. courses are qualifications, max_load is contractual,
+# and aliases normalize imported names (optionally by subject).
 
 [[persons]]
 name = "Bain, Leslie M."

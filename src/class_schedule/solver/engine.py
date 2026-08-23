@@ -9,6 +9,7 @@ from ortools.sat.python import cp_model
 from ..class_model import Section
 from ..overrides import LockMap, locks_for_section
 from ..schedule_model import Schedule
+from ..starting_template import is_placeholder_instructor, recolor_placeholder
 from .candidates import (
     MAX_CANDIDATES_PAIRED_SECTION,
     MAX_CANDIDATES_SINGLE_SECTION,
@@ -41,7 +42,28 @@ def solve_detailed(
     locks: LockMap | None = None,
     random_seed: int | None = None,
 ) -> SolveResult:
-    class_list = list(schedule.classes)
+    placeholder_lock = False
+    for (course_id, record), fields in (locks or {}).items():
+        if "instructor" not in fields:
+            continue
+        item = schedule.get(course_id)
+        targets = item.sections if record is None else (item.sections[record],)
+        if any(is_placeholder_instructor(section.instructor) for section in targets):
+            placeholder_lock = True
+            break
+    if placeholder_lock:
+        normalized_schedule = schedule
+        placeholder_instructors = tuple(sorted({
+            section.instructor
+            for item in schedule.classes for section in item.sections
+            if is_placeholder_instructor(section.instructor)
+        }))
+    else:
+        normalized_schedule, placeholder_assignments = recolor_placeholder(
+            schedule, seed=0
+        )
+        placeholder_instructors = tuple(placeholder_assignments)
+    class_list = list(normalized_schedule.classes)
     sections: list[Section] = []
     owner: list[int] = []
     for class_index, item in enumerate(class_list):
@@ -63,6 +85,7 @@ def solve_detailed(
             if len(item.sections) == 1 else MAX_CANDIDATES_PAIRED_SECTION,
             allowed_pattern_types(item, section),
             locks_for_section(locks, item.course_ids, record),
+            placeholder_instructors,
         ))
     empty = [
         sections[index].course_id
@@ -144,10 +167,13 @@ def solve_detailed(
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise NoFeasibleSchedule(f"Solver failed: {cp_solver.status_name(status)}")
 
+    solved = apply_solution(
+        class_list, sections, sections_by_class, candidates, chosen, cp_solver
+    )
+    if not placeholder_lock:
+        solved, _ = recolor_placeholder(solved, seed=0)
     return SolveResult(
-        schedule=apply_solution(
-            class_list, sections, sections_by_class, candidates, chosen, cp_solver
-        ),
+        schedule=solved,
         status=(
             SolveStatus.OPTIMAL if status == cp_model.OPTIMAL
             else SolveStatus.FEASIBLE

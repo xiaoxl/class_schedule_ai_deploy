@@ -291,13 +291,3 @@ def add_load_terms(
         model.add(total >= target).only_enforce_if(under.Not())
         objective_terms.append(UNDER_LOAD_PENALTY * under)
     return objective_terms
-
-
-# Compatibility aliases for code that imported private helpers.
-_predicate_for = predicate_for
-_add_pairwise_validity_constraints = add_pairwise_validity_constraints
-_Slot = Slot
-_build_slots = build_slots
-_back_to_back_chains = back_to_back_chains
-_add_scheduling_constraints = add_scheduling_constraints
-_add_load_terms = add_load_terms

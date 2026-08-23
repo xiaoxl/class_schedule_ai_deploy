@@ -74,9 +74,17 @@ work/27S/normalized/
 | `Source Row` | 原表行号；首条数据为 2，因为第 1 行是表头 |
 
 三种无物理时间状态不会再被混为一个字符串：`ONLINE` 是在线且已安排；
-`TBA` 是 arranged/tba；空时间是 arranged/unscheduled。当前旧领域 API 的
-`Section.is_online` 为兼容仍把这三种都视作“无物理会议”，排冲突时都不
+`TBA` 是 arranged/tba；空时间是 arranged/unscheduled。领域模型中的
+`Section.is_online` 是兼容名称，实际表示这三种“无物理会议”记录；排冲突时都不
 产生时间冲突。
+
+`MATH 5173`/`STAT 4173` 是代码内置的 cross-list 特例。清洗器保持源文件的
+`Cross-List` 为空；构造 `Schedule` 时，只要二者 section 相同，就自动组成
+`CrossListingClass`。不需要配置，也不会向清洗结果写入人工标记。
+
+Hybrid 的无 room 行必须同时没有物理会议时间（`ONLINE`、`TBA` 或空时间）；
+物理行必须有 room。两个都有物理时间但其中一个漏填 room 会作为原子分组错误，
+不会被当成 Hybrid 掩盖数据问题。
 
 ## 错误和警告
 
@@ -89,3 +97,20 @@ work/27S/normalized/
 
 进入 `draft` 或 `solve` 前，应保证 `rejected_rows.csv` 为空且
 `validation.md` 没有 grouping warning。
+
+## 进入排课对象
+
+清洗完成后的 `sections.csv` 仍是审计和交换格式，不是后续规则直接操作的
+对象。磁盘入口的完整职责和禁止事项见[架构文档的 `schedule_io.py` 文件边界](index.md#schedule_iopy-文件边界)。
+`draft`、`solve`、`validate` 和 `diff` 都先调用：
+
+```python
+schedule = read_schedule(
+    path,
+    persons=config.persons,
+)
+```
+
+返回值是已经完成原子分组的 `Schedule`。此后统计、调课和求解不得直接遍历
+CSV/DataFrame 行。输出 CSV 是 `Schedule.to_dataframe()` 的展开表示，因此
+cross-list 等双行原子课会重新出现两行，但教学负载仍按原子对象只算一次。

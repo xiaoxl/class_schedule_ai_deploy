@@ -8,10 +8,9 @@ from collections.abc import Mapping
 
 # "unassigned" is ATU's "Course Schedule Report" export's own placeholder
 # for "no room/building" (see examples/Course Schedule Report_*.csv) --
-# without it, a TBA/online row's literal Room="Unassigned" reads as a
-# truthy room value, which breaks HybridClass's `bool(left.room) !=
-# bool(right.room)` room-presence check against its genuinely-in-person
-# other half.
+# without it, a non-physical row's literal Room="Unassigned" reads as a
+# real room and fails HybridClass's requirement that meeting-time presence
+# match room presence.
 _EMPTY_VALUES = frozenset({"", "none", "nan", "nat", "unassigned"})
 _SLOT_PATTERN = re.compile(
     r"^(?P<days>M|T|W|R|F|MW|TR|MWF)\s+"
@@ -28,7 +27,7 @@ _SLOT_PATTERN = re.compile(
 # export's Meeting_Times column needs its own split, handled separately
 # in normalize_columns below, since it packs Start and End into one
 # "9:30 am-10:50 am" string rather than two columns); the rest are the
-# original legacy names this codebase started with. Cross-List and XL
+# additional input spellings accepted by the domain model. Cross-List and XL
 # Group Code are both accepted as cross-listing signals -- whichever
 # column a given file actually populates is the one that counts (see
 # normalize_columns' merge behavior below).
@@ -75,8 +74,8 @@ def split_time_range(value: object) -> tuple[str, str]:
     unlike Banner's separate Beginning Time/Ending Time columns, it packs
     both into one field, so a rename alone (like Meeting_Days -> Days)
     isn't enough. TBA, blank, or anything without exactly one ``-``
-    returns ``("", "")`` -- a blank Start already reads as an online/TBA
-    meeting everywhere else in this codebase, so there's no separate
+    returns ``("", "")`` -- a blank Start represents an arranged record
+    with no physical meeting, so there's no separate
     "unparseable" case to raise on.
     """
     parts = text(value).split("-")
@@ -155,7 +154,7 @@ def clock(value: object) -> datetime.time:
 
 
 def format_slot(days: object, start: object) -> str:
-    """Combine legacy Days and Start values as ``'MWF 8:00am'``."""
+    """Combine separate Days and Start values as ``'MWF 8:00am'``."""
     days_text = text(days).upper().replace("TH", "R")
     if not days_text or not text(start):
         return ""
@@ -168,7 +167,7 @@ def format_slot(days: object, start: object) -> str:
 def parse_slot(
     value: object,
 ) -> tuple[str, datetime.time] | tuple[None, None]:
-    """Split a slot string into days and start; ONLINE/TBA have no clock."""
+    """Split a slot; ONLINE, TBA, and blank values have no clock."""
     cleaned = text(value)
     if not cleaned or cleaned.upper() in {"ONLINE", "TBA"}:
         return None, None
@@ -182,7 +181,7 @@ def parse_slot(
 
 
 def duration_from_times(start: object, end: object) -> int | None:
-    """Calculate minutes between legacy Start and End values."""
+    """Calculate minutes between separate Start and End values."""
     if not text(start) or not text(end):
         return None
     start_time = clock(start)

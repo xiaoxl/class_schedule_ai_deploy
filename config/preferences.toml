@@ -16,13 +16,14 @@
 # instructor tolerates before it's scored (penalty 10 per meeting past
 # the cap, same tier as a plain back-to-back). Leave unset (the default)
 # for "allow_back_to_back alone decides" -- true means no opinion, false
-# means every back-to-back pair is scored, same as before this field
-# existed. Only meaningful when allow_back_to_back is true: it can't
+# means every back-to-back pair is scored. Only meaningful when
+# allow_back_to_back is true: it can't
 # loosen a `false`, since "no back-to-back at all" is already stricter
 # than any cap could be.
 #   max_back_to_back = 2   # a 3rd meeting in a row is scored, a 4th too, etc.
 #
-# prefers_online: true is a blanket affinity for online/hyflex sections
+# prefers_online: true is a blanket affinity for records without a physical
+# meeting
 # -- a mild scored nudge (penalty 5, same tier as disliked_*) against any
 # in-person assignment. It's blanket, not course-scoped; someone who only
 # wants one specific course online needs an `instructors.rules` entry
@@ -32,9 +33,8 @@
 # fixed fields above (course/section/room/time-scoped, any combination of
 # those you fill in; leaving one out means "matches anything"). Each rule
 # needs `direction` ("prefer" or "dislike") and `weight` (how strongly).
-# `weight` is on the same 0-100 scale as every penalty in this system --
-# 100 is the practical ceiling, just below under_load (this system's
-# strongest penalty):
+# `weight` is on the same 0-100 scale as the other soft costs. A weight of
+# 100 is stronger than the 90-point under_load cost, but is still soft:
 #   10  -- a little
 #   50  -- a lot
 #   100 -- as strong as this system's soft rules go -- still not a hard
@@ -51,9 +51,9 @@
 #   direction = "dislike"
 #   weight = 10
 #
-# A rule with no instructor at all -- applies no matter who ends up
-# teaching the match, e.g. a specific course-section pinned to a room
-# regardless of instructor -- goes in a top-level [[rules]] list instead
+# A rule with no instructor at all applies no matter who ends up teaching
+# the match, e.g. favoring a room for a specific course-section regardless
+# of instructor. Put it in a top-level [[rules]] list instead
 # of under any one [[instructors]] block:
 #
 #   [[rules]]
@@ -66,7 +66,8 @@
 # 27S: MATH 1113-F01 stays in Corley 269 regardless of who ends up
 # teaching it -- weighted at this system's practical ceiling since it's
 # meant as close to a hard requirement as the soft-preference mechanism
-# gets (there's no true hard room constraint in this system).
+# gets. Preferences cannot express a hard room constraint; use a final
+# override room/building lock when the room must be guaranteed.
 [[rules]]
 course = "MATH 1113"
 section = "F01"
@@ -188,7 +189,8 @@ disliked_courses = []
   # "Corley 101 only" -- not course-scoped, applies to whatever she
   # teaches. Weighted at this system's practical ceiling since it's
   # meant as close to a hard requirement as the soft-preference
-  # mechanism gets (there's no true hard room constraint in this system).
+  # mechanism gets. Use a final override room/building lock when the room
+  # must be guaranteed.
   [[instructors.rules]]
   room = "Corley 101"
   direction = "prefer"
@@ -263,6 +265,12 @@ disliked_locations = []
 preferred_courses = []
 disliked_courses = []
 
+  # MATH 4123 has historically been Tom's course; keep it with him when feasible.
+  [[instructors.rules]]
+  course = "MATH 4123"
+  direction = "prefer"
+  weight = 100
+
 [[instructors]]
 name = "Overduin, Matthew D."
 allow_overload = false
@@ -322,7 +330,7 @@ disliked_courses = []
   [[instructors.rules]]
   course = "MATH 2934"
   direction = "dislike"
-  weight = 10
+  weight = 50
 
 [[instructors]]
 name = "Yousuf, Marium"

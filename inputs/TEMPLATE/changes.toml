@@ -1,23 +1,22 @@
-# Per-term change list -- the two things you actually decide each
-# rollover: who left, and what's newly offered/cancelled. Everything else
+# Per-term change list: departures, new hires, additions, and cancellations.
+# Everything else
 # (grouping four-credit/hybrid/coreq/cross-listed pairs, reassigning a
 # departed instructor's other sections, keeping section-vs-course
 # identity straight) is worked out automatically by
 # class_schedule.term_builder.build_draft_schedule from last term's
 # schedule file plus this file.
 #
-# Copy this file per term (e.g. changes/2027S.toml) and run:
+# Copy this file per term (e.g. inputs/27S/changes.toml) and run:
 #
-#   uv run python -m class_schedule.term_builder 26S.xlsx changes/2027S.toml -o 27S_draft.xlsx
+#   uv run class-schedule --config config draft 27S `
+#     work/27S/normalized/sections.csv inputs/27S/changes.toml
 #
-# The output is a *draft* -- pass it to `class-schedule solve` (or feed it
-# to solver.solve()) to see conflicts, run the solver, and check overload.
+# The output is a *draft* -- pass it to `class-schedule solve` to see
+# conflicts, run the solver, and check overload.
 # This file never writes persons.toml or preferences.toml -- names in
-# `departures` below
-# still need their [[persons]]/[[instructors]] blocks removed by hand
-# (term_builder.summarize_roster_impact will tell you if a name here
-# doesn't match anyone in persons.toml, which almost always means a
-# typo).
+# `departures` below still need their [[persons]] blocks removed by hand.
+# The draft command reports names that do not occur in the source schedule,
+# which usually indicates a typo.
 
 # ---- who left ----------------------------------------------------------
 # Exact name as it appears in the *template* schedule's Instructor column
@@ -33,7 +32,7 @@ departures = [
 # ---- who's newly hired --------------------------------------------------
 # Exact name as it appears in persons.toml's own `name` field. Doesn't
 # touch the draft schedule by itself (unlike departures above) -- read by
-# term_builder.starting_template.place_new_hires, which tries to seat
+# class_schedule.starting_template.place_new_hires, which tries to seat
 # each of these people into the draft up to their own max_load: first by
 # taking over an open ("Staff") position they're qualified for, then --
 # only if no open position is qualified/non-conflicting -- by taking a
@@ -62,21 +61,21 @@ new_hires = [
 
 # ---- new courses to add --------------------------------------------------
 # One table per CSV row -- same fields as an uploaded schedule file
-# (Subject/Number/Section required; "Time Slot" -- or Days+Start -- and
-# Duration -- or Credits -- needed for anything meeting in person). Leave
+# (Subject/Number/Section required; physical meetings need "Time Slot" --
+# or Days+Start -- plus Duration -- or Start+End). Leave
 # Instructor blank/omitted to have it filled with the placeholder
 # ("Staff" by default): after solving, any section still assigned to the
 # placeholder is exactly the "nobody on staff is qualified/available for
 # this" signal to act on -- add that course to an existing person's
 # `courses` list in persons.toml, or count it toward a hiring need. Give
 # it a real Days/Start/Duration when a physical meeting must be scheduled.
-# ONLINE/TBA rows keep their delivery/time/room unchanged, but the solver
-# can still replace Staff with a qualified instructor.
+# ONLINE/TBA/blank-time rows keep their delivery/time/room unchanged, but
+# the solver can still replace Staff with a qualified instructor.
 #
-# Two rows with matching Subject/Number/Instructor/day-pattern (or a
-# shared Cross-List value) are grouped into one
-# four-credit/hybrid/coreq/cross-listed class automatically -- just list
-# both rows, same as in a CSV upload.
+# Multi-row offerings use the same strict atomic rules as CSV input:
+# same-course/section MWF+T/R for four-credit, an M/F-prefixed physical plus
+# non-physical row for Hybrid, a shared Cross-List/known pair for cross-list,
+# or a whitelisted same-section coreq pair. List both source rows.
 #
 # [[new_courses]]
 # Subject = "MATH"

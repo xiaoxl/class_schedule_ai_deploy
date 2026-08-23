@@ -1,0 +1,59 @@
+{
+  "schema_version": 3,
+  "term": "27S",
+  "version": "ver4",
+  "parent": "ver3",
+  "created_at": "2026-08-22T23:56:35.896543+00:00",
+  "input": {
+    "path": "out\\27S\\ver3\\27S_ver3.csv",
+    "sha256": "720181c0ed5bb4df69b25f1078587d7f0ea5b2fea8c5f77335d2f749c923a217"
+  },
+  "configuration": {
+    "version": "b23b6042112a",
+    "files": [
+      {
+        "path": "config\\persons.toml",
+        "sha256": "449e69760401de3e84376d28e7efad175c25923ba53f2bd75f238c9ee8240913"
+      },
+      {
+        "path": "config\\preferences.toml",
+        "sha256": "823aeaab9aa0129f501c7a205e16eab48348a556ba043927fa0efa4cb78b7306"
+      },
+      {
+        "path": "config\\timeslot.toml",
+        "sha256": "9c11402bfdfa66f8d109320f1a75c62f1ffba1e123f5d9ff59299660ede8e22f"
+      },
+      {
+        "path": "config\\locations.toml",
+        "sha256": "a7793c98d7dce6425530886a73d9ac47e5f5909570b413c76378c22c6bd26f34"
+      }
+    ]
+  },
+  "selected_attempt": 3,
+  "solver": {
+    "status": "feasible",
+    "objective": -730.0,
+    "best_bound": -1080.0,
+    "random_seed": 1484166950,
+    "time_limit_seconds": 45.0,
+    "attempts": 5
+  },
+  "validation": {
+    "hard_violations": 0,
+    "soft_penalty": 140.0,
+    "worst_overload": 3.0
+  },
+  "files": {
+    "27S_ver4.csv": "720181c0ed5bb4df69b25f1078587d7f0ea5b2fea8c5f77335d2f749c923a217",
+    "report.md": "6e02cd688a5d2baf97960e4abbbe2d79767bbc21288e427fecbd7acc9cb801d7",
+    "attempts.csv": "f56952ad774692b47fa6844913d31cb08755639db8ebfd88fac73367acc62517",
+    "changes.csv": "9969ef38015e77969ce362228d297115605f53c813ffb07c004013c7e4f9238b",
+    "applied_overrides.toml": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c"
+  },
+  "applied_overrides_sha256": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c",
+  "override_workspace": {
+    "path": "overrides.toml",
+    "mutable": true,
+    "source_version": "ver4"
+  }
+}

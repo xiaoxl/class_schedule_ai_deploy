@@ -81,24 +81,42 @@ class FourCreditClassTests(unittest.TestCase):
 
 
 class HybridClassTests(unittest.TestCase):
-    def test_m_prefixed_section_with_one_room_is_hybrid(self):
+    def test_m_prefixed_physical_and_tba_pair_is_hybrid(self):
         left = make_section(section="M01", room="101")
-        right = make_section(section="M01", room="")
+        right = make_section(
+            section="M01", time_slot="TBA", duration=None, room=""
+        )
         self.assertTrue(HybridClass.is_hybrid(left, right))
 
-    def test_f_prefixed_section_with_one_room_is_hybrid(self):
-        left = make_section(section="F01", room="")
+    def test_f_prefixed_online_and_physical_pair_is_hybrid(self):
+        left = make_section(
+            section="F01", time_slot="ONLINE", duration=None, room=""
+        )
         right = make_section(section="F01", room="101")
         self.assertTrue(HybridClass.is_hybrid(left, right))
 
     def test_non_prefixed_section_is_not_hybrid(self):
         left = make_section(section="001", room="101")
-        right = make_section(section="001", room="")
+        right = make_section(
+            section="001", time_slot="TBA", duration=None, room=""
+        )
         self.assertFalse(HybridClass.is_hybrid(left, right))
 
     def test_both_or_neither_having_a_room_is_not_hybrid(self):
         left = make_section(section="M01", room="101")
         right = make_section(section="M01", room="102")
+        self.assertFalse(HybridClass.is_hybrid(left, right))
+
+    def test_two_physical_rows_with_one_missing_room_are_not_hybrid(self):
+        left = make_section(section="M01", room="101")
+        right = make_section(section="M01", room="")
+        self.assertFalse(HybridClass.is_hybrid(left, right))
+
+    def test_non_physical_row_with_room_is_not_hybrid(self):
+        left = make_section(
+            section="M01", time_slot="TBA", duration=None, room="101"
+        )
+        right = make_section(section="M01", room="")
         self.assertFalse(HybridClass.is_hybrid(left, right))
 
 
@@ -107,6 +125,16 @@ class CrossListingClassTests(unittest.TestCase):
         left = make_section(subject="MATH", number="1113", cross_list="XL1")
         right = make_section(subject="STAT", number="2103", cross_list="XL1")
         self.assertTrue(CrossListingClass.is_cross_listing(left, right))
+
+    def test_known_course_pair_same_section_is_cross_listing(self):
+        left = make_section(subject="MATH", number="5173", section="TC1")
+        right = make_section(subject="STAT", number="4173", section="TC1")
+        self.assertTrue(CrossListingClass.is_cross_listing(left, right))
+
+    def test_known_course_pair_different_section_is_not_cross_listing(self):
+        left = make_section(subject="MATH", number="5173", section="TC1")
+        right = make_section(subject="STAT", number="4173", section="TC2")
+        self.assertFalse(CrossListingClass.is_cross_listing(left, right))
 
     def test_honors_pair_same_time_room_instructor_is_honors_pair(self):
         left = make_section(section="001", instructor="Alice", room="101")
@@ -153,6 +181,25 @@ class CoreqClassTests(unittest.TestCase):
     def test_back_to_back_different_room_is_not_valid_schedule(self):
         left = make_section(time_slot="MWF 9:00am", duration=50, room="101")
         right = make_section(time_slot="MWF 9:50am", duration=50, room="102")
+        self.assertFalse(CoreqClass.is_valid_schedule(left, right))
+
+    def test_back_to_back_blank_rooms_are_invalid(self):
+        left = make_section(time_slot="MWF 9:00am", duration=50, room="")
+        right = make_section(time_slot="MWF 9:50am", duration=50, room="")
+        self.assertFalse(CoreqClass.is_valid_schedule(left, right))
+
+    def test_back_to_back_same_room_number_different_building_is_invalid(self):
+        left = make_section(
+            time_slot="MWF 9:00am", duration=50, room="101", building="Corley"
+        )
+        right = make_section(
+            time_slot="MWF 9:50am", duration=50, room="101", building="Rothwell"
+        )
+        self.assertFalse(CoreqClass.is_valid_schedule(left, right))
+
+    def test_clock_adjacent_on_different_days_is_not_back_to_back(self):
+        left = make_section(time_slot="MWF 9:00am", duration=50, room="101")
+        right = make_section(time_slot="T 9:50am", duration=50, room="101")
         self.assertFalse(CoreqClass.is_valid_schedule(left, right))
 
     def test_overlapping_same_day_not_back_to_back_is_invalid(self):

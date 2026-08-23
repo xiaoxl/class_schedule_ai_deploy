@@ -1,0 +1,28 @@
+# Final publication source: 27S/ver6
+# Reproducible manual revision. All examples below are commented out.
+# Apply with:
+# class-schedule --config config final 27S ver6
+
+term = "27S"
+source_version = "ver6"
+
+# Edit values first, then lock every field the solver must preserve.
+# [[edits]]
+# course_id = "MATH 1113-F01"
+# instructor = "Taylor, Teresa L."
+# time_slot = "TR 9:30am"
+# building = "Corley"
+# room = "269"
+
+# [[locks]]
+# course_id = "MATH 1113-F01"
+# fields = ["instructor", "time", "building", "room"]
+
+# [[unassign]]
+# course_id = "STAT 2163-004"
+# placeholder = "Staff"
+
+# Atomic-class record map. record is zero-based and is only needed
+# when an edit or lock should target one row of a two-row class.
+# WARNING: this legacy version does not pass the current grouping rules.
+# It cannot be used as a final source: Coreq meetings must share an instructor, and (unless both are online) be either back-to-back with a gap of 15 minutes or less in the same non-empty building/room on a shared weekday, or start within 30 minutes of each other on disjoint weekdays (MATH 0803-004 / MATH 1003-004)

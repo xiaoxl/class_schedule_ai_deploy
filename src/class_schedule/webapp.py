@@ -1,16 +1,15 @@
 """Web app: upload a schedule file, see it grouped into atomic classes,
 and optionally solve it.
 
-Built on ``schedule_model.Schedule`` / ``class_model``, not the archived
-``schedule``/``models`` stack (see ``.dep/class_schedule_old/``). Every upload is also
-evaluated against ``config/persons.toml`` and ``config/preferences.toml``
+Built on ``schedule_model.Schedule`` / ``class_model``. Every upload is also
+evaluated against the resolved persons and preferences configuration
 -- see ``schedule_model.check_soft_preferences`` (everything, including
 max_load) / ``check_conflicts`` (the only hard-violation source,
 room/instructor double-booking). ``POST /api/solve`` runs the OR-Tools
-solver (``solver.solve``) on top of that, using
-``config/timeslot.toml``/``config/locations.toml`` for the legal
-time/room search space. There is still no LLM scheduling agent; that
-lived on top of the old stack and has no equivalent here.
+solver (``solver.solve_detailed``) on top of that, using
+the resolved timeslot/location configuration for the legal time/room search
+space. The Web API is a stateless auxiliary interface;
+versioned production publication remains in the CLI.
 """
 
 from __future__ import annotations
@@ -37,13 +36,12 @@ from .schedule_model import (
     PreferenceRule,
     Schedule,
     SoftFinding,
-    check_conflicts,
-    check_soft_preferences,
+    evaluate_schedule,
 )
 
 PACKAGE_WEB = Path(__file__).with_name("web")
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
-ALLOWED_SUFFIXES = {".csv", ".xlsx", ".xls"}
+ALLOWED_SUFFIXES = {".csv", ".xlsx"}
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 LOG_PATH = Path("output/logs/webapp.log")
 
@@ -57,20 +55,14 @@ LOG_PATH = Path("output/logs/webapp.log")
 # see the comment above schedule_model.OVERLOAD_TOLERANCE.
 SOFT_SEVERITY_THRESHOLD = 20.0
 
-# The solver is a real optimization pass, not instant -- generous but
-# bounded so a solve request can't hang the server indefinitely. This is
-# CP-SAT's own search budget only (model-building happens first and
-# isn't counted); a real ~85-section semester schedule takes ~60s total.
+# This bounds CP-SAT search time per Web request; model construction happens
+# before the timed search.
 SOLVE_TIME_LIMIT_SECONDS = 60.0
 
 logger = logging.getLogger("class_schedule.webapp")
 
-# The solve endpoint is the one path that reproducibly drove production
-# RSS into the multi-GB range before _add_scheduling_constraints moved to
-# add_no_overlap (see solver/constraints.py) -- logging before/after RSS here, next
-# to the request that actually caused that incident, is cheap (one OS
-# call each way) and gives an ongoing record to compare against if it
-# ever creeps back up, without needing a one-off benchmark script.
+# Record memory around the model-building endpoint so resource regressions
+# remain visible in normal service logs.
 _PROCESS = psutil.Process()
 
 
@@ -154,7 +146,7 @@ def create_app() -> FastAPI:
         except solver_module.NoFeasibleSchedule as error:
             # 422, not 400: the request itself was well-formed -- there's
             # just no conflict-free assignment to offer for this input
-            # (see solver.solve()'s docstring). app.js keys off this
+            # (see InfeasibleSchedule). app.js keys off this
             # status to keep "Solve Schedule" disabled until a new file
             # is chosen, instead of inviting a retry that can't succeed.
             logger.warning(
@@ -211,7 +203,7 @@ async def _read_and_group(schedule_file: UploadFile) -> tuple[str, Schedule]:
     suffix = Path(filename).suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
         logger.warning("Rejected %r: unsupported file type", filename)
-        raise HTTPException(400, "Upload a CSV, XLSX, or XLS schedule file")
+        raise HTTPException(400, "Upload a CSV or XLSX schedule file")
     content = await schedule_file.read()
     if not content:
         logger.warning("Rejected %r: empty file", filename)
@@ -231,7 +223,9 @@ async def _read_and_group(schedule_file: UploadFile) -> tuple[str, Schedule]:
     del content  # no longer needed once parsed; drop it before the solve path holds `schedule`
 
     try:
-        schedule = Schedule.from_dataframe(dataframe, persons=PERSONS)
+        schedule = Schedule.from_dataframe(
+            dataframe, persons=PERSONS,
+        )
     except GroupingError as error:
         logger.warning(
             "Failed to group %r into classes: %s (%d record(s))",
@@ -255,10 +249,8 @@ async def _read_and_group(schedule_file: UploadFile) -> tuple[str, Schedule]:
 class _NoCacheStaticFiles(StaticFiles):
     """Static files with no browser caching.
 
-    This UI is under active development -- a stale cached ``app.js`` has
-    already caused confusion where a fix looked "not applied" simply
-    because the browser kept serving the old script. Correctness here
-    matters more than the bandwidth saved by caching a small local file.
+    The frontend and API are deployed together, so caching an older
+    ``app.js`` can make it incompatible with the current response shape.
     """
 
     def file_response(self, *args, **kwargs):
@@ -298,14 +290,13 @@ def _evaluate_schedule(schedule: Schedule) -> dict:
     """Run both checks and shape them for the frontend's violations
     summary: hard (red, room/instructor conflicts only -- see
     ``check_conflicts``), soft (orange/yellow by penalty threshold)."""
-    hard = check_conflicts(schedule)
-    soft_total, soft_findings = check_soft_preferences(
+    evaluation = evaluate_schedule(
         schedule, PREFERENCES, PERSONS, GLOBAL_RULES
     )
     return {
-        "hard": [_serialize_hard(v) for v in hard],
-        "soft_total": soft_total,
-        "soft": [_serialize_soft(f) for f in soft_findings],
+        "hard": [_serialize_hard(v) for v in evaluation.hard_violations],
+        "soft_total": evaluation.soft_penalty,
+        "soft": [_serialize_soft(f) for f in evaluation.soft_findings],
     }
 
 

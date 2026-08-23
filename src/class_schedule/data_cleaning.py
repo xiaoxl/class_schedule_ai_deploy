@@ -14,7 +14,13 @@ import pandas as pd
 
 from . import record_utils
 from .class_model import Section
-from .schedule_model import GroupingError, PersonRecord, Schedule, resolve_person_name
+from .schedule_io import read_table
+from .schedule_model import (
+    GroupingError,
+    PersonRecord,
+    Schedule,
+    resolve_person_name,
+)
 
 
 NORMALIZED_COLUMNS = (
@@ -123,15 +129,6 @@ def clean_dataframe(
     )
 
 
-def read_table(path: str | Path) -> pd.DataFrame:
-    path = Path(path)
-    if path.suffix.lower() == ".csv":
-        return pd.read_csv(path, dtype=str)
-    if path.suffix.lower() == ".xlsx":
-        return pd.read_excel(path, dtype=str)
-    raise ValueError(f"Unsupported input type: {path.suffix or '<none>'}")
-
-
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -144,7 +141,9 @@ def clean_file(
 ) -> CleanResult:
     """Clean one source file and atomically publish the cleaning bundle."""
     input_path, output_dir = Path(input_path), Path(output_dir)
-    result = clean_dataframe(read_table(input_path), persons=persons)
+    result = clean_dataframe(
+        read_table(input_path), persons=persons,
+    )
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     if output_dir.exists():
         raise FileExistsError(f"Refusing to overwrite cleaning result: {output_dir}")

@@ -1,23 +1,22 @@
-# Per-term change list -- the two things you actually decide each
-# rollover: who left, and what's newly offered/cancelled. Everything else
+# Per-term change list: departures, new hires, additions, and cancellations.
+# Everything else
 # (grouping four-credit/hybrid/coreq/cross-listed pairs, reassigning a
 # departed instructor's other sections, keeping section-vs-course
 # identity straight) is worked out automatically by
 # class_schedule.term_builder.build_draft_schedule from last term's
 # schedule file plus this file.
 #
-# Copy this file per term (e.g. changes/2027S.toml) and run:
+# Copy this file per term and run:
 #
-#   uv run python -m class_schedule.term_builder 26S.xlsx changes/2027S.toml -o 27S_draft.xlsx
+#   uv run class-schedule --config config draft 27S `
+#     work/27S/normalized/sections.csv inputs/27S/changes.toml
 #
-# The output is a *draft* -- upload it to the web app (or feed it to
-# solver.solve()) same as any other schedule file to see conflicts, run
-# the solver, and check overload. This file never touches
+# The output is a *draft* -- pass it to `class-schedule solve` to see
+# conflicts, run the solver, and check overload. This file never touches
 # config/persons.toml or preferences.toml -- names in `departures` below
-# still need their [[persons]]/[[instructors]] blocks removed by hand
-# (term_builder.summarize_roster_impact will tell you if a name here
-# doesn't match anyone in persons.toml, which almost always means a
-# typo).
+# still need their [[persons]] blocks removed by hand. The draft command
+# reports names that do not occur in the source schedule, which usually
+# indicates a typo.
 
 # ---- who left ----------------------------------------------------------
 # Exact name as it appears in the *template* schedule's Instructor column
@@ -49,23 +48,28 @@ new_hires = [
 # number = "2243"
 # # no section -> cancels every MATH 2243 section in the template
 
+# Replace the MATH 3203 regular/honors cross-list with MATH 4123.
+[[cancel_courses]]
+subject = "MATH"
+number = "3203"
+
 # ---- new courses to add --------------------------------------------------
 # One table per CSV row -- same fields as an uploaded schedule file
-# (Subject/Number/Section required; "Time Slot" -- or Days+Start -- and
-# Duration -- or Credits -- needed for anything meeting in person). Leave
+# (Subject/Number/Section required; physical meetings need "Time Slot" --
+# or Days+Start -- plus Duration -- or Start+End). Leave
 # Instructor blank/omitted to have it filled with the placeholder
 # ("Staff" by default): after solving, any section still assigned to the
 # placeholder is exactly the "nobody on staff is qualified/available for
 # this" signal to act on -- add that course to an existing person's
 # `courses` list in persons.toml, or count it toward a hiring need. Give
 # it a real Days/Start/Duration when a physical meeting must be scheduled.
-# ONLINE/TBA rows keep their delivery/time/room unchanged, but the solver
-# can still replace Staff with a qualified instructor.
+# ONLINE/TBA/blank-time rows keep their delivery/time/room unchanged, but
+# the solver can still replace Staff with a qualified instructor.
 #
-# Two rows with matching Subject/Number/Instructor/day-pattern (or a
-# shared Cross-List value) are grouped into one
-# four-credit/hybrid/coreq/cross-listed class automatically -- just list
-# both rows, same as in a CSV upload.
+# Multi-row offerings use the same strict atomic rules as CSV input:
+# same-course/section MWF+T/R for four-credit, an M/F-prefixed physical plus
+# non-physical row for Hybrid, a shared Cross-List/known pair for cross-list,
+# or a whitelisted same-section coreq pair. List both source rows.
 #
 # [[new_courses]]
 # Subject = "MATH"
@@ -80,11 +84,36 @@ new_hires = [
 # Building = ""
 # Instructor = ""
 
+[[new_courses]]
+Subject = "MATH"
+Number = "4123"
+Section = "001"
+Type = "Lecture"
+Title = "MATHEMATICAL MODELING"
+Credits = 3
+"Time Slot" = "MWF 8:00am"
+Duration = 50
+Room = "268"
+Building = "Corley"
+Instructor = ""
+
+[[new_courses]]
+Subject = "MATH"
+Number = "4123"
+Section = "H01"
+Type = "Lecture"
+Title = "HONORS MATHEMATICAL MODELING"
+Credits = 3
+"Time Slot" = "MWF 8:00am"
+Duration = 50
+Room = "268"
+Building = "Corley"
+Instructor = ""
+
 # section_demand flagged these three atomic courses as full enough to
-# support one more section (see docs/section_demand.md) -- MATH 1003
+# support one more section (see docs/demand-analysis.md) -- MATH 1003
 # standalone, the MATH 0803/1003 coreq pair (two rows, same section
-# code "004", back-to-back with matching blank rooms so
-# CoreqClass.is_valid_schedule accepts the pairing), and STAT 2163.
+# code "004", back-to-back in the same physical room), and STAT 2163.
 # Times are staggered so none of these three collide with each other
 # once they're all sitting on the shared "Staff" placeholder.
 
@@ -110,8 +139,8 @@ Title = "FOUNDATIONS OF COLLEGE MATH"
 Credits = 3
 "Time Slot" = "MWF 11:00am"
 Duration = 50
-Room = ""
-Building = ""
+Room = "269"
+Building = "Corley"
 Instructor = ""
 
 [[new_courses]]
@@ -123,8 +152,8 @@ Title = "COLLEGE MATHEMATICS"
 Credits = 3
 "Time Slot" = "MWF 11:50am"
 Duration = 50
-Room = ""
-Building = ""
+Room = "269"
+Building = "Corley"
 Instructor = ""
 
 [[new_courses]]

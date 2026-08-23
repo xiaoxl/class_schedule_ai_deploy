@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "term": "27S",
   "version": "ver5",
   "parent": "ver3",
@@ -29,7 +29,6 @@
       }
     ]
   },
-  "overrides_sha256": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c",
   "selected_attempt": 1,
   "solver": {
     "status": "feasible",
@@ -49,6 +48,12 @@
     "report.md": "b233f9e5a32de7c048165df57615d0a359bd0a49f59d7d98329f801ad958de41",
     "attempts.csv": "bbbf773a5b31596e82d2af2cfc9747f8ace3a91a1f18ee12d23828a3212da277",
     "changes.csv": "9969ef38015e77969ce362228d297115605f53c813ffb07c004013c7e4f9238b",
-    "overrides.toml": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c"
+    "applied_overrides.toml": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c"
+  },
+  "applied_overrides_sha256": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c",
+  "override_workspace": {
+    "path": "overrides.toml",
+    "mutable": true,
+    "source_version": "ver5"
   }
 }

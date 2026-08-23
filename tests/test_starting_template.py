@@ -150,6 +150,16 @@ class RecolorPlaceholderTests(unittest.TestCase):
         self.assertEqual(set(assignments), {"Staff"})
         self.assertEqual(check_conflicts(recolored), [])
 
+    def test_existing_numbered_placeholders_collapse_when_no_longer_needed(self):
+        a = make_class("1113", "001", "MWF 9:00am", instructor="Staff")
+        b = make_class("1003", "001", "MWF 10:00am", instructor="Staff 2")
+        recolored, assignments = recolor_placeholder(Schedule([a, b]), seed=1)
+        self.assertEqual(set(assignments), {"Staff"})
+        self.assertEqual(
+            {s.instructor for item in recolored.classes for s in item.sections},
+            {"Staff"},
+        )
+
     def test_two_overlapping_classes_split_into_two_identities(self):
         a = make_class("1113", "001", "MWF 9:00am", room="101")
         b = make_class("1003", "001", "MWF 9:00am", room="102")

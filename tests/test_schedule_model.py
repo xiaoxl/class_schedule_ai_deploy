@@ -8,6 +8,8 @@ from class_schedule.schedule_model import (
     Schedule,
     check_conflicts,
     check_soft_preferences,
+    evaluate_schedule,
+    teaching_loads,
 )
 
 
@@ -64,6 +66,15 @@ class CheckConflictsTests(unittest.TestCase):
 
 
 class GroupingTests(unittest.TestCase):
+    def test_invalid_section_is_reported_as_grouping_error_with_source_row(self):
+        record = make_record(Section="")
+
+        with self.assertRaises(GroupingError) as caught:
+            Schedule.from_records([record])
+
+        self.assertEqual(caught.exception.records[0]["Subject"], "MATH")
+        self.assertIn("Section", str(caught.exception))
+
     def test_mwf_and_tr_same_course_same_instructor_groups_as_four_credit(self):
         records = [
             make_record(**{"Time Slot": "MWF 9:00am"}, Duration=50),
@@ -81,6 +92,64 @@ class GroupingTests(unittest.TestCase):
         schedule = Schedule.from_records(records)
         self.assertEqual(len(schedule), 1)
         self.assertIsInstance(schedule.classes[0], CrossListingClass)
+
+    def test_known_cross_list_without_source_marker_groups_and_counts_once(self):
+        records = [
+            make_record(
+                Subject="MATH", Number="5173", Section="TC1",
+                **{"Time Slot": "TBA"}, Duration="", Room="",
+                Instructor="Jordan, Scott M.",
+            ),
+            make_record(
+                Subject="STAT", Number="4173", Section="TC1",
+                **{"Time Slot": "TBA"}, Duration="", Room="",
+                Instructor="Jordan, Scott M.",
+            ),
+        ]
+        schedule = Schedule.from_records(records)
+        self.assertEqual(len(schedule), 1)
+        self.assertIsInstance(schedule.classes[0], CrossListingClass)
+        self.assertEqual(teaching_loads(schedule)["Jordan, Scott M."], 3)
+        evaluation = evaluate_schedule(
+            schedule,
+            {},
+            {"Jordan, Scott M.": PersonRecord(
+                name="Jordan, Scott M.", max_load=3
+            )},
+        )
+        self.assertEqual(evaluation.atomic_classes, 1)
+        self.assertEqual(evaluation.row_count, 2)
+        self.assertEqual(evaluation.loads["Jordan, Scott M."], 3)
+        self.assertEqual(evaluation.hard_violations, ())
+        self.assertEqual(evaluation.soft_penalty, 0)
+        self.assertTrue(all(
+            not section.cross_list for section in schedule.classes[0].sections
+        ))
+
+    def test_known_cross_list_different_sections_remain_separate(self):
+        records = [
+            make_record(Subject="MATH", Number="5173", Section="TC1"),
+            make_record(Subject="STAT", Number="4173", Section="TC2"),
+        ]
+        schedule = Schedule.from_records(records)
+        self.assertEqual(len(schedule), 2)
+
+    def test_legacy_configured_marker_is_removed_on_import(self):
+        records = [
+            make_record(
+                Subject="MATH", Number="5173", Section="TC1",
+                **{"Cross-List": "configured:MATH 5173|STAT 4173"},
+            ),
+            make_record(
+                Subject="STAT", Number="4173", Section="TC1",
+                **{"Cross-List": "configured:MATH 5173|STAT 4173"},
+            ),
+        ]
+        schedule = Schedule.from_records(records)
+        self.assertEqual(len(schedule), 1)
+        self.assertTrue(all(
+            not section.cross_list for section in schedule.classes[0].sections
+        ))
 
     def test_honors_pair_without_cross_list_column_still_groups(self):
         records = [
@@ -116,10 +185,9 @@ class GroupingTests(unittest.TestCase):
         # Shaped exactly like ATU's "Course Schedule Report" export (see
         # examples/Course Schedule Report_*.csv): Meeting_Days/
         # Meeting_Times instead of Time Slot/Duration, and "Unassigned"
-        # (not blank) for the online row's Room/Building. Both quirks
-        # used to make this look like two same-course-same-instructor
-        # rows with no time at all (an ambiguous, wrongly-rejected
-        # four-credit attempt) instead of a real Hybrid pair.
+        # (not blank) for the online row's Room/Building. Normalization must
+        # produce one nonphysical and one physical record before strict Hybrid
+        # grouping runs.
         records = [
             {
                 "Subject": "MATH", "Number": "1113", "Section": "F01",

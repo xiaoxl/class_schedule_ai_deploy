@@ -5,7 +5,7 @@ Two inputs, joined on CRN:
 
   - a schedule export (see ``load_schedule_rows`` and
     ``docs/demand-analysis.md`` for the exact required shape -- the same
-    "Course Schedule Report" CSV format ``term_builder`` reads);
+    "Course Schedule Report" CSV format accepted by ``schedule_io``);
   - a Cube1 headcount export (see ``load_headcounts`` /
     ``docs/demand-analysis.md``) -- one row per CRN with a
     "Course Start Date Headcount" and a "Final Headcount".
@@ -24,7 +24,7 @@ specific to this module's own "is this one thing" question:
     taken together, so pooling them with either course's *standalone*
     sections would be wrong in both directions;
   - likewise a genuine cross-listing between two different subjects;
-  - a hybrid pairing (one course, but the "F"/"M"-prefixed hyflex
+  - a hybrid pairing (one course, but the "F"/"M"-prefixed Hybrid
     offering) is its own bucket, keyed ``"MATH 1113 (Hybrid)"`` -- a
     materially different offering from that course's plain sections, not
     pooled with them;
@@ -55,10 +55,9 @@ capacity:
 
     total_enrollment / (section_count + 1)  >  0.5 * (total_capacity / section_count)
 
-An online/TBA section has no physical room, so no real capacity figure
--- assumed at a flat ``DEFAULT_ONLINE_CAPACITY`` (30 seats) instead of
-being excluded, so a partly- or entirely-online bucket still gets a real
-recommendation rather than being skipped.
+A row without a usable room-capacity value (normally ONLINE, TBA, or
+arranged) is assigned ``DEFAULT_ONLINE_CAPACITY`` (30 seats) instead of
+being excluded, so its bucket still gets a recommendation.
 """
 
 from __future__ import annotations
@@ -70,13 +69,13 @@ import pandas as pd
 
 from . import record_utils
 from .class_model import Class, HybridClass
+from .schedule_io import read_table
 from .schedule_model import Schedule
 
 REQUIRED_SCHEDULE_COLUMNS = ("Subject", "Number", "Section", "Instructor", "CRN", "Seats_Avail")
 
-# An online/TBA section has no room, so no real capacity figure -- assumed
-# flat instead of excluding it from the capacity math entirely, so a
-# partly- or entirely-online course still gets a real recommendation.
+# A missing room-capacity value uses a flat fallback instead of excluding
+# the section from capacity math.
 DEFAULT_ONLINE_CAPACITY = 30.0
 
 
@@ -93,8 +92,8 @@ class SeatsAvail:
     override, i.e. ``max_enrolled = 0``, hence a "seats available" of
     ``-headcount``). ``room_capacity`` is a separate, independent figure
     -- the physical room's own capacity -- and is what this module's
-    aggregate math actually uses; ``None`` for an online/TBA section
-    ("na" in the source column, no room to have a capacity).
+    aggregate math actually uses; ``None`` means no usable capacity was
+    supplied (commonly "na" for a non-physical section).
     """
 
     seats_available: float | None
@@ -105,8 +104,7 @@ class SeatsAvail:
 def parse_seats_avail(value: object) -> SeatsAvail:
     """Parse one "Seats_Avail" cell. Any shape other than exactly three
     ``/``-separated parts (including a blank cell) parses as all-``None``
-    -- callers that need capacity data treat that the same as an
-    online/TBA section (no room capacity to size against)."""
+    -- callers that need capacity data apply the missing-capacity fallback."""
     text = record_utils.text(value)
     parts = [p.strip() for p in text.split("/")]
     if len(parts) != 3:
@@ -157,8 +155,7 @@ def load_headcounts(path: str | Path) -> dict[str, tuple[float, float]]:
 
 def load_schedule_rows(path: str | Path) -> pd.DataFrame:
     """Read a schedule export CSV/XLSX, ``dtype=str`` throughout (a CRN or
-    course Number read as a numeric type silently strips leading zeros --
-    the same reason ``term_builder``/``webapp`` both force this too), and
+    course Number read as a numeric type silently strips leading zeros), and
     validate it has every column this module needs directly (beyond what
     ``Schedule.from_dataframe`` itself already requires for grouping).
     Raises ``ValueError`` naming exactly what's missing rather than a
@@ -166,11 +163,7 @@ def load_schedule_rows(path: str | Path) -> pd.DataFrame:
     ``docs/demand-analysis.md`` for the required shape.
     """
     path = Path(path)
-    dataframe = (
-        pd.read_csv(path, dtype=str)
-        if path.suffix.lower() == ".csv"
-        else pd.read_excel(path, dtype=str)
-    )
+    dataframe = read_table(path)
     if "Seats_Avail" not in dataframe.columns and "Seats Available" in dataframe.columns:
         dataframe = dataframe.rename(columns={"Seats Available": "Seats_Avail"})
     missing = [c for c in REQUIRED_SCHEDULE_COLUMNS if c not in dataframe.columns]
@@ -185,7 +178,7 @@ def load_schedule_rows(path: str | Path) -> pd.DataFrame:
 def _row_key(subject: str, number: str, section: str, instructor: str) -> tuple[str, str, str, str]:
     """A raw schedule row's natural key, in exactly the normalized shape
     ``Section``'s own fields end up in (see ``class_model.Section.__post_init__``)
-    -- used to match a grouped ``Class``'s ``Section`` back to the original
+    and matches a grouped ``Class``'s ``Section`` back to the original
     row that carried its CRN, which the ``Section``/``Class`` model itself
     has no field for and so can't carry through its own grouping pass."""
     return (
@@ -211,10 +204,10 @@ class CourseDemand:
     ``section_enrollments`` holds one entry per section in CRN-lookup
     order, ``None`` where that section's CRN had no Cube1 match --
     ``total_enrollment`` already excludes those, this is for a
-    per-section breakdown report. ``online_section_count`` (out of
-    ``section_count``) used ``DEFAULT_ONLINE_CAPACITY`` rather than a
-    real room capacity -- kept separate for transparency even though
-    it's already folded into ``total_capacity``.
+    per-section breakdown report. For compatibility, ``online_section_count``
+    is the count of sections using ``DEFAULT_ONLINE_CAPACITY`` because no
+    usable room capacity was present; it may include malformed physical rows.
+    The fallback is already folded into ``total_capacity``.
     """
 
     course: str
@@ -250,7 +243,10 @@ class CourseDemand:
         return self.projected_avg_enrollment > 0.5 * avg_capacity
 
 
-def analyze(schedule_path: str | Path, cube_path: str | Path) -> list[CourseDemand]:
+def analyze(
+    schedule_path: str | Path,
+    cube_path: str | Path,
+) -> list[CourseDemand]:
     """Cross-reference ``schedule_path`` against ``cube_path`` and return
     one ``CourseDemand`` per atomic course bucket, sorted by bucket name.
     See the module docstring for the full method.
@@ -420,7 +416,7 @@ def _main() -> None:
     has_online = [d for d in results if d.online_section_count]
     if has_online:
         print(
-            f"\nCourses with online/TBA sections "
+            f"\nCourses with missing-capacity fallback sections "
             f"(capacity assumed at {DEFAULT_ONLINE_CAPACITY:g}/section):"
         )
         for d in has_online:

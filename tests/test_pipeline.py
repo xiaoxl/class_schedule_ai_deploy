@@ -9,9 +9,15 @@ import pandas as pd
 
 from class_schedule.class_model import NormalClass, Section
 from class_schedule.data_cleaning import NORMALIZED_COLUMNS, clean_dataframe, clean_file
-from class_schedule.overrides import apply_overrides, load_overrides, locks_for_section
+from class_schedule.overrides import (
+    apply_overrides,
+    load_overrides,
+    locks_for_section,
+    validate_override_context,
+)
 from class_schedule.schedule_model import Schedule
-from class_schedule.solver import MeetingPattern, RoomRecord, SolverConfig
+from class_schedule.schedule_io import read_schedule
+from class_schedule.solver import MeetingPattern, RoomRecord, SolverConfig, diff_schedules
 from class_schedule.solver.candidates import section_candidates
 from class_schedule.solver.config import resolve_config_paths
 
@@ -49,6 +55,38 @@ class DataCleaningTests(unittest.TestCase):
             self.assertTrue((destination / "rejected_rows.csv").is_file())
             self.assertTrue((destination / "validation.md").is_file())
             self.assertTrue((destination / "source_manifest.json").is_file())
+
+    def test_known_cross_list_stays_unmarked_but_groups_during_validation(self):
+        frame = pd.DataFrame([
+            {"Subject": "MATH", "Number": "5173", "Section": "TC1",
+             "Time Slot": "TBA", "Instructor": "Jordan, Scott M."},
+            {"Subject": "STAT", "Number": "4173", "Section": "TC1",
+             "Time Slot": "TBA", "Instructor": "Jordan, Scott M."},
+        ])
+        result = clean_dataframe(frame)
+        self.assertEqual(len(set(result.normalized["Cross-List"])), 1)
+        self.assertEqual(result.normalized.iloc[0]["Cross-List"], "")
+        self.assertEqual(len(Schedule.from_dataframe(result.normalized)), 1)
+
+
+class ScheduleIOTests(unittest.TestCase):
+    def test_csv_becomes_a_grouped_schedule_at_the_file_boundary(self):
+        frame = pd.DataFrame([
+            {"Subject": "MATH", "Number": "5173", "Section": "TC1",
+             "Time Slot": "TBA", "Instructor": "Jordan, Scott M."},
+            {"Subject": "STAT", "Number": "4173", "Section": "TC1",
+             "Time Slot": "TBA", "Instructor": "Jordan, Scott M."},
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "schedule.csv"
+            frame.to_csv(path, index=False)
+            schedule = read_schedule(path)
+
+        self.assertEqual(len(schedule), 1)
+        self.assertEqual(
+            set(schedule.classes[0].course_ids),
+            {"MATH 5173-TC1", "STAT 4173-TC1"},
+        )
 
 
 class OverrideTests(unittest.TestCase):
@@ -95,6 +133,20 @@ class OverrideTests(unittest.TestCase):
         self.assertTrue(candidates)
         self.assertEqual({candidate.time_slot for candidate in candidates}, {"MWF 9:00am"})
 
+    def test_version_bound_override_rejects_the_wrong_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "overrides.toml"
+            path.write_text(
+                'term = "27S"\nsource_version = "ver10"\n',
+                encoding="utf-8",
+            )
+            overrides = load_overrides(path)
+        validate_override_context(overrides, term="27S", source_version="ver10")
+        with self.assertRaisesRegex(ValueError, "source_version"):
+            validate_override_context(overrides, term="27S", source_version="ver9")
+        with self.assertRaisesRegex(ValueError, "term"):
+            validate_override_context(overrides, term="27F", source_version="ver10")
+
 
 class ConfigLayoutTests(unittest.TestCase):
     def test_term_files_override_flat_files(self):
@@ -110,6 +162,45 @@ class ConfigLayoutTests(unittest.TestCase):
             paths = resolve_config_paths(root, "27S")
             self.assertEqual(paths["preferences.toml"].parent.name, "27S")
             self.assertEqual(paths["persons.toml"].parent.name, "catalog")
+
+
+class CumulativeDiffTests(unittest.TestCase):
+    def test_matches_by_course_identity_not_row_position(self):
+        first = NormalClass((Section(
+            "MATH", "1113", "001", "MWF 9:00am", 50,
+            "101", "Alice", "Corley",
+        ),))
+        second = NormalClass((Section(
+            "MATH", "2103", "002", "MWF 10:00am", 50,
+            "102", "Bob", "Corley",
+        ),))
+        changed_first = NormalClass((Section(
+            "MATH", "1113", "001", "MWF 11:00am", 50,
+            "101", "Alice", "Corley",
+        ),))
+        changes = diff_schedules(
+            Schedule([first, second]), Schedule([second, changed_first])
+        )
+        self.assertEqual(
+            [(change.course_id, change.field) for change in changes],
+            [("MATH 1113-001", "time")],
+        )
+
+    def test_reports_added_and_removed_sections(self):
+        before = Schedule([NormalClass((Section(
+            "MATH", "1113", "001", "ONLINE", None, "", "Alice",
+        ),))])
+        after = Schedule([NormalClass((Section(
+            "MATH", "2103", "002", "ONLINE", None, "", "Bob",
+        ),))])
+        changes = diff_schedules(before, after)
+        self.assertEqual(
+            [(change.course_id, change.field, change.after) for change in changes],
+            [
+                ("MATH 1113-001", "status", "removed"),
+                ("MATH 2103-002", "status", "added"),
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -43,13 +43,27 @@ def allowed_pattern_types(item: Class, section: Section) -> frozenset[str]:
 
 
 def candidate_instructors(
-    section: Section, persons: dict[str, PersonRecord]
+    section: Section,
+    persons: dict[str, PersonRecord],
+    placeholder_instructors: tuple[str, ...] = (),
 ) -> list[str]:
     course = f"{section.subject} {section.number}"
     names = {name for name, person in persons.items() if course in person.courses}
     if section.instructor:
         names.add(section.instructor)
+    if section.instructor in placeholder_instructors:
+        names.update(placeholder_instructors)
     return sorted(names)
+
+
+def instructor_change_cost(
+    before: str, after: str, placeholder_instructors: tuple[str, ...]
+) -> float:
+    if before == after:
+        return 0.0
+    if before in placeholder_instructors and after in placeholder_instructors:
+        return 0.0
+    return INSTRUCTOR_CHANGE_COST
 
 
 def preference_cost(
@@ -77,15 +91,26 @@ def preference_cost(
             cost += rule.signed_weight
     if preference is None:
         return cost
+    cost -= sum(
+        DISLIKED_TIME_PENALTY
+        for window in preference.preferred_times
+        if window.overlaps(days, start, end)
+    )
     cost += sum(
         DISLIKED_TIME_PENALTY
         for window in preference.disliked_times
         if window.overlaps(days, start, end)
     )
+    if preference.preferred_locations and location_matches(
+        building, room, preference.preferred_locations
+    ):
+        cost -= DISLIKED_LOCATION_PENALTY
     if preference.disliked_locations and location_matches(
         building, room, preference.disliked_locations
     ):
         cost += DISLIKED_LOCATION_PENALTY
+    if course in preference.preferred_courses:
+        cost -= DISLIKED_COURSE_PENALTY
     if course in preference.disliked_courses:
         cost += DISLIKED_COURSE_PENALTY
     if preference.prefers_online and days is not None:
@@ -99,6 +124,7 @@ def section_candidates(
     max_candidates: int,
     allowed_types: frozenset[str],
     locked_fields: frozenset[str] = frozenset(),
+    placeholder_instructors: tuple[str, ...] = (),
 ) -> list[SectionCandidate]:
     course = f"{section.subject} {section.number}"
     current = SectionCandidate(
@@ -116,7 +142,9 @@ def section_candidates(
             config.preferences, config.global_rules,
         ),
     )
-    instructors = candidate_instructors(section, config.persons) or [section.instructor]
+    instructors = candidate_instructors(
+        section, config.persons, placeholder_instructors
+    ) or [section.instructor]
     if section.is_online:
         result = sorted((
             SectionCandidate(
@@ -128,7 +156,9 @@ def section_candidates(
                 end=None,
                 room=section.room,
                 building=section.building,
-                cost=(INSTRUCTOR_CHANGE_COST if instructor != section.instructor else 0.0)
+                cost=instructor_change_cost(
+                    section.instructor, instructor, placeholder_instructors
+                )
                 + preference_cost(
                     instructor, None, None, None, section.building, section.room,
                     course, section.section, config.preferences, config.global_rules,
@@ -163,7 +193,9 @@ def section_candidates(
                 time_slot = record_utils.format_slot(pattern.days, start)
                 for room in rooms:
                     cost = (
-                        (INSTRUCTOR_CHANGE_COST if instructor != section.instructor else 0.0)
+                        instructor_change_cost(
+                            section.instructor, instructor, placeholder_instructors
+                        )
                         + (TIME_CHANGE_COST if time_slot != section.time_slot else 0.0)
                         + (ROOM_CHANGE_COST if (room.building, room.room) != (
                             section.building, section.room
@@ -208,11 +240,3 @@ def apply_candidate(section: Section, candidate: SectionCandidate) -> Section:
         room=candidate.room,
         building=candidate.building,
     )
-
-
-# Backward-compatible internal names used by tests and older callers.
-_allowed_pattern_types = allowed_pattern_types
-_candidate_instructors = candidate_instructors
-_preference_cost = preference_cost
-_section_candidates = section_candidates
-_apply_candidate = apply_candidate

@@ -7,9 +7,12 @@ from class_schedule.schedule_model import (
     PreferenceRecord,
     PreferenceRule,
     Schedule,
+    TimeWindow,
     check_conflicts,
+    teaching_loads,
 )
 from class_schedule.solver import NoFeasibleSchedule, MeetingPattern, RoomRecord, SolverConfig, solve
+from class_schedule.solver.candidates import preference_cost
 
 
 def make_section(**overrides) -> Section:
@@ -33,6 +36,38 @@ def empty_config(**overrides) -> SolverConfig:
     return SolverConfig(**defaults)
 
 
+class NamedPreferenceCostTests(unittest.TestCase):
+    def test_matching_preferred_fields_reward_the_candidate(self):
+        preference = PreferenceRecord(
+            name="Alice",
+            preferred_times=(TimeWindow(
+                frozenset("MWF"), datetime.time(8), datetime.time(10)
+            ),),
+            preferred_locations=("Corley",),
+            preferred_courses=("MATH 1113",),
+        )
+        cost = preference_cost(
+            "Alice", "MWF", datetime.time(9), datetime.time(9, 50),
+            "Corley", "101", "MATH 1113", "001", {"Alice": preference},
+        )
+        self.assertEqual(cost, -15.0)
+
+    def test_nonmatching_preferred_fields_do_not_change_cost(self):
+        preference = PreferenceRecord(
+            name="Alice",
+            preferred_times=(TimeWindow(
+                frozenset("TR"), datetime.time(13), datetime.time(15)
+            ),),
+            preferred_locations=("Rothwell",),
+            preferred_courses=("MATH 2934",),
+        )
+        cost = preference_cost(
+            "Alice", "MWF", datetime.time(9), datetime.time(9, 50),
+            "Corley", "101", "MATH 1113", "001", {"Alice": preference},
+        )
+        self.assertEqual(cost, 0.0)
+
+
 class SolveResolvesConflictsTests(unittest.TestCase):
     def test_shifts_one_class_to_an_alternate_time_to_clear_a_real_conflict(self):
         a = NormalClass((make_section(number="1113", section="001"),))
@@ -51,6 +86,37 @@ class SolveResolvesConflictsTests(unittest.TestCase):
             rooms=[RoomRecord(building="Corley", room="101")],
         )
         solved = solve(schedule, config, time_limit_seconds=10.0)
+        self.assertEqual(check_conflicts(solved), [])
+
+
+class SolveAdjustsPlaceholderCountTests(unittest.TestCase):
+    def test_collapses_numbered_staff_when_times_do_not_conflict(self):
+        a = NormalClass((make_section(
+            number="1113", section="001", instructor="Staff",
+            time_slot="MWF 9:00am", room="101",
+        ),))
+        b = NormalClass((make_section(
+            number="2103", section="002", instructor="Staff 2",
+            time_slot="MWF 10:00am", room="102",
+        ),))
+        solved = solve(Schedule([a, b]), empty_config(), time_limit_seconds=10.0)
+        self.assertEqual(
+            {s.instructor for item in solved.classes for s in item.sections},
+            {"Staff"},
+        )
+
+    def test_adds_numbered_staff_for_overlapping_placeholder_courses(self):
+        a = NormalClass((make_section(
+            number="1113", section="001", instructor="Staff", room="101",
+        ),))
+        b = NormalClass((make_section(
+            number="2103", section="002", instructor="Staff", room="102",
+        ),))
+        solved = solve(Schedule([a, b]), empty_config(), time_limit_seconds=10.0)
+        instructors = {
+            s.instructor for item in solved.classes for s in item.sections
+        }
+        self.assertEqual(instructors, {"Staff", "Staff 2"})
         self.assertEqual(check_conflicts(solved), [])
 
 
@@ -79,6 +145,20 @@ class SolveExemptsAClasssOwnSectionsTests(unittest.TestCase):
         schedule = Schedule([honors])
         solved = solve(schedule, empty_config(), time_limit_seconds=10.0)
         self.assertEqual(check_conflicts(solved), [])
+
+    def test_cross_listing_counts_once_in_solver_result_load(self):
+        left = make_section(
+            subject="MATH", number="5173", section="TC1",
+            instructor="Alice", time_slot="TBA", duration=None, room="",
+        )
+        right = make_section(
+            subject="STAT", number="4173", section="TC1",
+            instructor="Alice", time_slot="TBA", duration=None, room="",
+        )
+        left.cross_list = right.cross_list = "advanced_biostatistics"
+        schedule = Schedule([CrossListingClass((left, right))])
+        solved = solve(schedule, empty_config(), time_limit_seconds=10.0)
+        self.assertEqual(teaching_loads(solved)["Alice"], 3)
 
 
 class SolveHonorsPreferenceRulesTests(unittest.TestCase):

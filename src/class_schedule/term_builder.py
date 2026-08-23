@@ -3,15 +3,15 @@ term's starting draft.
 
 Two inputs feed ``build_draft_schedule``:
 
-  - a template ``Schedule`` -- last term's parsed schedule (e.g.
-    ``Schedule.from_dataframe(pd.read_csv("26S.csv"))``);
-  - a ``TermChanges`` -- this term's edits (who left, what's newly
-    offered, what's cancelled), loaded from a small TOML file via
+  - a template ``Schedule`` -- last term's parsed schedule, normally loaded
+    through ``schedule_io.read_schedule``;
+  - a ``TermChanges`` -- this term's departures, new hires, additions, and
+    cancellations, loaded from a small TOML file via
     ``load_changes``. See ``inputs/TEMPLATE/changes.toml`` for the file format
     and a full walkthrough.
 
-The result is a draft ``Schedule`` ready for the CLI solve stage or a direct
-``solver.solve()`` call: cancelled courses are dropped, every
+The result is a draft ``Schedule`` ready for the CLI or Python solve stage:
+cancelled courses are dropped, every
 section a departed instructor was teaching is reassigned to a
 placeholder instructor (so the solver treats it as open rather than
 pinned to someone who's gone), and newly offered courses are appended,
@@ -19,9 +19,7 @@ grouped exactly the way ``Schedule.from_records`` groups any other CSV
 rows -- a four-credit/hybrid/coreq/cross-listed new offering is
 recognized automatically from its own two rows, same as an upload.
 
-This module never writes persons.toml or preferences.toml --
-``summarize_roster_impact`` only reports whether ``departures`` matches
-real persons.toml names, it never writes either file. A departed
+This module never writes persons.toml or preferences.toml. A departed
 person's max_load/preferences entry still needs to be removed by hand.
 """
 
@@ -32,11 +30,9 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-import pandas as pd
-
 from . import record_utils
 from .class_model import Class
-from .schedule_model import PersonRecord, Schedule
+from .schedule_model import Schedule
 
 DEFAULT_PLACEHOLDER_INSTRUCTOR = "Staff"
 
@@ -110,20 +106,6 @@ def load_changes(path: str | Path) -> TermChanges:
         departures=departures, new_hires=new_hires,
         cancel=cancel, new_sections=new_sections,
     )
-
-
-def summarize_roster_impact(
-    changes: TermChanges, persons: Mapping[str, PersonRecord]
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Split ``changes.departures`` into (matches a persons.toml name,
-    doesn't). The second group is almost always a typo -- this module
-    never edits persons.toml itself, so every name in the first group
-    still needs its ``[[persons]]``/``[[instructors]]`` block removed by
-    hand before the roster actually reflects the departure.
-    """
-    confirmed = tuple(name for name in changes.departures if name in persons)
-    unknown = tuple(name for name in changes.departures if name not in persons)
-    return confirmed, unknown
 
 
 def _cancels(item: Class, spec: CancelSpec) -> bool:
@@ -224,91 +206,3 @@ def build_draft_schedule(
         added=tuple(added),
     )
     return draft, report
-
-
-def build_draft(
-    template_path: str | Path,
-    changes_path: str | Path,
-    *,
-    output_path: str | Path | None = None,
-    placeholder_instructor: str = DEFAULT_PLACEHOLDER_INSTRUCTOR,
-) -> tuple[Schedule, DraftReport]:
-    """Read last term's schedule file plus this term's change-list TOML,
-    and return next term's draft ``Schedule`` plus a report of what
-    changed. Pass ``output_path`` to also write the draft out as an
-    Excel file, ready to feed into the CLI solve stage or directly into
-    ``solver.solve()``.
-    """
-    template_path = Path(template_path)
-    # dtype=str -- without it pandas silently infers numeric types for
-    # numeric-looking text columns (course "Number", "Room", "Section",
-    # ...), stripping leading zeros ("0803" -> 803, "001" -> 1). See the
-    # identical comment on webapp._read_dataframe, which this mirrors.
-    dataframe = (
-        pd.read_csv(template_path, dtype=str)
-        if template_path.suffix.lower() == ".csv"
-        else pd.read_excel(template_path, dtype=str)
-    )
-    template = Schedule.from_dataframe(dataframe.dropna(how="all"))
-    changes = load_changes(changes_path)
-    draft, report = build_draft_schedule(
-        template, changes, placeholder_instructor=placeholder_instructor
-    )
-    if output_path is not None:
-        draft.to_raw_excel(output_path)
-    return draft, report
-
-
-def _main() -> None:
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description=(
-            "Build next term's draft schedule from last term's file plus "
-            "a change-list TOML (see inputs/TEMPLATE/changes.toml)."
-        )
-    )
-    parser.add_argument("template", help="last term's schedule (CSV/XLSX)")
-    parser.add_argument("changes", help="this term's change-list TOML")
-    parser.add_argument("-o", "--output", help="write the draft here (.xlsx)")
-    parser.add_argument(
-        "--placeholder",
-        default=DEFAULT_PLACEHOLDER_INSTRUCTOR,
-        help=(
-            "instructor placeholder for open sections "
-            f"(default: {DEFAULT_PLACEHOLDER_INSTRUCTOR!r})"
-        ),
-    )
-    args = parser.parse_args()
-
-    _, report = build_draft(
-        args.template,
-        args.changes,
-        output_path=args.output,
-        placeholder_instructor=args.placeholder,
-    )
-
-    print(f"Cancelled ({len(report.cancelled)}):")
-    for course_id in report.cancelled:
-        print(f"  - {course_id}")
-    if report.unmatched_cancels:
-        print("Cancel specs that matched nothing in the template (check for typos):")
-        for spec in report.unmatched_cancels:
-            section = f"-{spec.section}" if spec.section else " (all sections)"
-            print(f"  - {spec.subject} {spec.number}{section}")
-    print(f"Reassigned to placeholder ({len(report.reassigned)}):")
-    for course_id in report.reassigned:
-        print(f"  - {course_id}")
-    if report.departures_not_found:
-        print("Departures never seen as an instructor in the template (check spelling):")
-        for name in report.departures_not_found:
-            print(f"  - {name}")
-    print(f"Added ({len(report.added)}):")
-    for course_id in report.added:
-        print(f"  - {course_id}")
-    if args.output:
-        print(f"\nDraft written to {args.output}")
-
-
-if __name__ == "__main__":
-    _main()

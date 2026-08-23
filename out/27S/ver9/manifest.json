@@ -1,0 +1,65 @@
+{
+  "schema_version": 3,
+  "term": "27S",
+  "version": "ver9",
+  "parent": null,
+  "created_at": "2026-08-23T15:16:04.928099+00:00",
+  "input": {
+    "path": "work\\27S\\ver9\\draft\\starting.csv",
+    "sha256": "c7aed2862cbf80690bf325cd378a8b4c8422d1c5936455fa462638eb81f5364e"
+  },
+  "change_baseline": {
+    "path": "work\\27S\\ver9\\draft\\starting.csv",
+    "sha256": "c7aed2862cbf80690bf325cd378a8b4c8422d1c5936455fa462638eb81f5364e"
+  },
+  "configuration": {
+    "version": "b23b6042112a",
+    "files": [
+      {
+        "path": "config\\persons.toml",
+        "sha256": "449e69760401de3e84376d28e7efad175c25923ba53f2bd75f238c9ee8240913"
+      },
+      {
+        "path": "config\\preferences.toml",
+        "sha256": "823aeaab9aa0129f501c7a205e16eab48348a556ba043927fa0efa4cb78b7306"
+      },
+      {
+        "path": "config\\timeslot.toml",
+        "sha256": "9c11402bfdfa66f8d109320f1a75c62f1ffba1e123f5d9ff59299660ede8e22f"
+      },
+      {
+        "path": "config\\locations.toml",
+        "sha256": "a7793c98d7dce6425530886a73d9ac47e5f5909570b413c76378c22c6bd26f34"
+      }
+    ]
+  },
+  "selected_attempt": 1,
+  "solver": {
+    "status": "feasible",
+    "objective": -635.0,
+    "best_bound": -1315.0,
+    "random_seed": 544528199,
+    "time_limit_seconds": 45.0,
+    "attempts": 5
+  },
+  "validation": {
+    "hard_violations": 0,
+    "soft_penalty": 30.0,
+    "worst_overload": 2.0
+  },
+  "files": {
+    "27S_ver9.csv": "3f3ac50d4bbe8f997e6b0c1ae798e4c6d1b7e2358618870130d211a21999224b",
+    "report.md": "31ee896995aa6bd5b87f57a4acd5871dc95b35c405e4b01bbd9647c0c1ebc21b",
+    "attempts.csv": "285097c026cbbe4246dff65ecdb92e22c18ecfb41855dc468dc500190325fc7d",
+    "changes.csv": "93b009bdabed2c4ced18b3ead4a2f7ea49d94b4a8dbba191a70040f5d84d47d7",
+    "27S_ver9_instructor.xlsx": "6fde16bb3d64d986b3b8a3f8e72f5223b88e09ae084376dea74f487014252371",
+    "27S_ver9_room.xlsx": "471cff4597950005a1339d3a9b672023f01e4d0f8fea6867c7be06d7fe3ec1be",
+    "applied_overrides.toml": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c"
+  },
+  "applied_overrides_sha256": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c",
+  "override_workspace": {
+    "path": "overrides.toml",
+    "mutable": true,
+    "source_version": "ver9"
+  }
+}
