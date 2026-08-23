@@ -291,9 +291,8 @@ def print_starting_result(label: str, result: dict[str, object]) -> None:
     if len(placeholder_identities) > 1:
         print(
             f"{len(placeholder_identities)} distinct identities were still needed "
-            "to keep this draft conflict-free -- a lower bound on further hires "
-            "beyond the ones already placed above, not the final answer (still "
-            "run class-schedule solve against the qualified-instructor pool for "
-            "that)."
+            "by the draft's greedy conflict coloring. This is an operational "
+            "placeholder count, not a proven minimum or a hiring requirement; "
+            "run class-schedule solve against the qualified-instructor pool next."
         )
     print()

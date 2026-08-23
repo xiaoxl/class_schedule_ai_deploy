@@ -16,7 +16,8 @@ uv run class-schedule --config config draft 27S `
   work/27S/normalized/sections.csv inputs/27S/changes.toml
 
 uv run class-schedule --config config solve 27S `
-  --input work/27S/draft/starting.csv --attempts 5 --seconds 45
+  --input work/27S/draft/starting.csv `
+  --baseline work/27S/draft/starting.csv --attempts 5 --seconds 45
 
 # 编辑 out/27S/ver10/overrides.toml，启用 edit/lock 后刷新 final
 uv run class-schedule --config config final 27S ver10
