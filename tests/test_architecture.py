@@ -75,7 +75,10 @@ class SolverArchitectureTests(unittest.TestCase):
         return SolverConfig(
             persons={"Alice": PersonRecord("Alice", 3, courses)},
             preferences={},
-            meeting_patterns=[MeetingPattern("MWF", 50, (__import__("datetime").time(9),), frozenset({"standard"}))],
+            meeting_patterns=[MeetingPattern(
+                "MWF", 50, (__import__("datetime").time(9),),
+                frozenset({"normal", "cross_listing"}),
+            )],
             rooms=[RoomRecord("Corley", "101")],
             blackouts=[],
             version="test-config",

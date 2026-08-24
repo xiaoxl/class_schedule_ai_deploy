@@ -28,11 +28,9 @@ On top of both, two more passes run in this order:
    landing at an overlapping time would otherwise read as a same-
    instructor double-booking to ``check_conflicts`` -- not real, just an
    artifact of sharing one placeholder label. Whatever count of distinct
-   identities this step still needs, after
-   already-known hires are seated, is a lower bound on *further* new
-   hires -- not the final answer (that still wants a real
-   solve against the real qualified-instructor pool),
-   but a concrete signal available before running the solver at all.
+   identities this step still needs, after already-known hires are seated,
+   is an operational count for this greedy coloring, not a proven minimum
+   or a hiring requirement.
 
 Placement runs before recoloring, not after -- a real name only ever
 *removes* a class from the placeholder pool, so it can only shrink the
@@ -42,10 +40,17 @@ conflict graph recoloring has to color, never complicate it.
 from __future__ import annotations
 
 import random
+from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 
 from .class_model import Class
+from .pattern_rules import (
+    MeetingPatternLike,
+    TimeWindowLike,
+    matches_configured_pattern,
+    overlaps_blackout,
+)
 from .schedule_io import read_schedule
 from .schedule_model import (
     PersonRecord,
@@ -226,6 +231,8 @@ def build_starting_templates(
     output_dir: str | Path = ".",
     placeholder_instructor: str = DEFAULT_PLACEHOLDER_INSTRUCTOR,
     seed: int | None = None,
+    meeting_patterns: Iterable[MeetingPatternLike] | None = None,
+    blackouts: Iterable[TimeWindowLike] = (),
 ) -> dict[str, dict[str, object]]:
     """Build both starting-point CSVs (see the module docstring).
 
@@ -239,6 +246,25 @@ def build_starting_templates(
     template = read_schedule(template_path, persons=persons)
     changes = load_changes(changes_path)
     output_dir = Path(output_dir)
+
+    patterns = None if meeting_patterns is None else tuple(meeting_patterns)
+    blackout_windows = tuple(blackouts)
+    if patterns is not None and changes.new_sections:
+        additions = Schedule.from_records(changes.new_sections, persons=persons)
+        for item in additions:
+            for section in item.sections:
+                if section.is_online:
+                    continue
+                if not matches_configured_pattern(item, section, patterns):
+                    raise ValueError(
+                        f"New section {section.course_id} uses unconfigured meeting "
+                        f"{section.time_slot!r} ({section.duration} minutes)"
+                    )
+                if overlaps_blackout(section, blackout_windows):
+                    raise ValueError(
+                        f"New section {section.course_id} overlaps a configured blackout: "
+                        f"{section.time_slot!r}"
+                    )
 
     results: dict[str, dict[str, object]] = {}
     variants: tuple[tuple[str, TermChanges], ...] = (

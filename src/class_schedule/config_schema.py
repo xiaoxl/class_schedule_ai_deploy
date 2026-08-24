@@ -133,7 +133,17 @@ class MeetingPatternSchema(StrictModel):
     days: str
     duration_minutes: int = Field(gt=0)
     starts: list[str]
-    types: list[Literal["standard", "four_credit_partial", "coreq_short"]]
+    roles: list[Literal[
+        "normal",
+        "hybrid_physical",
+        "cross_listing",
+        "coreq",
+        "coreq_supplement",
+        "four_credit_primary",
+        "four_credit_partial",
+    ]]
+    courses: list[str] = Field(default_factory=list)
+    atomic_courses: list[str] = Field(default_factory=list)
 
     @field_validator("days")
     @classmethod
@@ -148,6 +158,39 @@ class MeetingPatternSchema(StrictModel):
         if not starts:
             raise ValueError("meeting pattern requires at least one start")
         return starts
+
+    @field_validator("roles")
+    @classmethod
+    def require_roles(cls, roles: list[str]) -> list[str]:
+        if not roles:
+            raise ValueError("meeting pattern requires at least one role")
+        if len(roles) != len(set(roles)):
+            raise ValueError("meeting pattern roles must not contain duplicates")
+        return roles
+
+    @field_validator("courses", "atomic_courses")
+    @classmethod
+    def validate_course_selectors(cls, courses: list[str]) -> list[str]:
+        invalid = [
+            course for course in courses
+            if not COURSE_PATTERN.fullmatch(course)
+        ]
+        if invalid:
+            raise ValueError(f"invalid course identifiers: {invalid}")
+        if len(courses) != len(set(courses)):
+            raise ValueError("course selectors must not contain duplicates")
+        return courses
+
+    @model_validator(mode="after")
+    def validate_selector_relationship(self):
+        if self.courses and self.atomic_courses:
+            outside = sorted(set(self.courses) - set(self.atomic_courses))
+            if outside:
+                raise ValueError(
+                    "courses must be contained in atomic_courses when both "
+                    f"selectors are set: {outside}"
+                )
+        return self
 
 
 class BlackoutSchema(TimeWindowSchema):

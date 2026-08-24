@@ -6,6 +6,7 @@
 ```text
 原始 CSV/XLSX
   -> read_table(): 只负责文件格式和文本类型
+  -> initialize: clean + 发布 change 前的 instructor/room 输入视图
   -> clean: 固定字段、拒绝坏行、保存源文件哈希
   -> normalized sections.csv
   -> read_schedule(): 构造 Section，再分组为 Schedule[原子课程]
@@ -44,7 +45,7 @@ cross-list 也在原子分组阶段统一识别，但不是向 DataFrame“注�
 `CrossListingClass.COURSE_PAIRS` 按相同 section 自动识别，输入和输出的
 `Cross-List` 都可以保持空白。
 
-CLI 的 `draft`、`solve`、`validate`、`diff`，版本发布和 starting template
+CLI 的 `initialize`、`draft`、`solve`、`validate`、`diff`，版本发布和 starting template
 都通过 `read_schedule()` 取得对象；term builder 只接收已经分组的 `Schedule`。
 负载统计、偏好评估、
 冲突检查、人工调整和 solver 不得依赖 `pandas`，也不得自行读取排课文件。
@@ -75,7 +76,7 @@ Excel 输出同样只处理 `Schedule`。
 
 | 目录 | 职责 | 是否手工编辑 |
 |---|---|---|
-| `inputs/<term>/` | 原始导出和学期滚动 `changes.toml` | 是 |
+| `inputs/<term>/` | 原始导出、change 前自动 Excel 视图和学期滚动 `changes.toml` | 原始文件和 changes 是；自动 Excel 否 |
 | `work/<term>/normalized/` | 清洗中间产物 | 否 |
 | `work/<term>/draft/` | 可求解的起始排课 | 通常否 |
 | `config/catalog/` | 推荐位置：跨学期人员与房间事实 | 是 |
@@ -97,7 +98,7 @@ Excel 输出同样只处理 `Schedule`。
 ```powershell
 uv sync
 
-uv run class-schedule --config config clean 27S `
+uv run class-schedule --config config initialize 27S `
   "inputs/27S/Course Schedule Report.csv"
 
 uv run class-schedule --config config draft 27S `
@@ -117,7 +118,11 @@ uv run class-schedule --config config diff 27S `
   --output work/27S/diff-ver9-ver10.csv
 ```
 
-`clean` 默认输出到 `work/<term>/normalized/`，`draft` 默认输出到
+`initialize` 和底层 `clean` 默认输出到 `work/<term>/normalized/`；`initialize`
+还会把 `<输入stem>_instructor.xlsx`、`<输入stem>_room.xlsx` 写在原输入文件旁边。
+这两本工作簿只由原输入清洗并分组后的 `Schedule` 生成，函数接口不接受
+`changes.toml`、preferences、overrides 或 solver 结果，因而严格表示 change 前快照。
+`draft` 默认输出到
 `work/<term>/draft/`，`solve` 默认写入下一个不存在的
 `out/<term>/verN/`：扫描所有名称严格为 `ver数字` 的目录，然后使用
 `max(N) + 1`。归档目录如 `ver4_validation` 不参与编号。任何已有版本目录

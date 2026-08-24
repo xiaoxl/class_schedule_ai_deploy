@@ -44,14 +44,25 @@ CLI validate、求解尝试评估、版本报告和 Web API 都使用这组领�
 - 教师来自 persons 中 `courses` 包含该 `SUBJECT NUMBER` 的人员；当前教师
   始终加入，防止历史表因缺配置而无候选。
 - ONLINE/TBA/空时间不改时间和教室，只可改教师。
-- 物理课按与原时长、原子类型匹配的 meeting pattern 生成时间，再和
-  `available` rooms 做笛卡尔积。
+- 物理课按与原时长及通用 selector 匹配的 meeting pattern 生成时间，再和
+  `available` rooms 做笛卡尔积。selector 由结构 `roles`、当前记录 `courses`
+  和完整原子课集合 `atomic_courses` 组成；Python 匹配器不包含具体课程号。
 - blackout 相交的新增时间候选被排除。
+- `changes.toml` 中新增的物理 section 在 draft 阶段必须精确匹配其原子类型可用的
+  meeting pattern（days、duration、start），并且不能与 blackout 相交；不合法时
+  在写出 `starting.csv` 前直接失败。
 - 单行课程每位教师最多保留成本最低的 40 个候选；双行课程每位教师最多
   10 个，减少组合爆炸。
-- 当前原始候选总会补回，即使它不在 room 列表、meeting pattern 中，或
-  落在 blackout。这是兼容历史排课的逃生口，因此这些配置不是对输入现状
-  的绝对禁止。如需绝对固定/禁止，应先修数据并使用 lock，且最终 validate。
+- 当前原始候选通常会补回，即使它不在 room 列表，以兼容历史排课。但 blackout
+  是绝对禁止时间，当前候选也不能绕过；meeting pattern 对已经配置的同类时间族
+  同样严格：如果相同
+  `days + duration` 已有可用 pattern，当前 start 也必须出现在其 `starts` 中。
+  例如 MWF 50 分钟族不保留 `MWF 11:50am`，Friday noon blackout 也会排除
+  `MWF 12:00pm`。等学分 coreq 的记录不能使用 MW noon；coreq 中学分较低的辅助记录
+  可以使用 `MW 12:00pm`。当前数据中该记录是 `MATH 1110`，但代码和该时间模式
+  都不依赖课程号。生产配置存在 meeting patterns 时不再隐式保留未配置
+  的历史时间；特殊 seminar 必须用独立 pattern 明确列出。如需固定合法当前值，
+  应使用 lock，且最终 validate。
 
 手调 lock 在候选生成最后过滤：锁了某字段就只保留与手调后当前值一致的
 候选。若全部候选被过滤，求解直接报 `No legal candidates`。

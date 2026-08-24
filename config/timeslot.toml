@@ -1,64 +1,56 @@
 # Time patterns the solver may use when generating new schedule candidates,
 # plus periods that generated candidates may not overlap.
 #
-# `types` tags which scheduling situation(s) a pattern is legal for --
-# solver/candidates.py's `allowed_pattern_types` decides which tag(s) apply to a
-# given section (by its class kind, and for CoreqClass, which whitelisted
-# course pair it is) and only searches patterns carrying a matching tag:
-#   - "standard": NormalClass, HybridClass, CrossListingClass, a
-#     FourCreditClass's MWF row, and the two 3-credit coreq pairs
-#     (MATH 1003/0803, MATH 1113/0903) -- MWF or TR only, never a lone
-#     T/R/MW day on its own.
-#   - "four_credit_partial": a FourCreditClass's *other* row (paired with
-#     its own MWF row) -- a lone T or R day, always 80 minutes (same as
-#     a "standard" TR meeting split across two separate single-day rows).
-#   - "coreq_short": the one whitelisted coreq pair with mismatched
-#     credit hours (MATH 1113/1110 -- MATH 1110 is 2 credits, not 3 like
-#     every other whitelisted partner), whose own meeting patterns are
-#     correspondingly shorter: MWF+MW back-to-back, or MWF+TR (50
-#     minutes, not the usual 80) within 30 minutes. This is the *only*
-#     place a 50-minute TR/T/R pattern is legal.
-# A lone T/R/MW day is otherwise never offered as a candidate -- it's
-# only ever the "other half" of one of the two special cases above, not
-# a first-class option for an ordinary course.
+# Selectors are data, not Python course-specific branches:
+#   - `roles` identifies the row's structural role in its atomic class;
+#   - `courses` optionally limits the current row to listed SUBJECT NUMBERs;
+#   - `atomic_courses` optionally requires the atomic class's exact course set.
+# Empty course selectors mean any course in an allowed role.
 
 [[calendar.meeting_patterns]]
 days = "MWF"
 duration_minutes = 50
 starts = ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00"]
-types = ["standard", "coreq_short"]
+roles = ["normal", "hybrid_physical", "cross_listing", "coreq", "four_credit_primary"]
 
 [[calendar.meeting_patterns]]
 days = "TR"
 duration_minutes = 80
 starts = ["08:00", "09:30", "11:00", "13:00", "14:30"]
-types = ["standard"]
+roles = ["normal", "hybrid_physical", "cross_listing", "coreq"]
 
 [[calendar.meeting_patterns]]
 days = "TR"
 duration_minutes = 50
 starts = ["08:00", "09:30", "11:00", "13:00", "14:30"]
-types = ["coreq_short"]
+roles = ["coreq_supplement"]
 
 [[calendar.meeting_patterns]]
 days = "MW"
 duration_minutes = 50
 starts = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00"]
-types = ["coreq_short"]
+roles = ["coreq_supplement"]
 
 [[calendar.meeting_patterns]]
 days = "R"
 duration_minutes = 80
 starts = ["08:00", "09:30", "11:00", "13:00", "14:30"]
-types = ["four_credit_partial"]
-
-[[calendar.meeting_patterns]]
-days = "T"
-duration_minutes = 80
-starts = ["08:00", "09:30", "11:00", "13:00", "14:30"]
-types = ["four_credit_partial"]
+roles = ["four_credit_partial"]
 
 [[calendar.blackouts]]
 days = ["F"]
 between = ["12:00", "12:50"]
 reason = "Department-wide Friday noon meeting"
+
+[[calendar.meeting_patterns]]
+days = "T"
+duration_minutes = 80
+starts = ["08:00", "09:30", "11:00", "13:00", "14:30"]
+roles = ["four_credit_partial"]
+
+[[calendar.meeting_patterns]]
+days = "T"
+duration_minutes = 80
+starts = ["11:00"]
+roles = ["normal"]
+courses = ["MATH 4971"]

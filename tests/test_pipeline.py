@@ -6,16 +6,22 @@ import datetime
 from pathlib import Path
 
 import pandas as pd
+from openpyxl import load_workbook
 
 from class_schedule.class_model import NormalClass, Section
-from class_schedule.data_cleaning import NORMALIZED_COLUMNS, clean_dataframe, clean_file
+from class_schedule.data_cleaning import (
+    NORMALIZED_COLUMNS,
+    clean_dataframe,
+    clean_file,
+    initialize_input,
+)
 from class_schedule.overrides import (
     apply_overrides,
     load_overrides,
     locks_for_section,
     validate_override_context,
 )
-from class_schedule.schedule_model import Schedule
+from class_schedule.schedule_model import Schedule, TimeWindow
 from class_schedule.schedule_io import read_schedule
 from class_schedule.solver import MeetingPattern, RoomRecord, SolverConfig, diff_schedules
 from class_schedule.solver.candidates import section_candidates
@@ -55,6 +61,58 @@ class DataCleaningTests(unittest.TestCase):
             self.assertTrue((destination / "rejected_rows.csv").is_file())
             self.assertTrue((destination / "validation.md").is_file())
             self.assertTrue((destination / "source_manifest.json").is_file())
+
+    def test_initialize_writes_pre_change_views_beside_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "Course Schedule Report.csv"
+            pd.DataFrame([
+                {
+                    "Subject": "MATH", "Number": "1113", "Section": "001",
+                    "Time Slot": "MWF 9:00am", "Duration": "50",
+                    "Instructor": "Original Instructor", "Room": "101",
+                    "Building": "Corley",
+                },
+                {
+                    "Subject": "STAT", "Number": "2163", "Section": "001",
+                    "Time Slot": "ONLINE", "Instructor": "Online Instructor",
+                },
+            ]).to_csv(source, index=False)
+
+            result = initialize_input(source, root / "normalized")
+
+            instructor_path = root / "Course Schedule Report_instructor.xlsx"
+            room_path = root / "Course Schedule Report_room.xlsx"
+            self.assertEqual(result.instructor_path, instructor_path)
+            self.assertEqual(result.room_path, room_path)
+            workbook = load_workbook(instructor_path, read_only=True)
+            try:
+                self.assertEqual(
+                    set(workbook.sheetnames),
+                    {"Original Instructor", "Online Instructor"},
+                )
+            finally:
+                workbook.close()
+            workbook = load_workbook(room_path, read_only=True)
+            try:
+                self.assertEqual(workbook.sheetnames, ["Corley 101"])
+            finally:
+                workbook.close()
+
+    def test_initialize_skips_views_when_a_source_row_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "raw.csv"
+            pd.DataFrame([
+                {"Subject": "MATH", "Number": "", "Section": "001"},
+            ]).to_csv(source, index=False)
+
+            result = initialize_input(source, root / "normalized")
+
+            self.assertIsNone(result.instructor_path)
+            self.assertIsNone(result.room_path)
+            self.assertFalse((root / "raw_instructor.xlsx").exists())
+            self.assertFalse((root / "raw_room.xlsx").exists())
 
     def test_known_cross_list_stays_unmarked_but_groups_during_validation(self):
         frame = pd.DataFrame([
@@ -123,15 +181,67 @@ class OverrideTests(unittest.TestCase):
             persons={}, preferences={},
             meeting_patterns=[MeetingPattern(
                 "MWF", 50, (datetime.time(9), datetime.time(10)),
-                frozenset({"standard"}),
+                frozenset({"normal"}),
             )],
             rooms=[RoomRecord("Corley", "101")], blackouts=[],
         )
         candidates = section_candidates(
-            section, config, 40, frozenset({"standard"}), frozenset({"time"})
+            NormalClass((section,)), section, config, 40, frozenset({"time"})
         )
         self.assertTrue(candidates)
         self.assertEqual({candidate.time_slot for candidate in candidates}, {"MWF 9:00am"})
+
+    def test_configured_time_family_rejects_an_unlisted_current_start(self):
+        section = Section(
+            "MATH", "1003", "004", "MWF 11:50am", 50,
+            "269", "Staff", "Corley",
+        )
+        config = SolverConfig(
+            persons={}, preferences={},
+            meeting_patterns=[MeetingPattern(
+                "MWF", 50,
+                (datetime.time(10), datetime.time(11), datetime.time(12)),
+                frozenset({"normal"}),
+            )],
+            rooms=[RoomRecord("Corley", "269")],
+            blackouts=[TimeWindow(
+                frozenset("F"), datetime.time(12), datetime.time(12, 50)
+            )],
+        )
+        candidates = section_candidates(
+            NormalClass((section,)), section, config, 40,
+        )
+        slots = {candidate.time_slot for candidate in candidates}
+        self.assertNotIn("MWF 11:50am", slots)
+        self.assertNotIn("MWF 12:00pm", slots)
+        self.assertIn("MWF 10:00am", slots)
+
+    def test_explicit_seminar_pattern_keeps_a_nonstandard_time(self):
+        section = Section(
+            "MATH", "4971", "001", "T 11:00am", 80,
+            "101", "Alice", "Corley",
+        )
+        config = SolverConfig(
+            persons={}, preferences={},
+            meeting_patterns=[
+                MeetingPattern(
+                    "TR", 80, (datetime.time(11),),
+                    frozenset({"normal"}),
+                ),
+                MeetingPattern(
+                    "T", 80, (datetime.time(11),),
+                    frozenset({"normal"}),
+                    frozenset({"MATH 4971"}),
+                ),
+            ],
+            rooms=[RoomRecord("Corley", "101")], blackouts=[],
+        )
+        candidates = section_candidates(
+            NormalClass((section,)), section, config, 40
+        )
+        self.assertIn(
+            "T 11:00am", {candidate.time_slot for candidate in candidates}
+        )
 
     def test_version_bound_override_rejects_the_wrong_context(self):
         with tempfile.TemporaryDirectory() as directory:

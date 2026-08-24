@@ -43,7 +43,9 @@ class MeetingPattern:
     days: str
     duration_minutes: int
     starts: tuple[datetime.time, ...]
-    types: frozenset[str] = frozenset()
+    roles: frozenset[str] = frozenset()
+    courses: frozenset[str] = frozenset()
+    atomic_courses: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)

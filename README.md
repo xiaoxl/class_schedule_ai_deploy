@@ -9,7 +9,7 @@
 ```powershell
 uv sync
 
-uv run class-schedule --config config clean 27S `
+uv run class-schedule --config config initialize 27S `
   "inputs/27S/Course Schedule Report.csv"
 
 uv run class-schedule --config config draft 27S `
@@ -22,6 +22,11 @@ uv run class-schedule --config config solve 27S `
 # 编辑 out/27S/ver10/overrides.toml，启用 edit/lock 后刷新 final
 uv run class-schedule --config config final 27S ver10
 ```
+
+`initialize` 在清洗的同时，直接从尚未应用 `changes.toml` 的原输入排课生成
+`inputs/27S/Course Schedule Report_instructor.xlsx` 和
+`inputs/27S/Course Schedule Report_room.xlsx`。这两份表是输入快照视图，不是 draft
+或 solver 结果。
 
 `verN` 是不覆盖的自动求解快照；`final` 是从指定 ver 应用人工调整后可反复
 刷新的发布目录。空 override 不会生成 final。final 的 `changes.csv` 始终直接

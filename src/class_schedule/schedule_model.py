@@ -38,6 +38,7 @@ from .class_model import (
     NormalClass,
     Section,
 )
+from .pattern_rules import MeetingPatternLike, matches_configured_pattern
 
 _UNSET = object()
 
@@ -438,8 +439,8 @@ def _take_coreqs(
 #
 # persons.toml holds contractual identity, qualification, alias, and load
 # facts; preferences.toml holds this term's wishes for an instructor.
-# ``evaluate_schedule`` gets hard violations only from ``check_conflicts``
-# (room/instructor double-booking). Atomic-class legality is enforced at
+# ``evaluate_schedule`` gets hard violations from structural double-booking
+# and configured blackout windows. Atomic-class legality is enforced at
 # ``Class`` construction and by the solver's pairwise validity constraints,
 # so invalid four-credit/Hybrid/cross-list/coreq combinations cannot become
 # a Schedule or a solved result.
@@ -897,7 +898,7 @@ def overlaps_in_time(left: Section, right: Section) -> bool:
 
 
 def check_conflicts(schedule: "Schedule") -> list[HardViolation]:
-    """The sole source of hard violations: double-booking -- two different
+    """Report structural double-booking -- two different
     classes using the same room, or assigned to the same instructor, at an
     overlapping time.
 
@@ -935,6 +936,56 @@ def check_conflicts(schedule: "Schedule") -> list[HardViolation]:
                     f"{a.instructor} at an overlapping time "
                     f"({a.time_slot} / {b.time_slot})",
                 ))
+    return violations
+
+
+def check_blackouts(
+    schedule: "Schedule", blackouts: Iterable[TimeWindow]
+) -> list[HardViolation]:
+    """Report every physical section overlapping an absolute blackout."""
+    windows = tuple(blackouts)
+    violations: list[HardViolation] = []
+    for item in schedule:
+        for section in item.sections:
+            if section.is_online:
+                continue
+            for window in windows:
+                if not window.overlaps(section.days, section.start, section.end):
+                    continue
+                label = window.reason or (
+                    f"{''.join(sorted(window.days))} "
+                    f"{window.start.strftime('%H:%M')}-"
+                    f"{window.end.strftime('%H:%M')}"
+                )
+                violations.append(HardViolation(
+                    "blackout",
+                    section.course_id,
+                    f"{section.course_id} at {section.time_slot} overlaps "
+                    f"the configured blackout ({label})",
+                ))
+    return violations
+
+
+def check_meeting_patterns(
+    schedule: "Schedule", patterns: Iterable[MeetingPatternLike]
+) -> list[HardViolation]:
+    """Report physical sections outside their configured pattern domain."""
+    configured = tuple(patterns)
+    if not configured:
+        return []
+    violations: list[HardViolation] = []
+    for item in schedule:
+        for section in item.sections:
+            if section.is_online or matches_configured_pattern(
+                item, section, configured
+            ):
+                continue
+            violations.append(HardViolation(
+                "meeting_pattern",
+                section.course_id,
+                f"{section.course_id} uses an unconfigured meeting pattern: "
+                f"{section.time_slot} ({section.duration} minutes)",
+            ))
     return violations
 
 
@@ -1094,6 +1145,8 @@ def evaluate_schedule(
     preferences: dict[str, PreferenceRecord],
     persons: dict[str, PersonRecord],
     global_rules: tuple[PreferenceRule, ...] = (),
+    blackouts: Iterable[TimeWindow] = (),
+    meeting_patterns: Iterable[MeetingPatternLike] = (),
 ) -> ScheduleEvaluation:
     """Evaluate only domain objects; raw CSV rows are not accepted here."""
     soft_penalty, soft_findings = check_soft_preferences(
@@ -1103,7 +1156,11 @@ def evaluate_schedule(
         atomic_classes=len(schedule),
         row_count=len(schedule.to_records()),
         loads=teaching_loads(schedule),
-        hard_violations=tuple(check_conflicts(schedule)),
+        hard_violations=tuple(
+            check_conflicts(schedule)
+            + check_blackouts(schedule, blackouts)
+            + check_meeting_patterns(schedule, meeting_patterns)
+        ),
         soft_penalty=soft_penalty,
         soft_findings=tuple(soft_findings),
     )

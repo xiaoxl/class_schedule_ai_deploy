@@ -40,6 +40,15 @@ class CleanResult:
     ignored_concurrent_rows: int
 
 
+@dataclass(frozen=True)
+class InitializeResult:
+    """Cleaning result plus pre-change views derived from the source input."""
+
+    cleaning: CleanResult
+    instructor_path: Path | None
+    room_path: Path | None
+
+
 def _plain(value: object) -> object:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return ""
@@ -183,3 +192,75 @@ def clean_file(
         if staging.exists():
             shutil.rmtree(staging)
     return result
+
+
+def _initial_view_paths(input_path: Path) -> tuple[Path, Path]:
+    return (
+        input_path.with_name(f"{input_path.stem}_instructor.xlsx"),
+        input_path.with_name(f"{input_path.stem}_room.xlsx"),
+    )
+
+
+def _publish_initial_views(
+    schedule: Schedule, input_path: Path,
+) -> tuple[Path, Path]:
+    """Atomically replace both pre-change workbooks beside ``input_path``."""
+    instructor_path, room_path = _initial_view_paths(input_path)
+    token = uuid.uuid4().hex
+    staged = {
+        instructor_path: instructor_path.with_name(
+            f".{instructor_path.stem}-staging-{token}.xlsx"
+        ),
+        room_path: room_path.with_name(
+            f".{room_path.stem}-staging-{token}.xlsx"
+        ),
+    }
+    backups: dict[Path, Path] = {}
+    originally_present = {path for path in staged if path.exists()}
+    try:
+        schedule.to_instructor_excel(staged[instructor_path])
+        schedule.to_room_excel(staged[room_path])
+        for destination in staged:
+            if destination.exists():
+                backup = destination.with_name(
+                    f".{destination.name}-backup-{token}"
+                )
+                destination.replace(backup)
+                backups[destination] = backup
+        for destination, temporary in staged.items():
+            temporary.replace(destination)
+    except Exception:
+        for destination in staged:
+            if destination in backups:
+                destination.unlink(missing_ok=True)
+                backups[destination].replace(destination)
+            elif destination not in originally_present:
+                destination.unlink(missing_ok=True)
+        raise
+    finally:
+        for temporary in staged.values():
+            temporary.unlink(missing_ok=True)
+        for backup in backups.values():
+            backup.unlink(missing_ok=True)
+    return instructor_path, room_path
+
+
+def initialize_input(
+    input_path: str | Path,
+    output_dir: str | Path,
+    *,
+    persons: dict[str, PersonRecord] | None = None,
+) -> InitializeResult:
+    """Clean a source export and publish its pre-change weekly views.
+
+    The workbooks are built from the normalized, atomically grouped source
+    schedule. No term changes, new-hire placement, overrides, preferences, or
+    solver transformations are accepted by this API.
+    """
+    input_path = Path(input_path)
+    cleaning = clean_file(input_path, output_dir, persons=persons)
+    if len(cleaning.rejected) or cleaning.warnings:
+        return InitializeResult(cleaning, None, None)
+    schedule = Schedule.from_dataframe(cleaning.normalized, persons=persons)
+    instructor_path, room_path = _publish_initial_views(schedule, input_path)
+    return InitializeResult(cleaning, instructor_path, room_path)

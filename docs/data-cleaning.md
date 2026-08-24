@@ -2,7 +2,8 @@
 
 ## 输入
 
-`clean` 接受 `.csv`、`.xlsx`。旧二进制 `.xls` 不在依赖范围内，应先另存
+生产流程的第一步是 `initialize`；它先调用同一套 `clean` 能力，再生成原输入的
+教师和教室周课表。`initialize`/`clean` 接受 `.csv`、`.xlsx`。旧二进制 `.xls` 不在依赖范围内，应先另存
 为 `.xlsx`。空行被删除；每个非空数据行单独
 解析，所以一行错误不会阻止其他行输出。
 
@@ -36,7 +37,7 @@ ATU `Course Schedule Report` 的 `Meeting_Times` 可写成
 ## 输出格式
 
 ```powershell
-uv run class-schedule --config config clean 27S `
+uv run class-schedule --config config initialize 27S `
   "inputs/27S/Course Schedule Report.csv"
 ```
 
@@ -49,6 +50,21 @@ work/27S/normalized/
   validation.md
   source_manifest.json
 ```
+
+同时在原输入所在文件夹生成：
+
+```text
+inputs/27S/
+  Course Schedule Report.csv
+  Course Schedule Report_instructor.xlsx
+  Course Schedule Report_room.xlsx
+```
+
+两本 Excel 直接来自该原输入经规范化、人员别名解析和原子分组后的 `Schedule`。
+此时尚未读取 `changes.toml`，也没有新员工预放置、preference、override 或 solver
+变动，因此它们是 change 前输入的周课表变形。存在拒绝行或 grouping warning 时，
+清洗审计包仍会写出，但不会发布可能不完整的两本 Excel。`clean` 子命令保留为只需
+清洗审计包、不需要输入视图时的底层入口。
 
 `sections.csv` 的列和顺序固定：
 

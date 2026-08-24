@@ -13,7 +13,6 @@ from ..starting_template import is_placeholder_instructor, recolor_placeholder
 from .candidates import (
     MAX_CANDIDATES_PAIRED_SECTION,
     MAX_CANDIDATES_SINGLE_SECTION,
-    allowed_pattern_types,
     section_candidates,
 )
 from .config import SolverConfig
@@ -79,11 +78,11 @@ def solve_detailed(
         record_indexes[class_index] = record + 1
         item = class_list[class_index]
         candidates.append(section_candidates(
+            item,
             section,
             config,
             MAX_CANDIDATES_SINGLE_SECTION
             if len(item.sections) == 1 else MAX_CANDIDATES_PAIRED_SECTION,
-            allowed_pattern_types(item, section),
             locks_for_section(locks, item.course_ids, record),
             placeholder_instructors,
         ))

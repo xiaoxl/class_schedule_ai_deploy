@@ -104,6 +104,15 @@ class Section:
         return self.days is not None and self.start is not None
 
     @property
+    def credit_hours(self) -> float:
+        """Credits for this record, preferring explicit source data."""
+        return (
+            self.credits
+            if self.credits is not None
+            else _infer_credit_hours(self.number)
+        )
+
+    @property
     def days(self) -> str | None:
         return record_utils.parse_slot(self.time_slot)[0]
 
@@ -245,8 +254,7 @@ class NormalClass:
         from the first section's course number. ``CoreqClass`` overrides
         this since it links two distinct courses.
         """
-        credits = self.sections[0].credits
-        return credits if credits is not None else _infer_credit_hours(self.sections[0].number)
+        return self.sections[0].credit_hours
 
     def to_records(self) -> list[dict[str, object]]:
         """Return one or two dictionaries ready for ``csv.DictWriter``."""
@@ -482,9 +490,7 @@ class CoreqClass(SpecialClass):
         # courses a student enrolls in separately, so their hours add up.
         left, right = self.sections
         return sum(
-            section.credits
-            if section.credits is not None
-            else _infer_credit_hours(section.number)
+            section.credit_hours
             for section in (left, right)
         )
 

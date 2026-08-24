@@ -268,7 +268,8 @@ def _sha256(path: Path) -> str:
 
 def _evaluate_attempt(number: int, result: SolveResult, config: SolverConfig) -> Attempt:
     evaluation = evaluate_schedule(
-        result.schedule, config.preferences, config.persons, config.global_rules
+        result.schedule, config.preferences, config.persons, config.global_rules,
+        config.blackouts, config.meeting_patterns,
     )
     return Attempt(
         number=number,
@@ -319,7 +320,8 @@ def _report(
     assert best.result is not None
     after = best.result.schedule
     baseline_evaluation = evaluate_schedule(
-        baseline, config.preferences, config.persons, config.global_rules
+        baseline, config.preferences, config.persons, config.global_rules,
+        config.blackouts, config.meeting_patterns,
     )
     before_loads = baseline_evaluation.loads
     after_loads = teaching_loads(after)

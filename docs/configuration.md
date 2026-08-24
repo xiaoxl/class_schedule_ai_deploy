@@ -71,24 +71,47 @@ available = true
 days = "MWF"
 duration_minutes = 50
 starts = ["08:00", "09:00", "10:00"]
-types = ["standard"]
+roles = ["normal", "hybrid_physical", "cross_listing", "coreq"]
+
+[[calendar.meeting_patterns]]
+days = "MW"
+duration_minutes = 50
+starts = ["12:00"]
+roles = ["coreq_supplement"]
 
 [[calendar.blackouts]]
 days = ["F"]
-between = ["12:00", "13:00"]
+between = ["12:00", "12:50"]
 reason = "department meeting"
 ```
 
-`types` 只能是：
+`roles` 描述当前 CSV 记录在分组后原子课中的结构角色：
 
 | 值 | 用途 |
 |---|---|
-| `standard` | 普通课，以及四学分课的 MWF 部分 |
-| `four_credit_partial` | 四学分课的单日补充会议 |
-| `coreq_short` | `MATH 1113`/`MATH 1110` 特殊短配对 |
+| `normal` | 单行普通原子课 |
+| `hybrid_physical` | HybridClass 的实体记录 |
+| `cross_listing` | CrossListingClass 的记录 |
+| `coreq` | CoreqClass 中有学分的记录 |
+| `coreq_supplement` | CoreqClass 中学分严格低于另一行的辅助记录 |
+| `four_credit_primary` | FourCreditClass 的 MWF 主记录 |
+| `four_credit_partial` | FourCreditClass 的 T/R 补充记录 |
+
+`courses` 是可选的当前记录课程白名单；`atomic_courses` 是可选的原子课完整课程集合，
+采用集合精确匹配。两者为空表示不限制课程。上面的 MW 规则不使用课程 selector：
+通用匹配器只要求当前记录是 coreq 中学分较低的辅助记录，因此对任何具有相同结构的新 coreq
+都生效。只有真正按课程命名的例外才需要 `courses` 或 `atomic_courses`。
+两个课程 selector 都使用严格的 `SUBJECT NUMBER` 格式，不可重复；两者同时出现时，
+`courses` 必须是 `atomic_courses` 的子集，否则加载配置时直接报错。
 
 `days` 只能由 `MTWRF` 组成，`duration_minutes > 0`，`starts` 不可为空。
 blackout 与候选相交时该候选不生成。
+`changes.toml` 新增的物理 section 也使用这里的 pattern 和 blackout 做严格校验；
+例如标准 MWF 50 分钟课不能写成 `11:50`，Friday `12:00-12:50` blackout
+也绝对禁止 `MWF 12:00pm`。`MATH 0803`/`MATH 1003` 和
+`MATH 0903`/`MATH 1113` 两类 coreq 都只能使用 standard pattern；coreq 中学分较低的
+辅助记录可以使用 `MW 12:00pm`。在当前数据中，这对应 `MATH 1110` 记录，但规则本身
+不识别这个课程号。
 
 ## preferences.toml
 

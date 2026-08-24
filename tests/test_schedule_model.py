@@ -1,3 +1,4 @@
+import datetime
 import unittest
 
 from class_schedule.class_model import CrossListingClass, FourCreditClass, HybridClass, NormalClass, Section
@@ -6,11 +7,13 @@ from class_schedule.schedule_model import (
     PersonRecord,
     PreferenceRecord,
     Schedule,
+    TimeWindow,
     check_conflicts,
     check_soft_preferences,
     evaluate_schedule,
     teaching_loads,
 )
+from class_schedule.solver import MeetingPattern
 
 
 def make_record(**overrides) -> dict:
@@ -63,6 +66,68 @@ class CheckConflictsTests(unittest.TestCase):
         a = NormalClass((make_section(Room="101", Instructor="Alice"),))
         b = NormalClass((make_section(Number="2103", Section="002", Room="102", Instructor="Bob"),))
         self.assertEqual(check_conflicts(Schedule([a, b])), [])
+
+
+class EvaluateBlackoutTests(unittest.TestCase):
+    def test_blackout_overlap_is_a_hard_violation(self):
+        schedule = Schedule([NormalClass((make_section(
+            **{"Time Slot": "MWF 12:00pm"}, Room="101", Instructor="Alice"
+        ),))])
+        evaluation = evaluate_schedule(
+            schedule, {}, {}, (),
+            (TimeWindow(
+                frozenset("F"),
+                datetime.time(12),
+                datetime.time(12, 50),
+                "Friday noon",
+            ),),
+        )
+        self.assertEqual(len(evaluation.hard_violations), 1)
+        self.assertEqual(evaluation.hard_violations[0].rule, "blackout")
+
+    def test_mw_noon_does_not_overlap_a_friday_blackout(self):
+        schedule = Schedule([NormalClass((make_section(
+            **{"Time Slot": "MW 12:00pm"}, Room="101", Instructor="Alice"
+        ),))])
+        evaluation = evaluate_schedule(
+            schedule, {}, {}, (),
+            (TimeWindow(
+                frozenset("F"),
+                datetime.time(12),
+                datetime.time(12, 50),
+                "Friday noon",
+            ),),
+        )
+        self.assertEqual(evaluation.hard_violations, ())
+
+
+class EvaluateMeetingPatternTests(unittest.TestCase):
+    def test_unconfigured_physical_pattern_is_a_hard_violation(self):
+        schedule = Schedule([NormalClass((make_section(
+            **{"Time Slot": "MW 12:00pm"}, Room="101", Instructor="Alice"
+        ),))])
+        evaluation = evaluate_schedule(
+            schedule, {}, {}, (), (),
+            (MeetingPattern(
+                "MWF", 50, (datetime.time(11),), frozenset({"normal"})
+            ),),
+        )
+        self.assertEqual(len(evaluation.hard_violations), 1)
+        self.assertEqual(
+            evaluation.hard_violations[0].rule, "meeting_pattern"
+        )
+
+    def test_configured_physical_pattern_is_valid(self):
+        schedule = Schedule([NormalClass((make_section(
+            **{"Time Slot": "MWF 11:00am"}, Room="101", Instructor="Alice"
+        ),))])
+        evaluation = evaluate_schedule(
+            schedule, {}, {}, (), (),
+            (MeetingPattern(
+                "MWF", 50, (datetime.time(11),), frozenset({"normal"})
+            ),),
+        )
+        self.assertEqual(evaluation.hard_violations, ())
 
 
 class GroupingTests(unittest.TestCase):

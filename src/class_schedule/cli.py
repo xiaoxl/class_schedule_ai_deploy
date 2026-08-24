@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .data_cleaning import clean_file
+from .data_cleaning import clean_file, initialize_input
 from .schedule_io import read_schedule
 from .schedule_model import evaluate_schedule
 from .schedule_run import create_override_template, publish_final, run_term
@@ -31,12 +31,33 @@ def _clean(args: argparse.Namespace) -> int:
     return 1 if len(result.rejected) or result.warnings else 0
 
 
+def _initialize(args: argparse.Namespace) -> int:
+    config = SolverConfig.load(args.config, term=args.term)
+    output = Path(args.output or Path("work") / args.term / "normalized")
+    result = initialize_input(
+        args.input, output, persons=config.persons,
+    )
+    cleaning = result.cleaning
+    print(
+        f"Wrote {output}: {len(cleaning.normalized)} accepted, "
+        f"{len(cleaning.rejected)} rejected"
+    )
+    if result.instructor_path is None or result.room_path is None:
+        print("Skipped pre-change Excel views because cleaning was not valid")
+        return 1
+    print(f"Wrote pre-change instructor view: {result.instructor_path}")
+    print(f"Wrote pre-change room view: {result.room_path}")
+    return 0
+
+
 def _draft(args: argparse.Namespace) -> int:
     output = Path(args.output or Path("work") / args.term / "draft")
     output.mkdir(parents=True, exist_ok=True)
+    config = SolverConfig.load(args.config, term=args.term)
     persons_path = resolve_config_paths(args.config, args.term)["persons.toml"]
     results = build_starting_templates(
         args.input, args.changes, persons_path, output_dir=output, seed=args.seed,
+        meeting_patterns=config.meeting_patterns, blackouts=config.blackouts,
     )
     for label, result in results.items():
         print_starting_result(label, result)
@@ -85,7 +106,8 @@ def _validate(args: argparse.Namespace) -> int:
     config = SolverConfig.load(args.config, term=args.term)
     schedule = _read_schedule(args.input, config)
     evaluation = evaluate_schedule(
-        schedule, config.preferences, config.persons, config.global_rules
+        schedule, config.preferences, config.persons, config.global_rules,
+        config.blackouts, config.meeting_patterns,
     )
     print(
         f"Atomic classes: {evaluation.atomic_classes}; "
@@ -120,6 +142,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="class-schedule")
     parser.add_argument("--config", default="config", help="configuration root")
     commands = parser.add_subparsers(dest="command", required=True)
+
+    initialize = commands.add_parser(
+        "initialize",
+        help="clean a raw export and write its pre-change instructor/room views",
+    )
+    initialize.add_argument("term")
+    initialize.add_argument("input")
+    initialize.add_argument("--output")
+    initialize.set_defaults(handler=_initialize)
 
     clean = commands.add_parser("clean", help="normalize a raw CSV/XLSX export")
     clean.add_argument("term")

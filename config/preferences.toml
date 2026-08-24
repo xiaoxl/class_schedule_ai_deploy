@@ -180,7 +180,9 @@ allow_overload = false
 allow_back_to_back = true
 max_back_to_back = 2
 preferred_times = []
-disliked_times = []
+disliked_times = [
+      { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" },
+]
 preferred_locations = []
 disliked_locations = []
 preferred_courses = []

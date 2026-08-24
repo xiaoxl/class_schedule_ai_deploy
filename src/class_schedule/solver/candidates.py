@@ -6,7 +6,8 @@ import datetime
 from dataclasses import replace
 
 from .. import record_utils
-from ..class_model import Class, CoreqClass, FourCreditClass, Section
+from ..class_model import Class, Section
+from ..pattern_rules import pattern_applies, section_pattern_role
 from ..schedule_model import (
     DISLIKED_COURSE_PENALTY,
     DISLIKED_LOCATION_PENALTY,
@@ -26,20 +27,6 @@ TIME_CHANGE_COST = 5.0
 ROOM_CHANGE_COST = 5.0
 MAX_CANDIDATES_PAIRED_SECTION = 10
 MAX_CANDIDATES_SINGLE_SECTION = 40
-_COREQ_SHORT_PAIR = frozenset({"MATH 1113", "MATH 1110"})
-
-
-def allowed_pattern_types(item: Class, section: Section) -> frozenset[str]:
-    if isinstance(item, FourCreditClass):
-        return (
-            frozenset({"standard"}) if section.days == "MWF"
-            else frozenset({"four_credit_partial"})
-        )
-    if isinstance(item, CoreqClass):
-        courses = {f"{part.subject} {part.number}" for part in item.sections}
-        if courses == _COREQ_SHORT_PAIR:
-            return frozenset({"coreq_short"})
-    return frozenset({"standard"})
 
 
 def candidate_instructors(
@@ -119,10 +106,10 @@ def preference_cost(
 
 
 def section_candidates(
+    item: Class,
     section: Section,
     config: SolverConfig,
     max_candidates: int,
-    allowed_types: frozenset[str],
     locked_fields: frozenset[str] = frozenset(),
     placeholder_instructors: tuple[str, ...] = (),
 ) -> list[SectionCandidate]:
@@ -171,11 +158,26 @@ def section_candidates(
     patterns = [
         pattern for pattern in config.meeting_patterns
         if pattern.duration_minutes == section.duration
-        and pattern.types & allowed_types
+        and pattern_applies(item, section, pattern)
     ]
-    if not patterns and section.days and section.start:
+    current_is_allowed = (
+        (
+            not config.meeting_patterns
+            or section.start is not None
+            and any(
+                pattern.days == section.days and section.start in pattern.starts
+                for pattern in patterns
+            )
+        )
+        and not any(
+            window.overlaps(section.days, section.start, section.end)
+            for window in config.blackouts
+        )
+    )
+    if not config.meeting_patterns and section.days and section.start:
         patterns = [MeetingPattern(
-            section.days, section.duration or 0, (section.start,)
+            section.days, section.duration or 0, (section.start,),
+            frozenset({section_pattern_role(item, section)}),
         )]
     rooms = config.rooms or [
         RoomRecord(building=section.building, room=section.room)
@@ -209,13 +211,13 @@ def section_candidates(
                         instructor, time_slot, pattern.duration_minutes,
                         pattern.days, start, end, room.room, room.building, cost,
                     )
-        if instructor == section.instructor:
+        if instructor == section.instructor and current_is_allowed:
             bucket[(current.time_slot, current.building, current.room)] = current
 
     result = []
     for bucket in by_instructor.values():
         result.extend(sorted(bucket.values(), key=lambda candidate: candidate.cost)[:max_candidates])
-    if current not in result:
+    if current_is_allowed and current not in result:
         result.append(current)
     return [candidate for candidate in result if _matches_locks(section, candidate, locked_fields)]
 

@@ -76,6 +76,9 @@ new_hires = [
 # same-course/section MWF+T/R for four-credit, an M/F-prefixed physical plus
 # non-physical row for Hybrid, a shared Cross-List/known pair for cross-list,
 # or a whitelisted same-section coreq pair. List both source rows.
+# Every physical new row must also match a legal days/duration/start entry in
+# timeslot.toml and must not overlap a configured blackout; draft rejects it
+# before writing starting.csv otherwise.
 #
 # [[new_courses]]
 # Subject = "MATH"

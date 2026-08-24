@@ -1,3 +1,4 @@
+import datetime
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,6 +7,7 @@ import pandas as pd
 
 from class_schedule.class_model import NormalClass, Section
 from class_schedule.schedule_model import PersonRecord, Schedule, check_conflicts
+from class_schedule.solver import MeetingPattern
 from class_schedule.starting_template import (
     _classes_conflict,
     build_starting_templates,
@@ -222,7 +224,7 @@ class BuildStartingTemplatesTests(unittest.TestCase):
                 'Subject = "MATH"\n'
                 'Number = "1003"\n'
                 'Section = "001"\n'
-                '"Time Slot" = "MWF 11:00am"\n'
+                '"Time Slot" = "MWF 10:00am"\n'
                 "Duration = 50\n",
                 encoding="utf-8",
             )
@@ -238,6 +240,11 @@ class BuildStartingTemplatesTests(unittest.TestCase):
             results = build_starting_templates(
                 template_path, changes_path, persons_path,
                 output_dir=tmp_path, seed=1,
+                meeting_patterns=[MeetingPattern(
+                    "MWF", 50,
+                    (datetime.time(9), datetime.time(10)),
+                    frozenset({"normal"}),
+                )],
             )
 
             self.assertTrue((tmp_path / "starting.csv").exists())
@@ -259,6 +266,35 @@ class BuildStartingTemplatesTests(unittest.TestCase):
                 pd.read_csv(tmp_path / "starting.csv", dtype=str)
             )
             self.assertEqual(check_conflicts(written_back), [])
+
+    def test_rejects_an_unconfigured_time_for_a_new_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            template = root / "template.csv"
+            pd.DataFrame.from_records([{
+                "Subject": "MATH", "Number": "2103", "Section": "001",
+                "Time Slot": "MWF 9:00am", "Duration": 50,
+                "Room": "101", "Building": "Corley", "Instructor": "Alice",
+            }]).to_csv(template, index=False)
+            changes = root / "changes.toml"
+            changes.write_text(
+                "[[new_courses]]\n"
+                'Subject = "MATH"\nNumber = "1003"\nSection = "007"\n'
+                '"Time Slot" = "MWF 11:50am"\nDuration = 50\n',
+                encoding="utf-8",
+            )
+            persons = root / "persons.toml"
+            persons.write_text("", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "unconfigured meeting"):
+                build_starting_templates(
+                    template, changes, persons, output_dir=root,
+                    meeting_patterns=[MeetingPattern(
+                        "MWF", 50,
+                        (datetime.time(11), datetime.time(12)),
+                        frozenset({"normal"}),
+                    )],
+                )
 
 
 if __name__ == "__main__":

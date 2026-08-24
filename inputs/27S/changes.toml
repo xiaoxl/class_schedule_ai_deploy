@@ -70,6 +70,9 @@ number = "3203"
 # same-course/section MWF+T/R for four-credit, an M/F-prefixed physical plus
 # non-physical row for Hybrid, a shared Cross-List/known pair for cross-list,
 # or a whitelisted same-section coreq pair. List both source rows.
+# Every physical new row must also match a legal days/duration/start entry in
+# timeslot.toml and must not overlap a configured blackout; draft rejects it
+# before writing starting.csv otherwise.
 #
 # [[new_courses]]
 # Subject = "MATH"
@@ -139,7 +142,7 @@ Title = "FOUNDATIONS OF COLLEGE MATH"
 Credits = 3
 "Time Slot" = "MWF 11:00am"
 Duration = 50
-Room = "269"
+Room = "267"
 Building = "Corley"
 Instructor = ""
 
@@ -150,9 +153,9 @@ Section = "004"
 Type = "Lecture"
 Title = "COLLEGE MATHEMATICS"
 Credits = 3
-"Time Slot" = "MWF 11:50am"
+"Time Slot" = "MWF 10:00am"
 Duration = 50
-Room = "269"
+Room = "267"
 Building = "Corley"
 Instructor = ""
 

@@ -58,7 +58,11 @@ def load_meeting_patterns(path: str | Path) -> list[MeetingPattern]:
             days=entry.days,
             duration_minutes=entry.duration_minutes,
             starts=tuple(record_utils.clock(start) for start in entry.starts),
-            types=frozenset(entry.types),
+            roles=frozenset(entry.roles),
+            courses=frozenset(course.strip().upper() for course in entry.courses),
+            atomic_courses=frozenset(
+                course.strip().upper() for course in entry.atomic_courses
+            ),
         )
         for entry in raw.calendar.meeting_patterns
     ]

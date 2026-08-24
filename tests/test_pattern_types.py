@@ -1,4 +1,6 @@
+import datetime
 import unittest
+from pathlib import Path
 
 from class_schedule.class_model import (
     CoreqClass,
@@ -8,7 +10,12 @@ from class_schedule.class_model import (
     NormalClass,
     Section,
 )
-from class_schedule.solver.candidates import allowed_pattern_types
+from class_schedule.pattern_rules import pattern_applies, section_pattern_role
+from class_schedule.solver import MeetingPattern
+from class_schedule.solver.config import load_meeting_patterns
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def make_section(**overrides) -> Section:
@@ -26,83 +33,123 @@ def make_section(**overrides) -> Section:
     return Section(**defaults)
 
 
-class AllowedPatternTypesTests(unittest.TestCase):
-    def test_normal_class_is_standard(self):
-        section = make_section()
-        item = NormalClass((section,))
-        self.assertEqual(allowed_pattern_types(item, section), frozenset({"standard"}))
+class StructuralRoleTests(unittest.TestCase):
+    def test_roles_depend_on_atomic_structure_not_course_number(self):
+        normal = make_section()
+        self.assertEqual(section_pattern_role(NormalClass((normal,)), normal), "normal")
 
-    def test_hybrid_class_is_standard(self):
-        left = make_section(section="M01", room="101")
-        right = make_section(
+        hybrid_physical = make_section(section="M01")
+        hybrid_online = make_section(
             section="M01", time_slot="TBA", duration=None, room=""
         )
-        item = HybridClass((left, right))
-        self.assertEqual(allowed_pattern_types(item, left), frozenset({"standard"}))
-        self.assertEqual(allowed_pattern_types(item, right), frozenset({"standard"}))
+        hybrid = HybridClass((hybrid_physical, hybrid_online))
+        self.assertEqual(
+            section_pattern_role(hybrid, hybrid_physical), "hybrid_physical"
+        )
 
-    def test_cross_listing_honors_pair_is_standard(self):
-        left = make_section(section="001", instructor="Alice", room="101")
-        right = make_section(section="H01", instructor="Alice", room="101")
-        item = CrossListingClass((left, right))
-        self.assertEqual(allowed_pattern_types(item, left), frozenset({"standard"}))
+        regular = make_section(section="001")
+        honors = make_section(section="H01")
+        cross_listing = CrossListingClass((regular, honors))
+        self.assertEqual(
+            section_pattern_role(cross_listing, regular), "cross_listing"
+        )
 
-    def test_four_credit_mwf_row_is_standard(self):
-        mwf = make_section(time_slot="MWF 9:00am", duration=50)
-        tr_half = make_section(time_slot="T 9:00am", duration=80)
-        item = FourCreditClass((mwf, tr_half))
-        self.assertEqual(allowed_pattern_types(item, mwf), frozenset({"standard"}))
-
-    def test_four_credit_partial_row_is_four_credit_partial(self):
         mwf = make_section(time_slot="MWF 9:00am", duration=50)
         t_half = make_section(time_slot="T 9:00am", duration=80)
-        item = FourCreditClass((mwf, t_half))
+        four_credit = FourCreditClass((mwf, t_half))
         self.assertEqual(
-            allowed_pattern_types(item, t_half), frozenset({"four_credit_partial"})
+            section_pattern_role(four_credit, mwf), "four_credit_primary"
         )
-
-        r_half = make_section(time_slot="R 9:00am", duration=80)
-        item2 = FourCreditClass((mwf, r_half))
         self.assertEqual(
-            allowed_pattern_types(item2, r_half), frozenset({"four_credit_partial"})
+            section_pattern_role(four_credit, t_half), "four_credit_partial"
         )
 
-    def test_coreq_three_credit_pairs_are_standard(self):
-        left = make_section(
-            subject="MATH", number="1113", section="001",
-            time_slot="MWF 9:00am", duration=50, room="101",
+    def test_coreq_role_uses_relative_record_credits(self):
+        lecture = make_section(
+            number="1113", time_slot="MWF 11:00am", credits=3
         )
-        right = make_section(
-            subject="MATH", number="0903", section="001",
-            time_slot="MWF 9:50am", duration=50, room="101",
+        lab = make_section(
+            number="1110", time_slot="MW 12:00pm", credits=2
         )
-        item = CoreqClass((left, right))
-        self.assertEqual(allowed_pattern_types(item, left), frozenset({"standard"}))
-        self.assertEqual(allowed_pattern_types(item, right), frozenset({"standard"}))
+        item = CoreqClass((lecture, lab))
+        self.assertEqual(section_pattern_role(item, lecture), "coreq")
+        self.assertEqual(
+            section_pattern_role(item, lab), "coreq_supplement"
+        )
 
-        left2 = make_section(
-            subject="MATH", number="1003", section="001",
-            time_slot="MWF 9:00am", duration=50, room="101",
-        )
-        right2 = make_section(
-            subject="MATH", number="0803", section="001",
-            time_slot="MWF 9:50am", duration=50, room="101",
-        )
-        item2 = CoreqClass((left2, right2))
-        self.assertEqual(allowed_pattern_types(item2, left2), frozenset({"standard"}))
 
-    def test_coreq_1113_1110_pair_is_coreq_short(self):
-        left = make_section(
-            subject="MATH", number="1113", section="001",
-            time_slot="MWF 9:00am", duration=50, room="101",
+class ConfiguredSelectorTests(unittest.TestCase):
+    def test_course_and_atomic_course_selectors_target_one_coreq_row(self):
+        lecture = make_section(number="1113", time_slot="MWF 11:00am")
+        lab = make_section(number="1110", time_slot="MW 12:00pm")
+        item = CoreqClass((lecture, lab))
+        pattern = MeetingPattern(
+            "MW", 50, (datetime.time(12),),
+            frozenset({"coreq_supplement"}),
+            frozenset({"MATH 1110"}),
+            frozenset({"MATH 1110", "MATH 1113"}),
         )
-        right = make_section(
-            subject="MATH", number="1110", section="001",
-            time_slot="MW 9:50am", duration=50, room="101",
+        self.assertFalse(pattern_applies(item, lecture, pattern))
+        self.assertTrue(pattern_applies(item, lab, pattern))
+
+    def test_same_selector_mechanism_supports_a_named_seminar(self):
+        seminar = make_section(
+            number="4971", time_slot="T 11:00am", duration=80
         )
-        item = CoreqClass((left, right))
-        self.assertEqual(allowed_pattern_types(item, left), frozenset({"coreq_short"}))
-        self.assertEqual(allowed_pattern_types(item, right), frozenset({"coreq_short"}))
+        other = make_section(
+            number="4972", time_slot="T 11:00am", duration=80
+        )
+        pattern = MeetingPattern(
+            "T", 80, (datetime.time(11),),
+            frozenset({"normal"}),
+            frozenset({"MATH 4971"}),
+        )
+        self.assertTrue(
+            pattern_applies(NormalClass((seminar,)), seminar, pattern)
+        )
+        self.assertFalse(pattern_applies(NormalClass((other,)), other, pattern))
+
+    def test_production_config_grants_mw_noon_only_to_selected_atomic_row(self):
+        patterns = load_meeting_patterns(ROOT / "config" / "timeslot.toml")
+        noon = datetime.time(12)
+
+        def can_use_mw_noon(item, section):
+            return any(
+                pattern.days == "MW"
+                and pattern.duration_minutes == 50
+                and noon in pattern.starts
+                and pattern_applies(item, section, pattern)
+                for pattern in patterns
+            )
+
+        cases = []
+        for first_number, second_number in (
+            ("1003", "0803"),
+            ("1113", "0903"),
+            ("1113", "1110"),
+        ):
+            first = make_section(number=first_number)
+            second = make_section(
+                number=second_number, time_slot="MWF 10:00am"
+            )
+            item = CoreqClass((first, second))
+            cases.extend((
+                (f"MATH {first_number}", item, first),
+                (f"MATH {second_number}", item, second),
+            ))
+
+        actual = [
+            (course, can_use_mw_noon(item, section))
+            for course, item, section in cases
+        ]
+        self.assertEqual(actual, [
+            ("MATH 1003", False),
+            ("MATH 0803", False),
+            ("MATH 1113", False),
+            ("MATH 0903", False),
+            ("MATH 1113", False),
+            ("MATH 1110", True),
+        ])
 
 
 if __name__ == "__main__":
