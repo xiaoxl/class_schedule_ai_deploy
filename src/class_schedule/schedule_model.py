@@ -223,7 +223,9 @@ def _group_records(
     *and* decides which kind they become, using that kind's own public
     recognition predicate from ``class_model``. Precedence, highest
     first: same-course pairs (four-credit/Hybrid) beat cross-listed
-    pairs, which beat coreq pairs; anything left over is a single class.
+    pairs, which beat coreq pairs. A remaining physical M/F-prefixed row is
+    normalized into a Hybrid with a derived ONLINE companion; anything else
+    left over is a single class.
     Construction always re-validates through the target class's own
     ``validate`` -- a pair that matches a scan (e.g. the coreq whitelist)
     but fails its finer rules (e.g. bad scheduling) still raises here.
@@ -262,7 +264,12 @@ def _group_records(
     result.extend(cross_listed)
     coreqs, remaining = _take_coreqs(remaining)
     result.extend(coreqs)
-    result.extend(NormalClass((section,)) for section in remaining)
+    result.extend(
+        HybridClass((section,))
+        if HybridClass.is_hybrid_physical(section)
+        else NormalClass((section,))
+        for section in remaining
+    )
     return result
 
 
@@ -445,7 +452,7 @@ def _take_coreqs(
 # persons.toml holds contractual identity, qualification, alias, and load
 # facts; preferences.toml holds this term's wishes for an instructor.
 # ``evaluate_schedule`` gets hard violations from structural double-booking
-# and configured blackout windows. Atomic-class legality is enforced at
+# and configured hard rules. Atomic-class legality is enforced at
 # ``Class`` construction and by the solver's pairwise validity constraints,
 # so invalid four-credit/Hybrid/cross-list/coreq combinations cannot become
 # a Schedule or a solved result.
@@ -547,21 +554,90 @@ class PersonRecord:
 
 
 @dataclass(frozen=True)
+class ConstraintRule:
+    """One hard rule using the same selectors as a preference rule."""
+
+    direction: str = "+"
+    name: str | None = None
+    course: str | None = None
+    section: str | None = None
+    section_prefix: str | None = None
+    room: str | tuple[str, ...] | None = None
+    time: TimeWindow | None = None
+
+    def __post_init__(self) -> None:
+        if self.direction not in ("+", "-"):
+            raise ValueError("constraint direction must be '+' or '-'")
+        if self.name is None and self.room is None and self.time is None:
+            raise ValueError(
+                "a constraint rule requires name, room, and/or time"
+            )
+
+    def applies_to(self, course: str, section: str) -> bool:
+        if self.course is not None and self.course != course:
+            return False
+        if self.section is not None and self.section != section:
+            return False
+        if (
+            self.section_prefix is not None
+            and not section.upper().startswith(self.section_prefix.upper())
+        ):
+            return False
+        return True
+
+    def allows(
+        self,
+        *,
+        instructor: str,
+        building: str,
+        room: str,
+        days: str | None,
+        start: datetime.time | None,
+        end: datetime.time | None,
+        is_online: bool,
+    ) -> bool:
+        """Apply positive requirements or reject a forbidden combination."""
+        matches: list[bool] = []
+        if self.name is not None:
+            matches.append(instructor == self.name)
+        if self.room is not None:
+            if is_online:
+                if self.direction == "-":
+                    return True
+            else:
+                matches.append(location_matches(building, room, self.rooms))
+        if self.time is not None:
+            if is_online:
+                if self.direction == "-":
+                    return True
+            else:
+                matches.append(self.time.overlaps(days, start, end))
+        return all(matches) if self.direction == "+" else not all(matches)
+
+    @property
+    def rooms(self) -> tuple[str, ...]:
+        if self.room is None:
+            return ()
+        return (self.room,) if isinstance(self.room, str) else self.room
+
+
+@dataclass(frozen=True)
 class PreferenceRule:
     """One normalized flat ``[[rules]]`` selector.
 
     The TOML loader uses a rule's explicit ``name`` to attach it to one
     ``PreferenceRecord``; rules without a name remain global. Comments and
-    physical ordering in the file never determine scope. TOML-facing
-    ``preferred_*``/``disliked_*`` fields are normalized into selectors and
-    ``direction`` here.
+    physical ordering in the file never determine scope. A TOML rule's
+    positive/negative signed ``weight`` is normalized into ``direction`` and
+    a non-negative magnitude here.
 
     ``course`` ("SUBJECT NUMBER", matching persons.toml's own
-    convention), ``section``, ``section_prefix``, ``room``, and ``time`` are all optional
-    match keys -- an unset key matches anything, so a rule can be as
+    convention), ``section``, ``section_prefix``, ``room``, and ``time``
+    are all optional match keys -- an unset key matches anything, so a rule can be as
     broad ("this instructor generally avoids Corley") or as narrow ("this
-    exact course-section must land in this exact room") as its fields
-    specify. ``section`` only makes sense alongside ``course`` -- a bare
+    exact course-section must land in one of these rooms") as its fields
+    specify. ``room`` may be one location or a tuple of alternatives;
+    matching any alternative satisfies that selector once. ``section`` only makes sense alongside ``course`` -- a bare
     section code like "F01" repeats across unrelated courses. In contrast,
     ``section_prefix`` intentionally matches across courses, e.g. ``"TC"``.
 
@@ -576,7 +652,7 @@ class PreferenceRule:
     course: str | None = None
     section: str | None = None
     section_prefix: str | None = None
-    room: str | None = None
+    room: str | tuple[str, ...] | None = None
     time: TimeWindow | None = None
     direction: str = "dislike"
     weight: float = 0.0
@@ -601,7 +677,9 @@ class PreferenceRule:
             and not section.upper().startswith(self.section_prefix.upper())
         ):
             return False
-        if self.room is not None and not location_matches(building, room, (self.room,)):
+        if self.room is not None and not location_matches(
+            building, room, self.rooms
+        ):
             return False
         if self.time is not None and not self.time.overlaps(days, start, end):
             return False
@@ -610,6 +688,12 @@ class PreferenceRule:
     @property
     def signed_weight(self) -> float:
         return -self.weight if self.direction == "prefer" else self.weight
+
+    @property
+    def rooms(self) -> tuple[str, ...]:
+        if self.room is None:
+            return ()
+        return (self.room,) if isinstance(self.room, str) else self.room
 
 
 @dataclass(frozen=True)
@@ -624,8 +708,6 @@ class PreferenceRecord:
     ``False``.
 
     Flat named rules carry every selector-based preference and its weight.
-    ``preferred_online_weight`` is the separate blanket affinity for records
-    without a physical meeting.
 
     ``max_back_to_back`` caps how many consecutive same-day meetings this
     instructor tolerates before it's scored -- ``None`` means no cap
@@ -643,7 +725,6 @@ class PreferenceRecord:
     allow_overload: bool = True
     allow_back_to_back: bool = True
     max_back_to_back: int | None = None
-    preferred_online_weight: float | None = None
     rules: tuple[PreferenceRule, ...] = ()
 
     @property
@@ -702,9 +783,6 @@ def load_preferences(path: str | Path) -> dict[str, PreferenceRecord]:
             allow_overload=entry.allow_overload,
             allow_back_to_back=entry.allow_back_to_back,
             max_back_to_back=entry.max_back_to_back,
-            preferred_online_weight=(
-                entry.prefers_online.weight if entry.prefers_online else None
-            ),
             rules=tuple(named_rules.get(entry.name, ())),
         )
         for entry in raw.instructors
@@ -719,10 +797,9 @@ def load_global_rules(path: str | Path) -> tuple[PreferenceRule, ...]:
 
 
 def _parse_flat_rule(raw: FlatPreferenceRuleSchema) -> PreferenceRule:
-    preferred = raw.selector_values("preferred")
-    values = preferred or raw.selector_values("disliked")
-    values["direction"] = "prefer" if preferred else "dislike"
-    values["weight"] = raw.weight
+    values = raw.model_dump(exclude={"name"}, exclude_none=True)
+    values["direction"] = "prefer" if raw.weight > 0 else "dislike"
+    values["weight"] = abs(raw.weight)
     return _parse_rule(values)
 
 
@@ -736,20 +813,25 @@ def _parse_rule(raw: Mapping[str, object]) -> PreferenceRule:
     section_prefix = raw.get("section_prefix")
     if section is not None and "course" not in raw:
         raise ValueError("A rule's 'section' requires 'course' to also be set")
+    raw_room = raw.get("room")
     return PreferenceRule(
         course=str(raw["course"]) if "course" in raw else None,
         section=str(section) if section is not None else None,
         section_prefix=(
             str(section_prefix).strip() if section_prefix is not None else None
         ),
-        room=str(raw["room"]) if "room" in raw else None,
-        time=_parse_rule_time(raw["time"]) if "time" in raw else None,
+        room=(
+            str(raw_room) if isinstance(raw_room, str)
+            else tuple(str(room) for room in raw_room)
+            if raw_room is not None else None
+        ),
+        time=parse_rule_time(raw["time"]) if "time" in raw else None,
         direction=direction,
         weight=float(raw.get("weight", 0.0)),
     )
 
 
-def _parse_rule_time(raw: object) -> TimeWindow:
+def parse_rule_time(raw: object) -> TimeWindow:
     if isinstance(raw, str):
         start, end = (part.strip() for part in raw.split("-", maxsplit=1))
         normalized = [part if ":" in part else f"{part}:00" for part in (start, end)]
@@ -956,52 +1038,47 @@ def check_conflicts(schedule: "Schedule") -> list[HardViolation]:
     return violations
 
 
-def check_required_instructors(
-    schedule: "Schedule",
-    required: Mapping[tuple[str, str | None], str],
+def check_constraint_rules(
+    schedule: "Schedule", rules: Iterable[ConstraintRule],
 ) -> list[HardViolation]:
-    """Validate term-level hard instructor assignments against grouped data."""
+    """Validate mandatory instructor/room rules against grouped data."""
+    configured = tuple(rules)
     violations: list[HardViolation] = []
     for item in schedule:
-        for section in item.sections:
+        sections = (
+            (item.physical_section,)
+            if isinstance(item, HybridClass)
+            else item.sections
+        )
+        for section in sections:
             course = f"{section.subject} {section.number}"
-            instructor = required.get(
-                (course, section.section), required.get((course, None))
-            )
-            if instructor is None or section.instructor == instructor:
-                continue
-            violations.append(HardViolation(
-                "required_instructor",
-                section.course_id,
-                f"{section.course_id}: must be assigned to {instructor}, "
-                f"not {section.instructor or '(blank)'}",
-            ))
-    return violations
-
-
-def check_blackouts(
-    schedule: "Schedule", blackouts: Iterable[TimeWindow]
-) -> list[HardViolation]:
-    """Report every physical section overlapping an absolute blackout."""
-    windows = tuple(blackouts)
-    violations: list[HardViolation] = []
-    for item in schedule:
-        for section in item.sections:
-            if section.is_online:
-                continue
-            for window in windows:
-                if not window.overlaps(section.days, section.start, section.end):
+            for rule in configured:
+                if not rule.applies_to(course, section.section):
                     continue
-                label = window.reason or (
-                    f"{''.join(sorted(window.days))} "
-                    f"{window.start.strftime('%H:%M')}-"
-                    f"{window.end.strftime('%H:%M')}"
-                )
+                if rule.allows(
+                    instructor=section.instructor,
+                    building=section.building,
+                    room=section.room,
+                    days=section.days,
+                    start=section.start,
+                    end=section.end,
+                    is_online=section.is_online,
+                ):
+                    continue
+                conditions = []
+                if rule.name is not None:
+                    conditions.append(f"name={rule.name!r}")
+                if rule.room is not None:
+                    conditions.append(f"room={list(rule.rooms)!r}")
+                if rule.time is not None:
+                    conditions.append("time=<configured window>")
+                action = "must match" if rule.direction == "+" else "must not match"
                 violations.append(HardViolation(
-                    "blackout",
+                    "constraint_positive"
+                    if rule.direction == "+" else "constraint_negative",
                     section.course_id,
-                    f"{section.course_id} at {section.time_slot} overlaps "
-                    f"the configured blackout ({label})",
+                    f"{section.course_id}: {action} "
+                    f"{', '.join(conditions)}",
                 ))
     return violations
 
@@ -1101,17 +1178,6 @@ def check_soft_preferences(
                 ))
         if preference is None:
             continue
-        if (
-            preference.preferred_online_weight is not None
-            and not section.is_online
-        ):
-            findings.append(SoftFinding(
-                "online_preference", section.instructor,
-                f"{section.course_id}: {section.instructor} prefers "
-                f"a non-physical section but this one meets in person",
-                preference.preferred_online_weight,
-            ))
-
     by_instructor: dict[str, list[Section]] = {}
     for section in sections:
         if not section.is_online:
@@ -1156,9 +1222,8 @@ def evaluate_schedule(
     preferences: dict[str, PreferenceRecord],
     persons: dict[str, PersonRecord],
     global_rules: tuple[PreferenceRule, ...] = (),
-    blackouts: Iterable[TimeWindow] = (),
     meeting_patterns: Iterable[MeetingPatternLike] = (),
-    required_instructors: Mapping[tuple[str, str | None], str] | None = None,
+    constraint_rules: Iterable[ConstraintRule] = (),
 ) -> ScheduleEvaluation:
     """Evaluate only domain objects; raw CSV rows are not accepted here."""
     soft_penalty, soft_findings = check_soft_preferences(
@@ -1170,9 +1235,8 @@ def evaluate_schedule(
         loads=teaching_loads(schedule),
         hard_violations=tuple(
             check_conflicts(schedule)
-            + check_blackouts(schedule, blackouts)
             + check_meeting_patterns(schedule, meeting_patterns)
-            + check_required_instructors(schedule, required_instructors or {})
+            + check_constraint_rules(schedule, constraint_rules)
         ),
         soft_penalty=soft_penalty,
         soft_findings=tuple(soft_findings),

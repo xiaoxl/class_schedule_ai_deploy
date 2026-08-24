@@ -51,6 +51,15 @@ class SectionTests(unittest.TestCase):
         section = make_section(time_slot="MWF 9:00am", duration=50)
         self.assertEqual(section.end.strftime("%H:%M"), "09:50")
 
+    def test_math_1110_credit_override_is_applied_at_construction(self):
+        section = make_section(number="1110", credits=0)
+        self.assertEqual(section.credits, 2)
+        self.assertEqual(section.credit_hours, 2)
+
+    def test_credit_override_is_scoped_to_math_1110(self):
+        section = make_section(subject="STAT", number="1110", credits=1.5)
+        self.assertEqual(section.credit_hours, 1.5)
+
 
 class FourCreditClassTests(unittest.TestCase):
     def test_mwf_plus_t_same_instructor_is_four_credit(self):
@@ -94,6 +103,39 @@ class HybridClassTests(unittest.TestCase):
         )
         right = make_section(section="F01", room="101")
         self.assertTrue(HybridClass.is_hybrid(left, right))
+
+    def test_physical_row_is_the_hybrid_location_authority(self):
+        stale_online = make_section(
+            section="F01", time_slot="ONLINE", duration=None,
+            room="", building="", instructor="Old",
+        )
+        physical = make_section(
+            section="F01", room="269", building="Corley",
+            instructor="Alice",
+        )
+
+        hybrid = HybridClass((stale_online, physical))
+
+        self.assertEqual(hybrid.building, "Corley")
+        self.assertEqual(hybrid.room, "269")
+        self.assertEqual(hybrid.time_slot, physical.time_slot)
+        self.assertEqual(hybrid.online_section.instructor, "Alice")
+
+    def test_online_export_row_is_generated_from_the_physical_row(self):
+        physical = make_section(
+            section="F01", room="269", building="Corley",
+            instructor="Alice",
+        )
+        hybrid = HybridClass((physical,))
+
+        records = hybrid.to_records()
+
+        self.assertEqual(len(records), 2)
+        online = next(record for record in records if record["Time Slot"] == "ONLINE")
+        in_person = next(record for record in records if record["Time Slot"] != "ONLINE")
+        self.assertEqual(online["Instructor"], "Alice")
+        self.assertIsNone(online["Room"])
+        self.assertEqual(in_person["Room"], "269")
 
     def test_non_prefixed_section_is_not_hybrid(self):
         left = make_section(section="001", room="101")

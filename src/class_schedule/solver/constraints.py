@@ -31,6 +31,39 @@ from .types import SectionCandidate
 HARD_LOAD_CAP_TOLERANCE = 6.0
 
 
+def add_placeholder_count_terms(
+    candidates: list[list[SectionCandidate]],
+    chosen: list[list[cp_model.IntVar]],
+    placeholder_instructors: tuple[str, ...],
+    weight: float,
+    model: cp_model.CpModel,
+    *,
+    enforce_contiguous: bool = True,
+) -> list[cp_model.LinearExpr]:
+    """Penalize each distinct placeholder identity selected anywhere."""
+    objective_terms: list[cp_model.LinearExpr] = []
+    used_variables: list[cp_model.IntVar] = []
+    for rank, instructor in enumerate(placeholder_instructors, start=1):
+        selected = [
+            chosen[section_index][candidate_index]
+            for section_index, section_candidates in enumerate(candidates)
+            for candidate_index, candidate in enumerate(section_candidates)
+            if candidate.instructor == instructor
+        ]
+        if not selected:
+            continue
+        used = model.new_bool_var(f"placeholder_{rank}_used")
+        for variable in selected:
+            model.add(variable <= used)
+        model.add(used <= sum(selected))
+        used_variables.append(used)
+        objective_terms.append(weight * used)
+    if enforce_contiguous:
+        for previous, current in zip(used_variables, used_variables[1:]):
+            model.add(previous >= current)
+    return objective_terms
+
+
 def predicate_for(item: Class):
     if isinstance(item, FourCreditClass):
         return FourCreditClass.is_four_credit

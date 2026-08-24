@@ -71,21 +71,16 @@ available = true
 
 ```toml
 [[calendar.meeting_patterns]]
-days = "MWF"
+days = ["MWF"]
 duration_minutes = 50
 starts = ["08:00", "09:00", "10:00"]
 roles = ["normal", "hybrid_physical", "cross_listing", "coreq"]
 
 [[calendar.meeting_patterns]]
-days = "MW"
+days = ["MW"]
 duration_minutes = 50
 starts = ["12:00"]
 roles = ["coreq_supplement"]
-
-[[calendar.blackouts]]
-days = ["F"]
-between = ["12:00", "12:50"]
-reason = "department meeting"
 ```
 
 `roles` 描述当前 CSV 记录在分组后原子课中的结构角色：
@@ -107,103 +102,160 @@ reason = "department meeting"
 两个课程 selector 都使用严格的 `SUBJECT NUMBER` 格式，不可重复；两者同时出现时，
 `courses` 必须是 `atomic_courses` 的子集，否则加载配置时直接报错。
 
-`days` 只能由 `MTWRF` 组成，`duration_minutes > 0`，`starts` 不可为空。
-blackout 与候选相交时该候选不生成。
-`changes.toml` 新增的物理 section 也使用这里的 pattern 和 blackout 做严格校验；
-例如标准 MWF 50 分钟课不能写成 `11:50`，Friday `12:00-12:50` blackout
-也绝对禁止 `MWF 12:00pm`。`MATH 0803`/`MATH 1003` 和
+同一课程只要存在至少一条显式 `courses` pattern，这些显式 pattern 就构成该课程完整的
+候选时间域，并优先于所有通用 pattern；其中的 `duration_minutes` 也作为规范时长。因此旧输入
+记录的时长可以在求解候选中被配置规范化，而不需要在学期 `changes.toml` 里取消再新增课程。
+
+`days` 必须是非空数组，数组的每个字符串只能由 `MTWRF` 组成。每个数组元素是一个
+可选的完整 meeting pattern：`days = ["M", "W", "F"]` 表示可从三个单日模式中
+选择，`days = ["MWF"]` 表示一个每周 M/W/F 都上课的模式，两者含义不同。loader 会
+把数组展开成独立运行时候选。`duration_minutes > 0`，`starts` 不可为空。
+`timeslot.toml` 只包含允许生成的 meeting pattern，不存禁止时段。
+`changes.toml` 新增的物理 section 也使用这里的 pattern 做严格校验；
+例如标准 MWF 50 分钟课不能写成 `11:50`。Friday `12:00-12:50` 的禁止时段
+使用 `constraints.toml` 负规则表达。`MATH 0803`/`MATH 1003` 和
 `MATH 0903`/`MATH 1113` 两类 coreq 都只能使用 standard pattern；coreq 中学分较低的
 辅助记录可以使用 `MW 12:00pm`。在当前数据中，这对应 `MATH 1110` 记录，但规则本身
 不识别这个课程号。
+
+一次只上一天的课可把相同 duration/starts/selectors 的日期合并到一个数组元素列表；
+`days = ["MTWRF"]` 表示每周五天都上课，不表示“从五天中任选一天”。当前
+`MATH 4971` 是每周一次的 seminar，因此配置用 `days = ["M", "W", "F"]` 表示
+三个 50 分钟单日选项，用 `days = ["T", "R"]` 表示两个 80 分钟单日选项，并使用标准
+TR 网格；显式课程 pattern 的优先级避免错误生成通用 MWF/TR 候选。Friday
+`12:00-12:50` 仍由 constraint 负规则统一禁止。
 
 ## preferences.toml
 
 这是学期数据，不是人员合同事实。
 
 ```toml
+staff_count_weight = 100
+
 # Xiao, Xinli
 [[instructors]]
 name = "Xiao, Xinli"
 allow_overload = false
 allow_back_to_back = true
 max_back_to_back = 3
-prefers_online = { weight = 20 }
 
 [[rules]]
 name = "Xiao, Xinli"
-preferred_time = "09:00-13:00"
+time = "09:00-13:00"
 weight = 50
 
 [[rules]]
 name = "Xiao, Xinli"
-disliked_course = "MATH 2934"
+course = "MATH 2934"
+weight = -50
+
+[[rules]]
+name = "Xiao, Xinli"
+course = "STAT 3113"
+room = "Corley 101"
 weight = 50
 
 [[rules]]
 name = "Xiao, Xinli"
-preferred_course = "STAT 3113"
-preferred_room = "Corley 101"
-weight = 50
+section_prefix = "TC"
+weight = 20
 
-[[rules]]
-name = "Xiao, Xinli"
-disliked_section_prefix = "TC"
-weight = 10
-
-# Global: no name means the rule applies regardless of instructor.
-[[rules]]
-preferred_course = "MATH 1113"
-preferred_section = "F01"
-preferred_room = "Corley 269"
-weight = 100
 ```
 
-- `[[instructors]]` 是人员 profile，只存 `allow_overload`、连排参数和
-  `prefers_online`；`name` 必须存在于 persons。
+- `staff_count_weight` 是每个实际使用的 `Staff`/`Staff N` 身份的全局成本，范围
+  `0-100`。值越高，求解器越愿意调整时间来合并 Staff；硬冲突仍可迫使它增加身份。
+- `[[instructors]]` 是人员 profile，只存 `allow_overload` 和连排参数；`name`
+  必须存在于 persons。
 - `allow_overload` 只改变超载软惩罚，不解除求解器绝对负载上界。
 - `allow_back_to_back = false` 对每个相邻连续课惩罚；为 true 且设置
   `max_back_to_back = N` 时，从同日连续第 `N+1` 门开始逐门惩罚。
-- `prefers_online = { weight = N }` 会对其每个物理课候选增加 `N` 分成本；省略表示
-  没有在线偏好。
 - 每条 `[[rules]]` 都是独立字典。`name` 决定教师作用域；同一人的规则可以连续放在
   `# Name` 注释下便于阅读，但注释没有任何配置意义。
-- 每条规则必须选择一个方向：全部使用 `preferred_*` 字段，或全部使用 `disliked_*`
-  字段，不可混用。`weight` 必填且范围为 `0-100`。匹配 preferred 规则时从候选成本
-  减去 `weight`，匹配 disliked 规则时增加 `weight`；同一候选命中多条规则时累加。
-- prefer 未命中不是违规；dislike 命中会写入软问题报告。
-- selector 内的 `course`、`section`、`section_prefix`、`room`、`time` 是可选匹配条件，
-  同一字典内按 AND 组合。selector 至少需要一个条件，`section` 必须与 `course` 同时出现。
-- `preferred_time = "8-12"`（或 `disliked_time`）是所有工作日的简写，等价于
-  `preferred_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "12:00"] }`。
+- 每条规则直接使用 `course`、`section`、`section_prefix`、`room`、`time`
+  selector。`weight` 必填、不可为 0，范围为 `-100` 到 `100`：正数表示喜欢，命中时
+  从候选成本减去该值；负数表示排斥，命中时把绝对值加入成本。同一候选命中多条
+  规则时累加。
+- 正权重规则未命中不是违规；负权重规则命中会写入软问题报告。
+- selector 内的 `course`、`section`、`section_prefix`、`room`、`time`
+  是可选匹配条件，同一字典内按 AND 组合。selector 至少需要一个条件，`section`
+  必须与 `course` 同时出现。
+- `room` 可写单个字符串，也可写候选数组，例如
+  `room = ["Corley 103", "Corley 104", "Rothwell 221"]`。命中数组中
+  任意一个房间即满足该 selector，一条规则最多计算一次 `weight`。
+- `time = "8-12"` 是所有工作日的简写，等价于
+  `time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "12:00"] }`。
   需要限定 MWF/TR 或记录 `reason` 时使用完整字典。
 - `section_prefix` 是不绑定课程的大小写无关前缀匹配，例如 `"TC"` 匹配
   `TC1`、`TC2`；不可与精确的 `section` 同时出现。
+- 本项目以 `TC` section 编码表示网课。喜欢网课写 `section_prefix = "TC"` 和正权重，
+  排斥网课写同一 selector 和负权重。不要用 TBA 或无时间记录推断网课，因为原始输入中的
+  `F01`、普通 `001`、高中段等记录也可能是 TBA。
 - 省略 `name` 的规则是全局规则。填写 `name` 时必须存在同名 `[[instructors]]` profile；
   不能依靠附近注释推断姓名。
 
 ## constraints.toml
 
-这是学期级硬约束，不是偏好。需要保证某门课必须由指定教师承担时写：
+这是学期级硬约束，不是偏好。需要保证某门课必须由指定教师承担或使用指定物理
+教室时写：
 
 ```toml
-[[required_instructors]]
+[[rules]]
+direction = "+"
 course = "MATH 4123"
-instructor = "Limperis, Thomas G."
+name = "Limperis, Thomas G."
 
-[[required_instructors]]
+[[rules]]
+direction = "+"
 course = "MATH 1113"
 section = "006"
-instructor = "Taylor, Teresa L."
+name = "Taylor, Teresa L."
+
+[[rules]]
+direction = "+"
+course = "MATH 1113"
+section = "F01"
+room = "Corley 269"
+
+# 同一条规则可以同时要求教师和教室
+[[rules]]
+direction = "+"
+course = "STAT 2163"
+section = "001"
+name = "Bain, Leslie M."
+room = ["Corley 103", "Corley 104"]
+
+# 全局禁止 Friday 12:00-12:50
+[[rules]]
+direction = "-"
+time = { days = ["F"], between = ["12:00", "12:50"] }
 ```
 
+- `constraints.toml` 和 `preferences.toml` 都使用 `[[rules]]`，并共享
+  `name`、`course`、`section`、`section_prefix`、`room`、`time` 字段。
+- preference rule 必须写 signed `weight`，命中后进入软目标；constraint rule 不写
+  `weight`，必须写 `direction = "+"` 或 `direction = "-"`。
+- `direction = "+"` 表示受规则作用的候选必须匹配全部 `name/room/time` 条件；
+  `direction = "-"` 表示禁止同时匹配全部这些条件的候选。因此负规则可以禁止单一值，
+  也可以禁止特定教师、房间、时间的组合。
 - `course` 使用严格的 `SUBJECT NUMBER` 格式；省略 `section` 时匹配该课程的
   全部 section，填写时只匹配该 section。
-- `instructor` 必须存在于 `persons.toml`，且其 `courses` 必须包含该课程。
-- 同一个 `(course, section)` 不得重复。
-- 求解器只为匹配课程生成该教师的候选；`validate` 和最终报告也会把不匹配结果
-  报告为 `required_instructor` 硬违规。
-- `weight = 100` 仍然只是软偏好。凡是“必须”或“禁止”的教师分配，不应写成
-  `preferences.toml` 的 preferred/disliked rule。
+- `name` 在硬规则中表示必须使用的教师；该名称必须存在于 `persons.toml`，且其
+  `courses` 必须包含规则中的课程。
+- `course`、`section`、`section_prefix` 决定规则作用于哪些 section；`name`、`room`、
+  `time` 是这些 section 的候选必须满足的值。
+- 同一 selector 可以在一条规则中同时要求教师、教室和时间，也可以写成多条规则；
+  所有匹配的硬规则都会累计执行。
+- 一条省略 `section` 的课程规则和一条指定 `section` 的规则可以同时命中；两条都必须
+  满足，不存在后者覆盖前者的隐式行为。互相矛盾的教师要求在加载配置时直接报错。
+- `room` 可写一个字符串或字符串数组。求解器只生成命中指定位置的物理会议候选；
+  Hybrid 的时间和位置由 `physical_section` 唯一决定，整项硬规则也只用这条物理权威
+  记录判断一次。ONLINE companion 是导出表示，不是另一个待分配教室的会议。位置必须
+  存在于 `locations.toml`。
+- 求解器只生成满足规则的候选；`validate` 和最终报告把不满足的正/负规则分别报告为
+  `constraint_positive`、`constraint_negative` 硬违规。
+- `weight = 100` 或 `weight = -100` 仍然只是软偏好。“必须由某位教师承担”只写在
+  学期 `constraints.toml` 的 `[[rules]]` 中，不在 preference 或 Python 代码中重复。
+  其他“必须”或“禁止”的教师/教室分配也不能只依靠 preference rule。
 
 ## changes.toml
 
@@ -298,9 +350,10 @@ placeholder = "Staff"
 | `room` | 否 | string；允许 `""` 清空 |
 
 每个 edit 至少设置一个可修改字段；字段值必须是字符串。省略 `record` 时，edit
-同时作用于原子课全部记录。多个 edit 按文件顺序执行，每一步都会重新运行原子
-课类型验证，因此不能用一个暂时非法的中间状态等待后续 edit 修复；双行课程要
-整体修改时优先省略 record。
+通常同时作用于原子课全部记录。Hybrid 是例外：时间和教室默认修改唯一的物理行，
+ONLINE companion 自动重建；教师仍同步整个原子课。多个 edit 按文件顺序执行，
+每一步都会重新运行原子课类型验证，因此不能用一个暂时非法的中间状态等待后续
+edit 修复；其他双行课程要整体修改时优先省略 record。
 
 edit 只改变求解起点，不自动锁定。没有对应 lock 时，求解器可以再次改变这个
 值。设置为空字符串是明确清空，不等于省略字段。

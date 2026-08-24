@@ -71,10 +71,6 @@ def preference_cost(
             days=days, start=start, end=end,
         ):
             cost += rule.signed_weight
-    if preference is None:
-        return cost
-    if preference.preferred_online_weight is not None and days is not None:
-        cost += preference.preferred_online_weight
     return cost
 
 
@@ -102,11 +98,24 @@ def section_candidates(
             config.preferences, config.global_rules,
         ),
     )
-    required_instructor = config.required_instructor(course, section.section)
+    constraints = config.constraints_for(course, section.section)
+
+    def constraints_allow(candidate: SectionCandidate) -> bool:
+        return all(
+            rule.allows(
+                instructor=candidate.instructor,
+                building=candidate.building,
+                room=candidate.room,
+                days=candidate.days,
+                start=candidate.start,
+                end=candidate.end,
+                is_online=section.is_online,
+            )
+            for rule in constraints
+        )
+
     instructors = (
-        [required_instructor]
-        if required_instructor is not None
-        else candidate_instructors(section, config.persons, placeholder_instructors)
+        candidate_instructors(section, config.persons, placeholder_instructors)
         or [section.instructor]
     )
     if section.is_online:
@@ -130,26 +139,33 @@ def section_candidates(
             )
             for instructor in instructors
         ), key=lambda candidate: candidate.cost)
+        result = [candidate for candidate in result if constraints_allow(candidate)]
         return [candidate for candidate in result if _matches_locks(section, candidate, locked_fields)]
 
-    patterns = [
+    applicable_patterns = [
         pattern for pattern in config.meeting_patterns
+        if pattern_applies(item, section, pattern)
+    ]
+    explicit_course_patterns = [
+        pattern for pattern in applicable_patterns
+        if course in pattern.courses
+    ]
+    patterns = explicit_course_patterns or [
+        pattern for pattern in applicable_patterns
         if pattern.duration_minutes == section.duration
-        and pattern_applies(item, section, pattern)
     ]
     current_is_allowed = (
         (
             not config.meeting_patterns
             or section.start is not None
             and any(
-                pattern.days == section.days and section.start in pattern.starts
+                pattern.days == section.days
+                and pattern.duration_minutes == section.duration
+                and section.start in pattern.starts
                 for pattern in patterns
             )
         )
-        and not any(
-            window.overlaps(section.days, section.start, section.end)
-            for window in config.blackouts
-        )
+        and constraints_allow(current)
     )
     if not config.meeting_patterns and section.days and section.start:
         patterns = [MeetingPattern(
@@ -167,8 +183,6 @@ def section_candidates(
         for pattern in patterns:
             for start in pattern.starts:
                 end = record_utils.add_minutes(start, pattern.duration_minutes)
-                if any(window.overlaps(pattern.days, start, end) for window in config.blackouts):
-                    continue
                 time_slot = record_utils.format_slot(pattern.days, start)
                 for room in rooms:
                     cost = (
@@ -184,10 +198,12 @@ def section_candidates(
                         instructor, pattern.days, start, end, room.building, room.room,
                         course, section.section, config.preferences, config.global_rules,
                     )
-                    bucket[(time_slot, room.building, room.room)] = SectionCandidate(
+                    candidate = SectionCandidate(
                         instructor, time_slot, pattern.duration_minutes,
                         pattern.days, start, end, room.room, room.building, cost,
                     )
+                    if constraints_allow(candidate):
+                        bucket[(time_slot, room.building, room.room)] = candidate
         if instructor == section.instructor and current_is_allowed:
             bucket[(current.time_slot, current.building, current.room)] = current
 
@@ -197,10 +213,6 @@ def section_candidates(
     if (
         current_is_allowed
         and current not in result
-        and (
-            required_instructor is None
-            or current.instructor == required_instructor
-        )
     ):
         result.append(current)
     return [candidate for candidate in result if _matches_locks(section, candidate, locked_fields)]

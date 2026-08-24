@@ -1,10 +1,10 @@
 """Atomic class model backed by one or two CSV records.
 
 This module has no dependency on Schedule and knows nothing about
-collections of classes -- it only models a single CSV row (``Section``) and
-a single atomic class of one or two rows.  ``NormalClass`` (one CSV record)
-is the base of the hierarchy; ``SpecialClass`` (two CSV records) is the base
-for the four two-record kinds -- ``FourCreditClass``, ``HybridClass``,
+collections of classes -- it only models a single table row (``Section``) and
+a single normalized atomic class of one or two rows. ``NormalClass`` (one row)
+is the base of the hierarchy; ``SpecialClass`` (two normalized rows) is the base
+for the four two-row kinds -- ``FourCreditClass``, ``HybridClass``,
 ``CrossListingClass``, ``CoreqClass`` -- each of which owns its own
 recognition rule and validation. Grouping many rows into many classes (and
 back) is a collection-level concern that belongs to whatever owns the full
@@ -22,9 +22,10 @@ from typing import ClassVar
 from . import record_utils
 
 # Course numbers encode credit hours in their last digit by convention
-# (e.g. "1914" -> 4 credits, "0803" -> 3 credits); a few numbers don't
-# follow that convention.
-_CREDIT_HOUR_OVERRIDES: dict[str, int] = {"1110": 2}
+# (e.g. "1914" -> 4 credits, "0803" -> 3 credits). These full-course
+# exceptions are authoritative and are applied while constructing Section,
+# before the record enters an atomic class or is flattened back to a draft.
+_CREDIT_HOUR_OVERRIDES: dict[str, float] = {"MATH 1110": 2.0}
 
 
 class DeliveryMode(StrEnum):
@@ -36,9 +37,6 @@ class DeliveryMode(StrEnum):
 
 
 def _infer_credit_hours(number: str) -> int:
-    override = _CREDIT_HOUR_OVERRIDES.get(number)
-    if override is not None:
-        return override
     return int(number[-1]) if number and number[-1].isdigit() else 0
 
 
@@ -66,6 +64,11 @@ class Section:
         self.time_slot = record_utils.text(self.time_slot)
         if not self.subject or not self.number or not self.section:
             raise ValueError("Each record requires Subject, Number, and Section")
+        credit_override = _CREDIT_HOUR_OVERRIDES.get(
+            f"{self.subject} {self.number}"
+        )
+        if credit_override is not None:
+            self.credits = credit_override
         record_utils.parse_slot(self.time_slot)
         if not self.is_online and self.duration is None:
             raise ValueError(
@@ -105,7 +108,7 @@ class Section:
 
     @property
     def credit_hours(self) -> float:
-        """Credits for this record, preferring explicit source data."""
+        """Credits normalized at construction, otherwise inferred by number."""
         return (
             self.credits
             if self.credits is not None
@@ -348,8 +351,61 @@ class FourCreditClass(SpecialClass):
 
 @dataclass(slots=True)
 class HybridClass(SpecialClass):
-    """Two same-course rows in an M- or F-prefixed section: one physical
-    meeting with a room, and one non-physical meeting without a room."""
+    """An M- or F-prefixed physical meeting plus its derived ONLINE row.
+
+    Import may provide only the physical row or may include a stale companion;
+    construction always rebuilds the companion from the physical authority.
+    The normalized atomic object and its flattened export both contain two rows.
+    """
+
+    def __post_init__(self) -> None:
+        physical = [section for section in self.sections if section.has_meeting_time]
+        if len(physical) == 1 and len(self.sections) in (1, 2):
+            meeting = physical[0]
+            companion = self._online_companion(meeting)
+            if len(self.sections) == 1:
+                self.sections = (companion, meeting)
+            else:
+                self.sections = tuple(
+                    section if section.has_meeting_time else companion
+                    for section in self.sections
+                )
+        super(HybridClass, self).__post_init__()
+
+    @staticmethod
+    def _online_companion(physical: Section) -> Section:
+        return replace(
+            physical,
+            time_slot="ONLINE",
+            duration=None,
+            room="",
+            building="",
+            cross_list="",
+        )
+
+    @property
+    def physical_section(self) -> Section:
+        return next(
+            section for section in self.sections if section.has_meeting_time
+        )
+
+    @property
+    def online_section(self) -> Section:
+        return next(
+            section for section in self.sections if not section.has_meeting_time
+        )
+
+    @property
+    def building(self) -> str:
+        return self.physical_section.building
+
+    @property
+    def room(self) -> str:
+        return self.physical_section.room
+
+    @property
+    def time_slot(self) -> str:
+        return self.physical_section.time_slot
 
     def validate(self) -> None:
         super(HybridClass, self).validate()
@@ -369,7 +425,8 @@ class HybridClass(SpecialClass):
 
     @staticmethod
     def is_hybrid(left: Section, right: Section) -> bool:
-        if not left.section.upper().startswith(("M", "F")):
+        physical = left if left.has_meeting_time else right
+        if not HybridClass.is_hybrid_physical(physical):
             return False
         return (
             left.has_meeting_time != right.has_meeting_time
@@ -378,6 +435,36 @@ class HybridClass(SpecialClass):
                 for section in (left, right)
             )
         )
+
+    @staticmethod
+    def is_hybrid_physical(section: Section) -> bool:
+        """Return whether one imported row is sufficient to build a Hybrid."""
+        return (
+            section.section.upper().startswith(("M", "F"))
+            and section.has_meeting_time
+            and bool(section.room)
+        )
+
+    def to_records(self) -> list[dict[str, object]]:
+        """Flatten with an ONLINE row regenerated from the physical row."""
+        physical = self.physical_section
+        companion = self._online_companion(physical)
+        return [
+            (companion if not section.has_meeting_time else physical).to_record()
+            for section in self.sections
+        ]
+
+    def change_time(
+        self, time_slot: str, *, record: int | None = None
+    ) -> "HybridClass":
+        target = self.sections.index(self.physical_section) if record is None else record
+        return super(HybridClass, self).change_time(time_slot, record=target)
+
+    def change_room(
+        self, room: str, *, record: int | None = None
+    ) -> "HybridClass":
+        target = self.sections.index(self.physical_section) if record is None else record
+        return super(HybridClass, self).change_room(room, record=target)
 
 
 @dataclass(slots=True)

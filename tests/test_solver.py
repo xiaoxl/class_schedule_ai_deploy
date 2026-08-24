@@ -1,8 +1,11 @@
 import datetime
+import tempfile
 import unittest
+from pathlib import Path
 
 from class_schedule.class_model import CrossListingClass, NormalClass, Section
 from class_schedule.schedule_model import (
+    ConstraintRule,
     PersonRecord,
     PreferenceRecord,
     PreferenceRule,
@@ -14,6 +17,7 @@ from class_schedule.schedule_model import (
 )
 from class_schedule.solver import NoFeasibleSchedule, MeetingPattern, RoomRecord, SolverConfig, solve
 from class_schedule.solver.candidates import preference_cost
+from class_schedule.solver.config import load_constraint_rules
 
 
 def make_section(**overrides) -> Section:
@@ -32,7 +36,7 @@ def make_section(**overrides) -> Section:
 
 
 def empty_config(**overrides) -> SolverConfig:
-    defaults = dict(persons={}, preferences={}, meeting_patterns=[], rooms=[], blackouts=[])
+    defaults = dict(persons={}, preferences={}, meeting_patterns=[], rooms=[])
     defaults.update(overrides)
     return SolverConfig(**defaults)
 
@@ -94,21 +98,63 @@ class SolveResolvesConflictsTests(unittest.TestCase):
         self.assertEqual(check_conflicts(solved), [])
 
 
-class RequiredInstructorTests(unittest.TestCase):
-    def test_required_instructor_is_the_only_solver_candidate(self):
+class ConstraintRuleTests(unittest.TestCase):
+    def test_constraint_file_uses_preference_selector_syntax(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "constraints.toml"
+            path.write_text(
+                '[[rules]]\n'
+                'direction = "+"\n'
+                'name = "Bob"\n'
+                'course = "MATH 2103"\n'
+                'section_prefix = "TC"\n'
+                'room = ["Corley 101", "Corley 269"]\n'
+                'time = "8-12"\n',
+                encoding="utf-8",
+            )
+            rule, = load_constraint_rules(path)
+
+        self.assertEqual(rule.name, "Bob")
+        self.assertEqual(rule.direction, "+")
+        self.assertEqual(rule.course, "MATH 2103")
+        self.assertEqual(rule.section_prefix, "TC")
+        self.assertEqual(rule.rooms, ("Corley 101", "Corley 269"))
+        self.assertTrue(rule.time.overlaps(
+            "MWF", datetime.time(9), datetime.time(9, 50)
+        ))
+
+    def test_negative_constraint_forbids_only_the_matching_combination(self):
+        rule = ConstraintRule(
+            direction="-", name="Bob", room="Corley 269",
+        )
+
+        def allowed(instructor, room):
+            return rule.allows(
+                instructor=instructor, building="Corley", room=room,
+                days="MWF", start=datetime.time(9),
+                end=datetime.time(9, 50), is_online=False,
+            )
+
+        self.assertFalse(allowed("Bob", "269"))
+        self.assertTrue(allowed("Bob", "101"))
+        self.assertTrue(allowed("Alice", "269"))
+
+    def test_constraint_instructor_is_the_only_solver_candidate(self):
         section = make_section(
-            number="4123", instructor="Staff", room="101",
+            number="2103", instructor="Staff", room="101",
         )
         config = empty_config(
             persons={
                 "Alice": PersonRecord(
-                    name="Alice", max_load=15, courses=("MATH 4123",),
+                    name="Alice", max_load=15, courses=("MATH 2103",),
                 ),
-                "Tom": PersonRecord(
-                    name="Tom", max_load=15, courses=("MATH 4123",),
+                "Bob": PersonRecord(
+                    name="Bob", max_load=15, courses=("MATH 2103",),
                 ),
             },
-            required_instructors={("MATH 4123", None): "Tom"},
+            constraint_rules=(ConstraintRule(
+                name="Bob", course="MATH 2103",
+            ),),
         )
 
         solved = solve(
@@ -117,23 +163,113 @@ class RequiredInstructorTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            solved.get("MATH 4123-001").sections[0].instructor, "Tom"
+            solved.get("MATH 2103-001").sections[0].instructor, "Bob"
         )
 
-    def test_required_instructor_is_a_hard_validation_rule(self):
+    def test_constraint_instructor_is_a_hard_validation_rule(self):
         schedule = Schedule([NormalClass((make_section(
-            number="4123", instructor="Alice",
+            number="2103", instructor="Alice",
         ),))])
 
         evaluation = evaluate_schedule(
-            schedule, {}, {}, required_instructors={
-                ("MATH 4123", None): "Tom",
-            },
+            schedule, {}, {}, constraint_rules=(ConstraintRule(
+                name="Bob", course="MATH 2103",
+            ),),
         )
 
         self.assertEqual(len(evaluation.hard_violations), 1)
         self.assertEqual(
-            evaluation.hard_violations[0].rule, "required_instructor"
+            evaluation.hard_violations[0].rule, "constraint_positive"
+        )
+
+    def test_production_constraint_is_loaded(self):
+        config = SolverConfig.load(
+            Path(__file__).parents[1] / "config", term="27S"
+        )
+        room_rule = next(
+            rule for rule in config.constraints_for("MATH 1113", "F01")
+            if rule.room is not None
+        )
+        instructor_rule = next(
+            rule for rule in config.constraints_for("MATH 4123", "001")
+            if rule.name is not None
+        )
+        self.assertEqual(room_rule.rooms, ("Corley 269",))
+        self.assertEqual(instructor_rule.name, "Limperis, Thomas G.")
+
+    def test_constraint_room_is_the_only_solver_room_candidate(self):
+        section = make_section(section="F01", room="101")
+        config = empty_config(
+            meeting_patterns=[MeetingPattern(
+                days="MWF", duration_minutes=50,
+                starts=(datetime.time(9),), roles=frozenset({"normal"}),
+            )],
+            rooms=[
+                RoomRecord(building="Corley", room="101"),
+                RoomRecord(building="Corley", room="269"),
+            ],
+            constraint_rules=(ConstraintRule(
+                course="MATH 1113", section="F01",
+                room=("Corley 269",),
+            ),),
+        )
+
+        solved = solve(
+            Schedule([NormalClass((section,))]), config,
+            time_limit_seconds=10.0,
+        )
+
+        result = solved.get("MATH 1113-F01").sections[0]
+        self.assertEqual((result.building, result.room), ("Corley", "269"))
+
+    def test_one_constraint_rule_can_require_instructor_and_room(self):
+        section = make_section(
+            number="2103", instructor="Staff", room="101",
+        )
+        config = empty_config(
+            persons={
+                "Bob": PersonRecord(
+                    name="Bob", max_load=15, courses=("MATH 2103",),
+                ),
+            },
+            meeting_patterns=[MeetingPattern(
+                days="MWF", duration_minutes=50,
+                starts=(datetime.time(9),), roles=frozenset({"normal"}),
+            )],
+            rooms=[
+                RoomRecord(building="Corley", room="101"),
+                RoomRecord(building="Corley", room="269"),
+            ],
+            constraint_rules=(ConstraintRule(
+                name="Bob", course="MATH 2103",
+                room=("Corley 269",),
+            ),),
+        )
+
+        solved = solve(
+            Schedule([NormalClass((section,))]), config,
+            time_limit_seconds=10.0,
+        )
+
+        result = solved.get("MATH 2103-001").sections[0]
+        self.assertEqual(result.instructor, "Bob")
+        self.assertEqual((result.building, result.room), ("Corley", "269"))
+
+    def test_constraint_room_is_a_hard_validation_rule(self):
+        schedule = Schedule([NormalClass((make_section(
+            section="F01", room="101",
+        ),))])
+
+        evaluation = evaluate_schedule(
+            schedule, {}, {}, constraint_rules=(ConstraintRule(
+                course="MATH 1113", section="F01",
+                room=("Corley 269",),
+            ),),
+        )
+
+        self.assertEqual(len(evaluation.hard_violations), 1)
+        self.assertEqual(
+            evaluation.hard_violations[0].rule, "constraint_positive"
         )
 
 
@@ -166,6 +302,36 @@ class SolveAdjustsPlaceholderCountTests(unittest.TestCase):
         }
         self.assertEqual(instructors, {"Staff", "Staff 2"})
         self.assertEqual(check_conflicts(solved), [])
+
+    def test_global_staff_cost_moves_time_to_use_one_identity(self):
+        a = NormalClass((make_section(
+            number="1113", section="001", instructor="Staff",
+            time_slot="MWF 9:00am", room="101",
+        ),))
+        b = NormalClass((make_section(
+            number="2103", section="002", instructor="Staff",
+            time_slot="MWF 9:00am", room="102",
+        ),))
+        config = empty_config(
+            meeting_patterns=[MeetingPattern(
+                days="MWF", duration_minutes=50,
+                starts=(datetime.time(9), datetime.time(10)),
+                roles=frozenset({"normal"}),
+            )],
+            rooms=[
+                RoomRecord(building="Corley", room="101"),
+                RoomRecord(building="Corley", room="102"),
+            ],
+            staff_count_weight=100,
+        )
+
+        solved = solve(Schedule([a, b]), config, time_limit_seconds=10.0)
+
+        sections = [section for item in solved for section in item.sections]
+        self.assertEqual({section.instructor for section in sections}, {"Staff"})
+        self.assertEqual({section.start for section in sections}, {
+            datetime.time(9), datetime.time(10),
+        })
 
 
 class SolveRaisesWhenInfeasibleTests(unittest.TestCase):
@@ -255,17 +421,17 @@ class SolveHonorsPreferenceRulesTests(unittest.TestCase):
         )
 
 
-class SolvePrefersOnlineTests(unittest.TestCase):
-    def test_prefers_an_instructor_without_an_online_preference_for_an_in_person_section(self):
+class SolveTcWebPreferenceTests(unittest.TestCase):
+    def test_avoids_instructor_who_dislikes_tc_section(self):
         # Bob is double-booked (same instructor, overlapping time) --
         # only MATH 1113 has another qualified instructor, so resolving
         # the conflict means reassigning it away from Bob to whichever of
-        # Alice/Carol the solver picks. Alice prefers online, Carol has
+        # Alice/Carol the solver picks. Alice dislikes TC sections, Carol has
         # no preference; both cost the same INSTRUCTOR_CHANGE_COST, so
-        # Alice's configured online-preference penalty (for landing on this in-person
+        # Alice's configured TC penalty (for landing on this TC-labeled
         # section) should make Carol the strictly cheaper pick.
         moved = make_section(
-            subject="MATH", number="1113", section="001", instructor="Bob", room="101",
+            subject="MATH", number="1113", section="TC1", instructor="Bob", room="101",
         )
         conflicting = make_section(
             subject="MATH", number="2103", section="002", instructor="Bob", room="102",
@@ -278,13 +444,18 @@ class SolvePrefersOnlineTests(unittest.TestCase):
                 "Carol": PersonRecord(name="Carol", max_load=15, courses=["MATH 1113"]),
             },
             preferences={
-                "Alice": PreferenceRecord(name="Alice", preferred_online_weight=5),
+                "Alice": PreferenceRecord(
+                    name="Alice",
+                    rules=(PreferenceRule(
+                        section_prefix="TC", direction="dislike", weight=5,
+                    ),),
+                ),
                 "Carol": PreferenceRecord(name="Carol"),
             },
         )
         solved = solve(schedule, config, time_limit_seconds=10.0)
         self.assertEqual(check_conflicts(solved), [])
-        self.assertEqual(solved.get("MATH 1113-001").sections[0].instructor, "Carol")
+        self.assertEqual(solved.get("MATH 1113-TC1").sections[0].instructor, "Carol")
 
 
 class SolveMaxBackToBackTests(unittest.TestCase):

@@ -50,9 +50,7 @@ from pathlib import Path
 from .class_model import Class
 from .pattern_rules import (
     MeetingPatternLike,
-    TimeWindowLike,
     matches_configured_pattern,
-    overlaps_blackout,
 )
 from .schedule_io import read_schedule
 from .schedule_model import (
@@ -235,7 +233,6 @@ def build_initial_schedules(
     placeholder_instructor: str = DEFAULT_PLACEHOLDER_INSTRUCTOR,
     seed: int | None = None,
     meeting_patterns: Iterable[MeetingPatternLike] | None = None,
-    blackouts: Iterable[TimeWindowLike] = (),
 ) -> dict[str, dict[str, object]]:
     """Build the initial schedule and its no-additions audit variant.
 
@@ -253,7 +250,6 @@ def build_initial_schedules(
         raise FileExistsError(f"Refusing to overwrite initial result: {destination}")
 
     patterns = None if meeting_patterns is None else tuple(meeting_patterns)
-    blackout_windows = tuple(blackouts)
     if patterns is not None and changes.new_sections:
         additions = Schedule.from_records(changes.new_sections, persons=persons)
         for item in additions:
@@ -264,11 +260,6 @@ def build_initial_schedules(
                     raise ValueError(
                         f"New section {section.course_id} uses unconfigured meeting "
                         f"{section.time_slot!r} ({section.duration} minutes)"
-                    )
-                if overlaps_blackout(section, blackout_windows):
-                    raise ValueError(
-                        f"New section {section.course_id} overlaps a configured blackout: "
-                        f"{section.time_slot!r}"
                     )
 
     destination.parent.mkdir(parents=True, exist_ok=True)

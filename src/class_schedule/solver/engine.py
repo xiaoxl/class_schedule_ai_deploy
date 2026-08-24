@@ -19,6 +19,7 @@ from .config import SolverConfig
 from .constraints import (
     add_load_terms,
     add_pairwise_validity_constraints,
+    add_placeholder_count_terms,
     add_scheduling_constraints,
     build_slots,
 )
@@ -117,12 +118,20 @@ def solve_detailed(
         class_list, sections_by_class, candidates, chosen,
         config.persons, config.preferences, model,
     )
+    placeholder_terms = add_placeholder_count_terms(
+        candidates, chosen, placeholder_instructors,
+        config.staff_count_weight, model,
+        enforce_contiguous=not placeholder_lock,
+    )
     candidate_terms = [
         candidate.cost * chosen[section_index][candidate_index]
         for section_index, values in enumerate(candidates)
         for candidate_index, candidate in enumerate(values)
     ]
-    model.minimize(sum(candidate_terms) + sum(back_to_back_terms) + sum(load_terms))
+    model.minimize(
+        sum(candidate_terms) + sum(back_to_back_terms)
+        + sum(load_terms) + sum(placeholder_terms)
+    )
 
     for section_index, section in enumerate(sections):
         for candidate_index, candidate in enumerate(candidates[section_index]):
@@ -169,8 +178,6 @@ def solve_detailed(
     solved = apply_solution(
         class_list, sections, sections_by_class, candidates, chosen, cp_solver
     )
-    if not placeholder_lock:
-        solved, _ = recolor_placeholder(solved, seed=0)
     return SolveResult(
         schedule=solved,
         status=(

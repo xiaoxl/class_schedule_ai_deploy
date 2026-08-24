@@ -79,7 +79,7 @@ inputs/27S/
 | `Section` | 文本，如 `001`, `F01`, `TC1` |
 | `Type` | 可选的教学类型 |
 | `Title` | 可选课程名 |
-| `Credits` | 可选小数；缺少时业务模型可按课程号末位推断，`1110` 特例为 2 |
+| `Credits` | 可选小数；缺少时业务模型按课程号末位推断；构造 `Section` 时 `MATH 1110` 无条件覆盖为 2 |
 | `Instructor` | 原名或经 `persons.toml` 别名解析后的正式名 |
 | `Delivery Mode` | `in_person`, `online`, `arranged` |
 | `Scheduling Status` | `scheduled`, `tba`, `unscheduled` |
@@ -102,9 +102,14 @@ inputs/27S/
 `Cross-List` 为空；构造 `Schedule` 时，只要二者 section 相同，就自动组成
 `CrossListingClass`。不需要配置，也不会向清洗结果写入人工标记。
 
-Hybrid 的无 room 行必须同时没有物理会议时间（`ONLINE`、`TBA` 或空时间）；
-物理行必须有 room。两个都有物理时间但其中一个漏填 room 会作为原子分组错误，
-不会被当成 Hybrid 掩盖数据问题。
+`MATH 1110` 的 2 学分同样是原子结构构造规则，不是负载统计调用端的补丁。
+`Section` 构造时会把源文件中的空值或其他数值统一覆盖为 2；因此后续 draft、
+`teaching_loads()`、solver 负载约束和报告读取的是同一个规范值。
+
+Hybrid 的物理行必须有实际时间和 room。F/M section 的输入可以只有物理行；也可以
+带一条无物理会议时间、无 room 的旧 companion。原子课构造会丢弃 companion 上的
+位置、时间和教师差异，并从物理行自动重建规范 ONLINE companion。两个都有物理时间
+但其中一个漏填 room 会作为原子分组错误，不会被当成 Hybrid 掩盖数据问题。
 
 ## 错误和警告
 
@@ -133,7 +138,8 @@ schedule = read_schedule(
 
 返回值是已经完成原子分组的 `Schedule`。此后统计、调课和求解不得直接遍历
 CSV/DataFrame 行。输出 CSV 是 `Schedule.to_dataframe()` 的展开表示，因此
-cross-list 等双行原子课会重新出现两行，但教学负载仍按原子对象只算一次。
+cross-list 等双行原子课会重新出现两行；Hybrid 也会在此边界自动导出物理行及派生的
+ONLINE 行，但教学负载仍按原子对象只算一次。
 
 ## draft 到 initial
 

@@ -5,7 +5,7 @@ Built on ``schedule_model.Schedule`` / ``class_model``. Every upload is also
 evaluated against the resolved persons and preferences configuration
 -- see ``schedule_model.check_soft_preferences`` (everything, including
 max_load) / hard validation (room/instructor double-booking plus configured
-blackouts). ``POST /api/solve`` runs the OR-Tools
+hard constraint rules). ``POST /api/solve`` runs the OR-Tools
 solver (``solver.solve_detailed``) on top of that, using
 the resolved timeslot/location configuration for the legal time/room search
 space. The Web API is a stateless auxiliary interface;
@@ -288,12 +288,12 @@ def _serialize_schedule(schedule: Schedule) -> list[dict]:
 
 def _evaluate_schedule(schedule: Schedule) -> dict:
     """Run both checks and shape them for the frontend's violations
-    summary: hard (red, room/instructor conflicts and blackouts), soft
+    summary: hard (red, room/instructor conflicts and constraints), soft
     (orange/yellow by penalty threshold)."""
     evaluation = evaluate_schedule(
         schedule, PREFERENCES, PERSONS, GLOBAL_RULES,
-        SOLVER_CONFIG.blackouts, SOLVER_CONFIG.meeting_patterns,
-        SOLVER_CONFIG.required_instructors,
+        SOLVER_CONFIG.meeting_patterns,
+        SOLVER_CONFIG.constraint_rules,
     )
     return {
         "hard": [_serialize_hard(v) for v in evaluation.hard_violations],

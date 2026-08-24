@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from .class_model import HybridClass
 from .schedule_model import Schedule
 
 
@@ -152,7 +153,7 @@ def render_override_template(
         "# Edit values first, then lock every field the solver must preserve.",
         "# [[edits]]",
         '# course_id = "MATH 1113-F01"',
-        '# instructor = "Taylor, Teresa L."',
+        '# instructor = "Instructor, Example"',
         '# time_slot = "TR 9:30am"',
         '# building = "Corley"',
         '# room = "269"',
@@ -188,6 +189,10 @@ def apply_overrides(schedule: Schedule, overrides: OverrideFile) -> Schedule:
         item = result.classes[index]
         if edit.record is not None and not 0 <= edit.record < len(item.sections):
             raise IndexError(f"CSV record index out of range for {edit.course_id}: {edit.record}")
+        hybrid_physical = (
+            item.sections.index(item.physical_section)
+            if isinstance(item, HybridClass) else None
+        )
         changed = []
         for record, section in enumerate(item.sections):
             if edit.record is not None and edit.record != record:
@@ -200,6 +205,13 @@ def apply_overrides(schedule: Schedule, overrides: OverrideFile) -> Schedule:
             ):
                 value = getattr(edit, source)
                 if value is not None:
+                    if (
+                        hybrid_physical is not None
+                        and edit.record is None
+                        and source != "instructor"
+                        and record != hybrid_physical
+                    ):
+                        continue
                     values[target] = value
             changed.append(replace(section, **values))
         result.classes[index] = replace(item, sections=tuple(changed))

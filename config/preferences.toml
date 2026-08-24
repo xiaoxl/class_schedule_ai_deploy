@@ -1,23 +1,44 @@
-# Per-term soft preferences. Every matching rule is a standalone dictionary.
-# A named rule is scoped by its own `name`; nearby `# Name` comments only make
-# the file easier to scan and have no effect on parsing.
+# FORMAT AND KEYWORDS
 #
-# `preferred_*` fields reward matching candidates and `disliked_*` fields
-# penalize them. Each rule must use exactly one direction and set weight from
-# 0 through 100. Fields within one rule are ANDed. Rules without `name` are
-# global.
+# Top level:
+#   staff_count_weight = 0..100
+#     Cost for every distinct Staff/Staff N identity used in the whole
+#     schedule. A larger value favors changing times to use fewer Staff
+#     identities. Hard conflicts may still require additional Staff.
 #
-# Instructor profiles contain only non-selector policy settings. max_load and
-# qualifications remain in persons.toml. allow_overload changes the flat soft
-# penalty only; overload begins above max_load + 2 and is never a hard block.
+# Instructor profile (policy only, one per person):
+#   [[instructors]]
+#   name = "Exact persons.toml name"
+#   allow_overload = true|false
+#   allow_back_to_back = true|false
+#   max_back_to_back = nonnegative integer       # optional
+# max_load, aliases, and course qualifications belong in persons.toml.
+#
+# One soft matching preference per flat dictionary:
+#   [[rules]]
+#   name = "Exact instructor name"               # omit for a global rule
+#   course = "MATH 1113"
+#   section = "F01"
+#   section_prefix = "TC"
+#   room = "Corley 101"                          # or ["Corley 101", "Corley 102"]
+#   time = "8-12"
+#   weight = 50                                  # like; -50 means dislike
+#
+# Selector fields in one rule are ANDed. `section` requires `course`;
+# `section` and `section_prefix` cannot coexist. Room accepts one string or a
+# string array. Time can be the all-weekday
+# shorthand "8-12" or a table such as
+# { days = ["M", "W", "F"], between = ["08:00", "09:00"], reason = "text" }.
+# Every rule carries a nonzero signed weight in [-100, 100]. Positive means
+# preferred and is subtracted from solver cost; negative means disliked and
+# its magnitude is added. Rules with no name are global.
+# Online/web courses use section codes beginning with TC. Express that
+# preference with section_prefix = "TC" and a positive or negative weight.
+# Nearby `# Name` comments only group the file visually and have no meaning.
+# allow_overload only changes a soft penalty; overload begins above
+# max_load + 2 and is never a hard block.
 
-# Global
-# MATH 1113-F01 should use Corley 269 regardless of instructor.
-[[rules]]
-preferred_course = "MATH 1113"
-preferred_section = "F01"
-preferred_room = "Corley 269"
-weight = 100
+staff_count_weight = 100
 
 # Bain, Leslie M.
 [[instructors]]
@@ -28,20 +49,8 @@ max_back_to_back = 4
 
 [[rules]]
 name = "Bain, Leslie M."
-preferred_course = "STAT 2163"
-preferred_room = "Corley 103"
-weight = 10
-
-[[rules]]
-name = "Bain, Leslie M."
-preferred_course = "STAT 2163"
-preferred_room = "Corley 104"
-weight = 10
-
-[[rules]]
-name = "Bain, Leslie M."
-preferred_course = "STAT 2163"
-preferred_room = "Rothwell 221"
+course = "STAT 2163"
+room = ["Corley 103", "Corley 104", "Rothwell 221"]
 weight = 10
 
 # Ballard, Kasey L.
@@ -60,19 +69,13 @@ max_back_to_back = 4
 
 [[rules]]
 name = "Cox, Allie M."
-disliked_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "Prefers no early classes" }
-weight = 50
+time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "Prefers no early classes" }
+weight = -50
 
 [[rules]]
 name = "Cox, Allie M."
-preferred_course = "MATH 2223"
-preferred_room = "Corley 103"
-weight = 10
-
-[[rules]]
-name = "Cox, Allie M."
-preferred_course = "MATH 2223"
-preferred_room = "Corley 104"
+course = "MATH 2223"
+room = ["Corley 103", "Corley 104"]
 weight = 10
 
 # Growns, Landon C.
@@ -91,8 +94,8 @@ max_back_to_back = 0
 
 [[rules]]
 name = "Jordan, Scott M."
-disliked_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
-weight = 5
+time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = -50
 
 # Jordan, Susan M.
 [[instructors]]
@@ -103,12 +106,12 @@ max_back_to_back = 2
 
 [[rules]]
 name = "Jordan, Susan M."
-disliked_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
-weight = 5
+time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = -50
 
 [[rules]]
 name = "Jordan, Susan M."
-preferred_room = "Corley 101"
+room = "Corley 101"
 weight = 100
 
 # King, Jamie L.
@@ -120,53 +123,35 @@ max_back_to_back = 4
 
 [[rules]]
 name = "King, Jamie L."
-disliked_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
-weight = 5
+time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = -5
 
 [[rules]]
 name = "King, Jamie L."
-disliked_course = "MATH 0903"
-weight = 5
+course = "MATH 0903"
+weight = -5
 
 [[rules]]
 name = "King, Jamie L."
-disliked_course = "MATH 1113"
-weight = 5
+course = "MATH 1113"
+weight = -5
 
 [[rules]]
 name = "King, Jamie L."
-preferred_course = "STAT 2163"
-preferred_room = "Corley"
+course = "STAT 2163"
+room = ["Corley", "Rothwell 221"]
 weight = 10
 
 [[rules]]
 name = "King, Jamie L."
-preferred_course = "STAT 2163"
-preferred_room = "Rothwell 221"
+course = "MATH 0903"
+room = ["Corley", "Rothwell 221"]
 weight = 10
 
 [[rules]]
 name = "King, Jamie L."
-preferred_course = "MATH 0903"
-preferred_room = "Corley"
-weight = 10
-
-[[rules]]
-name = "King, Jamie L."
-preferred_course = "MATH 0903"
-preferred_room = "Rothwell 221"
-weight = 10
-
-[[rules]]
-name = "King, Jamie L."
-preferred_course = "MATH 1113"
-preferred_room = "Corley"
-weight = 10
-
-[[rules]]
-name = "King, Jamie L."
-preferred_course = "MATH 1113"
-preferred_room = "Rothwell 221"
+course = "MATH 1113"
+room = ["Corley", "Rothwell 221"]
 weight = 10
 
 # Limperis, Thomas G.
@@ -178,18 +163,18 @@ max_back_to_back = 2
 
 [[rules]]
 name = "Limperis, Thomas G."
-disliked_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
-weight = 100
+time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = -100
 
 [[rules]]
 name = "Limperis, Thomas G."
-preferred_room = "Rothwell"
+room = "Rothwell"
 weight = 50
 
 [[rules]]
 name = "Limperis, Thomas G."
-disliked_section_prefix = "TC"
-weight = 100
+section_prefix = "TC"
+weight = -100
 
 # Overduin, Matthew D.
 [[instructors]]
@@ -207,12 +192,12 @@ max_back_to_back = 4
 
 [[rules]]
 name = "Taylor, Teresa L."
-disliked_time = { days = ["M", "W", "F"], between = ["08:00", "8:51"], reason = "No 8am classes on MWF" }
-weight = 5
+time = { days = ["M", "W", "F"], between = ["08:00", "8:51"], reason = "No 8am classes on MWF" }
+weight = -5
 
 [[rules]]
 name = "Taylor, Teresa L."
-preferred_room = "Corley 102"
+room = "Corley 102"
 weight = 10
 
 # Winn, Janet L.
@@ -224,18 +209,18 @@ max_back_to_back = 4
 
 [[rules]]
 name = "Winn, Janet L."
-disliked_time = { days = ["T", "R"], between = ["00:00", "23:59"], reason = "Prefers MWF only" }
-weight = 5
+time = { days = ["T", "R"], between = ["00:00", "23:59"], reason = "Prefers MWF only" }
+weight = -5
 
 [[rules]]
 name = "Winn, Janet L."
-disliked_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
-weight = 5
+time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = -5
 
 [[rules]]
 name = "Winn, Janet L."
-disliked_section_prefix = "TC"
-weight = 100
+section_prefix = "TC"
+weight = -100
 
 # Xiao, Xinli
 [[instructors]]
@@ -246,13 +231,13 @@ max_back_to_back = 4
 
 [[rules]]
 name = "Xiao, Xinli"
-preferred_time = "09:00-13:00"
+time = "09:00-13:00"
 weight = 50
 
 [[rules]]
 name = "Xiao, Xinli"
-disliked_course = "MATH 2934"
-weight = 50
+course = "MATH 2934"
+weight = -50
 
 # Yousuf, Marium
 [[instructors]]
@@ -263,5 +248,5 @@ max_back_to_back = 4
 
 [[rules]]
 name = "Yousuf, Marium"
-disliked_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "Prefers no early classes" }
-weight = 50
+time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "Prefers no early classes" }
+weight = -50

@@ -1,56 +1,56 @@
-# Time patterns the solver may use when generating new schedule candidates,
-# plus periods that generated candidates may not overlap.
+# Time patterns the solver may use when generating new schedule candidates.
+# Mandatory or forbidden times belong in constraints.toml, not this file.
 #
 # Selectors are data, not Python course-specific branches:
 #   - `roles` identifies the row's structural role in its atomic class;
 #   - `courses` optionally limits the current row to listed SUBJECT NUMBERs;
 #   - `atomic_courses` optionally requires the atomic class's exact course set.
 # Empty course selectors mean any course in an allowed role.
+# When a course has one or more explicit `courses` patterns, those patterns
+# replace its generic time domain and may normalize a legacy input duration.
+# `days` is always an array of alternatives: ["M", "W", "F"] means three
+# single-day options, while ["MWF"] means one option meeting all three days.
 
 [[calendar.meeting_patterns]]
-days = "MWF"
+days = ["MWF"]
 duration_minutes = 50
-starts = ["08:00", "09:00", "10:00", "11:00", "13:00", "14:00"]
+starts = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00"]
 roles = ["normal", "hybrid_physical", "cross_listing", "coreq", "four_credit_primary"]
 
 [[calendar.meeting_patterns]]
-days = "TR"
+days = ["TR"]
 duration_minutes = 80
 starts = ["08:00", "09:30", "11:00", "13:00", "14:30"]
 roles = ["normal", "hybrid_physical", "cross_listing", "coreq"]
 
 [[calendar.meeting_patterns]]
-days = "TR"
+days = ["TR"]
 duration_minutes = 50
 starts = ["08:00", "09:30", "11:00", "13:00", "14:30"]
 roles = ["coreq_supplement"]
 
 [[calendar.meeting_patterns]]
-days = "MW"
+days = ["MW"]
 duration_minutes = 50
 starts = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00"]
 roles = ["coreq_supplement"]
 
 [[calendar.meeting_patterns]]
-days = "R"
-duration_minutes = 80
-starts = ["08:00", "09:30", "11:00", "13:00", "14:30"]
-roles = ["four_credit_partial"]
-
-[[calendar.blackouts]]
-days = ["F"]
-between = ["12:00", "12:50"]
-reason = "Department-wide Friday noon meeting"
-
-[[calendar.meeting_patterns]]
-days = "T"
+days = ["T", "R"]
 duration_minutes = 80
 starts = ["08:00", "09:30", "11:00", "13:00", "14:30"]
 roles = ["four_credit_partial"]
 
 [[calendar.meeting_patterns]]
-days = "T"
+days = ["M", "W", "F"]
+duration_minutes = 50
+starts = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00"]
+roles = ["normal"]
+courses = ["MATH 4971"]
+
+[[calendar.meeting_patterns]]
+days = ["T", "R"]
 duration_minutes = 80
-starts = ["11:00"]
+starts = ["08:00", "09:30", "11:00", "13:00", "14:30"]
 roles = ["normal"]
 courses = ["MATH 4971"]

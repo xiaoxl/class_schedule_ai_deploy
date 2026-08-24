@@ -3,6 +3,7 @@ import unittest
 
 from class_schedule.class_model import CrossListingClass, FourCreditClass, HybridClass, NormalClass, Section
 from class_schedule.schedule_model import (
+    ConstraintRule,
     GroupingError,
     PersonRecord,
     PreferenceRecord,
@@ -68,34 +69,38 @@ class CheckConflictsTests(unittest.TestCase):
         self.assertEqual(check_conflicts(Schedule([a, b])), [])
 
 
-class EvaluateBlackoutTests(unittest.TestCase):
-    def test_blackout_overlap_is_a_hard_violation(self):
+class EvaluateConstraintTimeTests(unittest.TestCase):
+    def test_negative_time_rule_overlap_is_a_hard_violation(self):
         schedule = Schedule([NormalClass((make_section(
             **{"Time Slot": "MWF 12:00pm"}, Room="101", Instructor="Alice"
         ),))])
         evaluation = evaluate_schedule(
-            schedule, {}, {}, (),
-            (TimeWindow(
+            schedule, {}, {}, constraint_rules=(ConstraintRule(
+                direction="-", time=TimeWindow(
                 frozenset("F"),
                 datetime.time(12),
                 datetime.time(12, 50),
                 "Friday noon",
+                ),
             ),),
         )
         self.assertEqual(len(evaluation.hard_violations), 1)
-        self.assertEqual(evaluation.hard_violations[0].rule, "blackout")
+        self.assertEqual(
+            evaluation.hard_violations[0].rule, "constraint_negative"
+        )
 
-    def test_mw_noon_does_not_overlap_a_friday_blackout(self):
+    def test_mw_noon_does_not_match_a_friday_negative_time_rule(self):
         schedule = Schedule([NormalClass((make_section(
             **{"Time Slot": "MW 12:00pm"}, Room="101", Instructor="Alice"
         ),))])
         evaluation = evaluate_schedule(
-            schedule, {}, {}, (),
-            (TimeWindow(
+            schedule, {}, {}, constraint_rules=(ConstraintRule(
+                direction="-", time=TimeWindow(
                 frozenset("F"),
                 datetime.time(12),
                 datetime.time(12, 50),
                 "Friday noon",
+                ),
             ),),
         )
         self.assertEqual(evaluation.hard_violations, ())
@@ -107,8 +112,7 @@ class EvaluateMeetingPatternTests(unittest.TestCase):
             **{"Time Slot": "MW 12:00pm"}, Room="101", Instructor="Alice"
         ),))])
         evaluation = evaluate_schedule(
-            schedule, {}, {}, (), (),
-            (MeetingPattern(
+            schedule, {}, {}, meeting_patterns=(MeetingPattern(
                 "MWF", 50, (datetime.time(11),), frozenset({"normal"})
             ),),
         )
@@ -122,11 +126,28 @@ class EvaluateMeetingPatternTests(unittest.TestCase):
             **{"Time Slot": "MWF 11:00am"}, Room="101", Instructor="Alice"
         ),))])
         evaluation = evaluate_schedule(
-            schedule, {}, {}, (), (),
-            (MeetingPattern(
+            schedule, {}, {}, meeting_patterns=(MeetingPattern(
                 "MWF", 50, (datetime.time(11),), frozenset({"normal"})
             ),),
         )
+        self.assertEqual(evaluation.hard_violations, ())
+
+
+class EvaluateRequiredRoomTests(unittest.TestCase):
+    def test_nonphysical_hybrid_companion_does_not_require_a_room(self):
+        online = make_section(
+            Section="F01", **{"Time Slot": "TBA"}, Duration="", Room="",
+        )
+        physical = make_section(Section="F01", Room="269")
+        schedule = Schedule([HybridClass((online, physical))])
+
+        evaluation = evaluate_schedule(
+            schedule, {}, {}, constraint_rules=(ConstraintRule(
+                course="MATH 1113", section="F01",
+                room=("Corley 269",),
+            ),),
+        )
+
         self.assertEqual(evaluation.hard_violations, ())
 
 
@@ -190,6 +211,17 @@ class GroupingTests(unittest.TestCase):
         self.assertTrue(all(
             not section.cross_list for section in schedule.classes[0].sections
         ))
+
+    def test_math_1110_credit_override_survives_atomic_round_trip(self):
+        schedule = Schedule.from_records([
+            make_record(
+                Subject="MATH", Number="1110", Section="003", Credits="0",
+            ),
+        ])
+        item = schedule.classes[0]
+        self.assertEqual(item.credit_hours, 2)
+        self.assertEqual(item.sections[0].credits, 2)
+        self.assertEqual(schedule.to_records()[0]["Credits"], 2)
 
     def test_known_cross_list_different_sections_remain_separate(self):
         records = [
@@ -275,6 +307,27 @@ class GroupingTests(unittest.TestCase):
         self.assertEqual(in_person.time_slot, "MWF 10:00am")
         self.assertEqual(in_person.duration, 50)
         self.assertEqual(in_person.room, "269")
+
+    def test_single_hybrid_physical_row_generates_online_companion(self):
+        schedule = Schedule.from_records([
+            make_record(
+                Subject="MATH", Number="1113", Section="F01",
+                **{"Time Slot": "MWF 10:00am"}, Duration=50,
+                Room="269", Building="Corley",
+                Instructor="Hogan, Jessica L.",
+            ),
+        ])
+
+        self.assertEqual(len(schedule), 1)
+        hybrid = schedule.classes[0]
+        self.assertIsInstance(hybrid, HybridClass)
+        self.assertEqual(hybrid.room, "269")
+        self.assertEqual(hybrid.building, "Corley")
+        exported = schedule.to_records()
+        self.assertEqual(len(exported), 2)
+        online = next(row for row in exported if row["Time Slot"] == "ONLINE")
+        self.assertIsNone(online["Room"])
+        self.assertEqual(online["Instructor"], "Hogan, Jessica L.")
 
     def test_ambiguous_coreq_pairing_is_grouping_error(self):
         # MATH 1113-001 is a whitelisted coreq partner for *both*

@@ -25,10 +25,6 @@ class MeetingPatternLike(Protocol):
     atomic_courses: frozenset[str]
 
 
-class TimeWindowLike(Protocol):
-    def overlaps(self, days, start, end) -> bool: ...
-
-
 def section_pattern_role(item: Class, section: Section) -> str:
     """Return one structural role without consulting any course number."""
     if isinstance(item, FourCreditClass):
@@ -77,13 +73,4 @@ def matches_configured_pattern(
         and section.start in pattern.starts
         and pattern_applies(item, section, pattern)
         for pattern in patterns
-    )
-
-
-def overlaps_blackout(
-    section: Section, blackouts: Iterable[TimeWindowLike],
-) -> bool:
-    return any(
-        window.overlaps(section.days, section.start, section.end)
-        for window in blackouts
     )

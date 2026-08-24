@@ -13,6 +13,7 @@ from class_schedule.schedule_model import (
     load_global_rules,
     load_preferences,
 )
+from class_schedule.solver.config import load_staff_count_weight
 
 
 def make_section(**overrides) -> Section:
@@ -105,8 +106,8 @@ allow_overload = false
 
 [[rules]]
 name = "Xiao, Xinli"
-preferred_course = "MATH 2934"
-preferred_room = "Corley 269"
+course = "MATH 2934"
+room = "Corley 269"
 weight = 100
 """)
         self.addCleanup(path.unlink)
@@ -125,13 +126,52 @@ name = "Limperis, Thomas G."
 
 [[rules]]
 name = "Limperis, Thomas G."
-disliked_section_prefix = "TC"
-weight = 10
+section_prefix = "TC"
+weight = -10
 """)
         self.addCleanup(path.unlink)
         rule = load_preferences(path)["Limperis, Thomas G."].rules[0]
         self.assertEqual(rule.section_prefix, "TC")
         self.assertEqual(rule.signed_weight, 10)
+
+    def test_parses_room_alternatives_as_one_selector(self):
+        path = write_toml("""
+[[instructors]]
+name = "Bain, Leslie M."
+
+[[rules]]
+name = "Bain, Leslie M."
+course = "STAT 2163"
+room = ["Corley 103", "Corley 104", "Rothwell 221"]
+weight = 10
+""")
+        self.addCleanup(path.unlink)
+        rule = load_preferences(path)["Bain, Leslie M."].rules[0]
+        self.assertEqual(
+            rule.rooms, ("Corley 103", "Corley 104", "Rothwell 221")
+        )
+        self.assertTrue(rule.matches(
+            course="STAT 2163", section="001", building="Corley", room="104",
+            days="MWF", start=datetime.time(9), end=datetime.time(9, 50),
+        ))
+        self.assertFalse(rule.matches(
+            course="STAT 2163", section="001", building="Corley", room="105",
+            days="MWF", start=datetime.time(9), end=datetime.time(9, 50),
+        ))
+
+    def test_rejects_duplicate_room_alternatives(self):
+        path = write_toml("""
+[[instructors]]
+name = "Bain, Leslie M."
+
+[[rules]]
+name = "Bain, Leslie M."
+room = ["Corley 103", "Corley 103"]
+weight = 10
+""")
+        self.addCleanup(path.unlink)
+        with self.assertRaises(ValueError):
+            load_preferences(path)
 
     def test_instructor_without_rules_gets_empty_tuple(self):
         path = write_toml("""
@@ -150,8 +190,8 @@ name = "Xiao, Xinli"
 
 [[rules]]
 name = "Xiao, Xinli"
-disliked_course = "MATH 2934"
-weight = 50
+course = "MATH 2934"
+weight = -50
 """)
         self.addCleanup(path.unlink)
         rule = load_preferences(path)["Xiao, Xinli"].rules[0]
@@ -165,24 +205,23 @@ name = "Xiao, Xinli"
 
 [[rules]]
 name = "Xiao, Xinli"
-preferred_section = "F01"
-preferred_room = "Corley 269"
+section = "F01"
+room = "Corley 269"
 weight = 100
 """)
         self.addCleanup(path.unlink)
         with self.assertRaises(ValueError):
             load_preferences(path)
 
-    def test_setting_both_directions_raises(self):
+    def test_zero_weight_raises(self):
         path = write_toml("""
 [[instructors]]
 name = "Xiao, Xinli"
 
 [[rules]]
 name = "Xiao, Xinli"
-preferred_room = "Corley 269"
-disliked_room = "Rothwell"
-weight = 100
+room = "Corley 269"
+weight = 0
 """)
         self.addCleanup(path.unlink)
         with self.assertRaises(ValueError):
@@ -199,7 +238,7 @@ name = "Bob"
 
 [[rules]]
 name = "Bob"
-preferred_room = "Corley 101"
+room = "Corley 101"
 weight = 25
 """)
         self.addCleanup(path.unlink)
@@ -211,7 +250,7 @@ weight = 25
         path = write_toml("""
 [[rules]]
 name = "Nobody"
-preferred_room = "Corley 101"
+room = "Corley 101"
 weight = 25
 """)
         self.addCleanup(path.unlink)
@@ -220,17 +259,32 @@ weight = 25
 
 
 class LoadPreferencesNewFieldsTests(unittest.TestCase):
-    def test_parses_prefers_online_and_max_back_to_back(self):
+    def test_parses_global_staff_count_weight(self):
+        path = write_toml("staff_count_weight = 75\n")
+        self.addCleanup(path.unlink)
+        self.assertEqual(load_staff_count_weight(path), 75)
+
+    def test_staff_count_weight_defaults_to_100(self):
+        path = write_toml("")
+        self.addCleanup(path.unlink)
+        self.assertEqual(load_staff_count_weight(path), 100)
+
+    def test_parses_tc_web_rule_and_max_back_to_back(self):
         path = write_toml("""
 [[instructors]]
 name = "Xiao, Xinli"
-prefers_online = { weight = 25 }
 max_back_to_back = 2
+
+[[rules]]
+name = "Xiao, Xinli"
+section_prefix = "TC"
+weight = 25
 """)
         self.addCleanup(path.unlink)
         preference = load_preferences(path)["Xiao, Xinli"]
-        self.assertEqual(preference.preferred_online_weight, 25)
         self.assertEqual(preference.max_back_to_back, 2)
+        self.assertEqual(preference.rules[0].section_prefix, "TC")
+        self.assertEqual(preference.rules[0].direction, "prefer")
 
     def test_parses_weighted_flat_preferences(self):
         path = write_toml("""
@@ -239,17 +293,17 @@ name = "Xiao, Xinli"
 
 [[rules]]
 name = "Xiao, Xinli"
-preferred_time = { days = ["M", "W"], between = ["09:00", "11:00"] }
+time = { days = ["M", "W"], between = ["09:00", "11:00"] }
 weight = 7
 
 [[rules]]
 name = "Xiao, Xinli"
-disliked_room = "Rothwell"
-weight = 11
+room = "Rothwell"
+weight = -11
 
 [[rules]]
 name = "Xiao, Xinli"
-preferred_course = "MATH 2934"
+course = "MATH 2934"
 weight = 13
 """)
         self.addCleanup(path.unlink)
@@ -267,7 +321,7 @@ name = "Xiao, Xinli"
 
 [[rules]]
 name = "Xiao, Xinli"
-preferred_time = "8-12"
+time = "8-12"
 weight = 50
 """)
         self.addCleanup(path.unlink)
@@ -283,7 +337,7 @@ name = "Xiao, Xinli"
 
 [[rules]]
 name = "Xiao, Xinli"
-preferred_time = "morning"
+time = "morning"
 weight = 50
 """)
         self.addCleanup(path.unlink)
@@ -297,7 +351,7 @@ name = "Xiao, Xinli"
 
 [[rules]]
 name = "Xiao, Xinli"
-disliked_course = "MATH 2934"
+course = "MATH 2934"
 """)
         self.addCleanup(path.unlink)
         with self.assertRaises(ValueError):
@@ -313,44 +367,80 @@ disliked_courses = [{ course = "MATH 2934", weight = 50 }]
         with self.assertRaises(ValueError):
             load_preferences(path)
 
-    def test_both_default_to_off(self):
+    def test_legacy_direction_prefix_is_rejected(self):
+        path = write_toml("""
+[[instructors]]
+name = "Xiao, Xinli"
+
+[[rules]]
+name = "Xiao, Xinli"
+preferred_course = "MATH 2934"
+weight = 50
+""")
+        self.addCleanup(path.unlink)
+        with self.assertRaises(ValueError):
+            load_preferences(path)
+
+    def test_online_selector_is_rejected_in_favor_of_tc_prefix(self):
+        path = write_toml("""
+[[instructors]]
+name = "Xiao, Xinli"
+
+[[rules]]
+name = "Xiao, Xinli"
+online = true
+weight = 50
+""")
+        self.addCleanup(path.unlink)
+        with self.assertRaises(ValueError):
+            load_preferences(path)
+
+    def test_max_back_to_back_defaults_to_off(self):
         path = write_toml("""
 [[instructors]]
 name = "Xiao, Xinli"
 """)
         self.addCleanup(path.unlink)
         preference = load_preferences(path)["Xiao, Xinli"]
-        self.assertIsNone(preference.preferred_online_weight)
         self.assertIsNone(preference.max_back_to_back)
 
 
-class PrefersOnlineTests(unittest.TestCase):
-    def test_in_person_section_is_penalized(self):
-        section = make_section(instructor="Alice")
+class TcWebRuleTests(unittest.TestCase):
+    def test_negative_tc_rule_is_reported(self):
+        section = make_section(instructor="Alice", section="TC1")
         schedule = Schedule([NormalClass((section,))])
-        preferences = {
-            "Alice": PreferenceRecord(name="Alice", preferred_online_weight=25)
-        }
+        preferences = {"Alice": PreferenceRecord(
+            name="Alice",
+            rules=(PreferenceRule(
+                section_prefix="TC", direction="dislike", weight=25,
+            ),),
+        )}
         total, findings = check_soft_preferences(schedule, preferences, {})
         self.assertEqual(total, 25.0)
-        self.assertTrue(any(f.rule == "online_preference" for f in findings))
+        self.assertTrue(any(f.rule == "custom_rule" for f in findings))
 
-    def test_online_section_is_not_penalized(self):
-        section = make_section(instructor="Alice", **{"time_slot": "TBA", "duration": None})
+    def test_positive_tc_rule_is_not_reported_as_a_violation(self):
+        section = make_section(instructor="Alice", section="TC1")
         schedule = Schedule([NormalClass((section,))])
-        preferences = {
-            "Alice": PreferenceRecord(name="Alice", preferred_online_weight=25)
-        }
+        preferences = {"Alice": PreferenceRecord(
+            name="Alice",
+            rules=(PreferenceRule(
+                section_prefix="TC", direction="prefer", weight=25,
+            ),),
+        )}
         total, findings = check_soft_preferences(schedule, preferences, {})
         self.assertEqual(total, 0.0)
-        self.assertFalse(any(f.rule == "online_preference" for f in findings))
+        self.assertFalse(any(f.rule == "custom_rule" for f in findings))
 
-    def test_default_false_is_never_penalized(self):
+    def test_tc_selector_does_not_match_non_tc_section(self):
         section = make_section(instructor="Alice")
-        schedule = Schedule([NormalClass((section,))])
-        preferences = {"Alice": PreferenceRecord(name="Alice")}
-        total, findings = check_soft_preferences(schedule, preferences, {})
-        self.assertFalse(any(f.rule == "online_preference" for f in findings))
+        rule = PreferenceRule(
+            section_prefix="TC", direction="prefer", weight=25,
+        )
+        self.assertFalse(rule.matches(
+            course="MATH 1113", section="001", building="Corley", room="101",
+            days=section.days, start=section.start, end=section.end,
+        ))
 
 
 class MaxBackToBackTests(unittest.TestCase):
@@ -409,9 +499,9 @@ class LoadGlobalRulesTests(unittest.TestCase):
     def test_parses_top_level_rules_regardless_of_instructor(self):
         path = write_toml("""
 [[rules]]
-preferred_course = "MATH 1113"
-preferred_section = "F01"
-preferred_room = "Corley 269"
+course = "MATH 1113"
+section = "F01"
+room = "Corley 269"
 weight = 100
 
 [[instructors]]

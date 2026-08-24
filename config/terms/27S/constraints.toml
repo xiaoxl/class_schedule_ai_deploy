@@ -1,7 +1,19 @@
-# Hard term-level assignments. Unlike preferences, these rules remove every
-# non-matching instructor from the solver candidate set and are validated as
-# hard violations in imported or manually adjusted schedules.
+# Same [[rules]] selector fields as preferences.toml:
+#   name, course, section, section_prefix, room, time
+# This file is hard and has no weight.  `direction = "+"` requires the whole
+# configured name/room/time combination; `direction = "-"` forbids it.
 
-[[required_instructors]]
+[[rules]]
+direction = "+"
 course = "MATH 4123"
-instructor = "Limperis, Thomas G."
+name = "Limperis, Thomas G."
+
+[[rules]]
+direction = "+"
+course = "MATH 1113"
+section = "F01"
+room = "Corley 269"
+
+[[rules]]
+direction = "-"
+time = { days = ["F"], between = ["12:00", "12:50"], reason = "Department-wide Friday noon meeting" }

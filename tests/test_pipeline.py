@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 from openpyxl import load_workbook
 
-from class_schedule.class_model import NormalClass, Section
+from class_schedule.class_model import HybridClass, NormalClass, Section
 from class_schedule.data_cleaning import (
     NORMALIZED_COLUMNS,
     clean_dataframe,
@@ -16,12 +16,14 @@ from class_schedule.data_cleaning import (
     initialize_input,
 )
 from class_schedule.overrides import (
+    OverrideEdit,
+    OverrideFile,
     apply_overrides,
     load_overrides,
     locks_for_section,
     validate_override_context,
 )
-from class_schedule.schedule_model import Schedule, TimeWindow
+from class_schedule.schedule_model import ConstraintRule, Schedule, TimeWindow
 from class_schedule.schedule_io import read_schedule
 from class_schedule.solver import MeetingPattern, RoomRecord, SolverConfig, diff_schedules
 from class_schedule.solver.candidates import section_candidates
@@ -176,6 +178,31 @@ class OverrideTests(unittest.TestCase):
             frozenset({"time", "room", "building"}),
         )
 
+    def test_hybrid_edit_without_record_updates_physical_authority(self):
+        hybrid = HybridClass((Section(
+            "MATH", "1113", "F01", "MWF 9:00am", 50,
+            "101", "Alice", "Corley",
+        ),))
+        schedule = Schedule([hybrid])
+        overrides = OverrideFile(edits=(OverrideEdit(
+            course_id="MATH 1113-F01",
+            instructor="Bob",
+            time_slot="TR 9:30am",
+            room="269",
+            building="Corley",
+        ),))
+
+        changed = apply_overrides(schedule, overrides)
+        updated = changed.get("MATH 1113-F01")
+
+        self.assertIsInstance(updated, HybridClass)
+        self.assertEqual(updated.physical_section.time_slot, "TR 9:30am")
+        self.assertEqual(updated.physical_section.room, "269")
+        self.assertEqual(updated.physical_section.instructor, "Bob")
+        self.assertEqual(updated.online_section.time_slot, "ONLINE")
+        self.assertEqual(updated.online_section.room, "")
+        self.assertEqual(updated.online_section.instructor, "Bob")
+
     def test_lock_filters_solver_candidates(self):
         section = Section(
             "MATH", "1113", "001", "MWF 9:00am", 50,
@@ -187,7 +214,7 @@ class OverrideTests(unittest.TestCase):
                 "MWF", 50, (datetime.time(9), datetime.time(10)),
                 frozenset({"normal"}),
             )],
-            rooms=[RoomRecord("Corley", "101")], blackouts=[],
+            rooms=[RoomRecord("Corley", "101")],
         )
         candidates = section_candidates(
             NormalClass((section,)), section, config, 40, frozenset({"time"})
@@ -208,9 +235,12 @@ class OverrideTests(unittest.TestCase):
                 frozenset({"normal"}),
             )],
             rooms=[RoomRecord("Corley", "269")],
-            blackouts=[TimeWindow(
-                frozenset("F"), datetime.time(12), datetime.time(12, 50)
-            )],
+            constraint_rules=(ConstraintRule(
+                direction="-",
+                time=TimeWindow(
+                    frozenset("F"), datetime.time(12), datetime.time(12, 50)
+                ),
+            ),),
         )
         candidates = section_candidates(
             NormalClass((section,)), section, config, 40,
@@ -220,7 +250,7 @@ class OverrideTests(unittest.TestCase):
         self.assertNotIn("MWF 12:00pm", slots)
         self.assertIn("MWF 10:00am", slots)
 
-    def test_explicit_seminar_pattern_keeps_a_nonstandard_time(self):
+    def test_explicit_seminar_patterns_allow_single_weekdays_not_mwf(self):
         section = Section(
             "MATH", "4971", "001", "T 11:00am", 80,
             "101", "Alice", "Corley",
@@ -229,23 +259,42 @@ class OverrideTests(unittest.TestCase):
             persons={}, preferences={},
             meeting_patterns=[
                 MeetingPattern(
-                    "TR", 80, (datetime.time(11),),
-                    frozenset({"normal"}),
+                    days="MWF", duration_minutes=50,
+                    starts=(datetime.time(9),),
+                    roles=frozenset({"normal"}),
                 ),
                 MeetingPattern(
-                    "T", 80, (datetime.time(11),),
-                    frozenset({"normal"}),
-                    frozenset({"MATH 4971"}),
+                    days="TR", duration_minutes=80,
+                    starts=(datetime.time(11),),
+                    roles=frozenset({"normal"}),
+                ),
+                MeetingPattern(
+                    days="M", duration_minutes=50,
+                    starts=(datetime.time(9),),
+                    roles=frozenset({"normal"}),
+                    courses=frozenset({"MATH 4971"}),
+                ),
+                MeetingPattern(
+                    days="T", duration_minutes=80,
+                    starts=(datetime.time(11),),
+                    roles=frozenset({"normal"}),
+                    courses=frozenset({"MATH 4971"}),
                 ),
             ],
-            rooms=[RoomRecord("Corley", "101")], blackouts=[],
+            rooms=[RoomRecord("Corley", "101")],
         )
         candidates = section_candidates(
             NormalClass((section,)), section, config, 40
         )
-        self.assertIn(
-            "T 11:00am", {candidate.time_slot for candidate in candidates}
-        )
+        slots = {candidate.time_slot for candidate in candidates}
+        self.assertIn("T 11:00am", slots)
+        self.assertIn("M 9:00am", slots)
+        self.assertNotIn("MWF 9:00am", slots)
+        self.assertNotIn("TR 11:00am", slots)
+        durations = {
+            (candidate.days, candidate.duration) for candidate in candidates
+        }
+        self.assertEqual(durations, {("M", 50), ("T", 80)})
 
     def test_version_bound_override_rejects_the_wrong_context(self):
         with tempfile.TemporaryDirectory() as directory:

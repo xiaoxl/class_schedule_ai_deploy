@@ -4,19 +4,25 @@ from __future__ import annotations
 
 import hashlib
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from .. import record_utils
-from ..config_schema import ConstraintsFileSchema, LocationsFileSchema, TimeslotFileSchema
+from ..config_schema import (
+    ConstraintsFileSchema,
+    LocationsFileSchema,
+    PreferencesFileSchema,
+    TimeslotFileSchema,
+)
 from ..schedule_model import (
+    ConstraintRule,
     PersonRecord,
     PreferenceRecord,
     PreferenceRule,
-    TimeWindow,
     load_global_rules,
     load_persons,
     load_preferences,
+    parse_rule_time,
 )
 from .types import MeetingPattern, RoomRecord
 
@@ -68,7 +74,7 @@ def load_meeting_patterns(path: str | Path) -> list[MeetingPattern]:
         raw = TimeslotFileSchema.model_validate(tomllib.load(handle))
     return [
         MeetingPattern(
-            days=entry.days,
+            days=days,
             duration_minutes=entry.duration_minutes,
             starts=tuple(record_utils.clock(start) for start in entry.starts),
             roles=frozenset(entry.roles),
@@ -78,15 +84,7 @@ def load_meeting_patterns(path: str | Path) -> list[MeetingPattern]:
             ),
         )
         for entry in raw.calendar.meeting_patterns
-    ]
-
-
-def load_blackouts(path: str | Path) -> list[TimeWindow]:
-    with open(path, "rb") as handle:
-        raw = TimeslotFileSchema.model_validate(tomllib.load(handle))
-    return [
-        TimeWindow.from_config(window.model_dump())
-        for window in raw.calendar.blackouts
+        for days in entry.days
     ]
 
 
@@ -106,15 +104,34 @@ def load_rooms(path: str | Path) -> list[RoomRecord]:
     return rooms
 
 
-def load_required_instructors(
-    path: str | Path,
-) -> dict[tuple[str, str | None], str]:
+def load_constraint_rules(path: str | Path) -> tuple[ConstraintRule, ...]:
     with open(path, "rb") as handle:
         raw = ConstraintsFileSchema.model_validate(tomllib.load(handle))
-    return {
-        (entry.course, entry.section): entry.instructor
-        for entry in raw.required_instructors
-    }
+    return tuple(
+        ConstraintRule(
+            direction=entry.direction,
+            name=entry.name,
+            course=entry.course,
+            section=entry.section,
+            section_prefix=entry.section_prefix,
+            room=(
+                None if entry.room is None
+                else (entry.room,) if isinstance(entry.room, str)
+                else tuple(entry.room)
+            ),
+            time=(
+                parse_rule_time(entry.time)
+                if entry.time is not None else None
+            ),
+        )
+        for entry in raw.rules
+    )
+
+
+def load_staff_count_weight(path: str | Path) -> float:
+    with open(path, "rb") as handle:
+        raw = PreferencesFileSchema.model_validate(tomllib.load(handle))
+    return raw.staff_count_weight
 
 
 @dataclass(frozen=True)
@@ -123,9 +140,9 @@ class SolverConfig:
     preferences: dict[str, PreferenceRecord]
     meeting_patterns: list[MeetingPattern]
     rooms: list[RoomRecord]
-    blackouts: list[TimeWindow]
     global_rules: tuple[PreferenceRule, ...] = ()
-    required_instructors: dict[tuple[str, str | None], str] = field(default_factory=dict)
+    staff_count_weight: float = 100.0
+    constraint_rules: tuple[ConstraintRule, ...] = ()
     version: str = ""
     source_paths: tuple[str, ...] = ()
 
@@ -133,17 +150,20 @@ class SolverConfig:
     def load(cls, config_dir: str | Path, term: str | None = None) -> "SolverConfig":
         resolved = resolve_config_paths(config_dir, term)
         paths = tuple(resolved[name] for name in _CONFIG_FILES if name in resolved)
+        constraint_rules = (
+            load_constraint_rules(resolved["constraints.toml"])
+            if "constraints.toml" in resolved else ()
+        )
         config = cls(
             persons=load_persons(resolved["persons.toml"]),
             preferences=load_preferences(resolved["preferences.toml"]),
             meeting_patterns=load_meeting_patterns(resolved["timeslot.toml"]),
             rooms=load_rooms(resolved["locations.toml"]),
-            blackouts=load_blackouts(resolved["timeslot.toml"]),
             global_rules=load_global_rules(resolved["preferences.toml"]),
-            required_instructors=(
-                load_required_instructors(resolved["constraints.toml"])
-                if "constraints.toml" in resolved else {}
+            staff_count_weight=load_staff_count_weight(
+                resolved["preferences.toml"]
             ),
+            constraint_rules=constraint_rules,
             version=hashlib.sha256(
                 b"\0".join(path.read_bytes() for path in paths)
             ).hexdigest()[:12],
@@ -163,24 +183,71 @@ class SolverConfig:
         referenced = {
             location
             for preference in self.preferences.values()
-            for location in (rule.room for rule in preference.rules if rule.room)
-        } | {rule.room for rule in self.global_rules if rule.room}
+            for rule in preference.rules
+            for location in rule.rooms
+        } | {
+            location for rule in self.global_rules for location in rule.rooms
+        }
         invalid = sorted(referenced - known_locations)
         if invalid:
             raise ValueError(f"Preferences reference unknown rooms: {invalid}")
-        for (course, section), instructor in self.required_instructors.items():
-            person = self.persons.get(instructor)
-            selector = f"{course}-{section}" if section else course
+        constraint_locations = {
+            location
+            for rule in self.constraint_rules
+            for location in rule.rooms
+        }
+        invalid_constraints = sorted(constraint_locations - known_locations)
+        if invalid_constraints:
+            raise ValueError(
+                f"Constraint rules reference unknown rooms: "
+                f"{invalid_constraints}"
+            )
+        for rule in self.constraint_rules:
+            if rule.name is None:
+                continue
+            person = self.persons.get(rule.name)
+            selector = (
+                f"{rule.course}-{rule.section}"
+                if rule.course and rule.section
+                else rule.course or rule.section_prefix or "all sections"
+            )
             if person is None:
                 raise ValueError(
-                    f"Required instructor for {selector} is unknown: {instructor}"
+                    f"Constraint instructor for {selector} is unknown: {rule.name}"
                 )
-            if course not in person.courses:
+            if rule.course is not None and rule.course not in person.courses:
                 raise ValueError(
-                    f"Required instructor {instructor} is not qualified for {selector}"
+                    f"Constraint instructor {rule.name} is not qualified for {selector}"
                 )
+        for index, left in enumerate(self.constraint_rules):
+            for right in self.constraint_rules[index + 1:]:
+                selectors_overlap = not (
+                    left.course is not None
+                    and right.course is not None
+                    and left.course != right.course
+                ) and not (
+                    left.section is not None
+                    and right.section is not None
+                    and left.section != right.section
+                )
+                if (
+                    selectors_overlap
+                    and left.direction == "+"
+                    and right.direction == "+"
+                    and left.name is not None
+                    and right.name is not None
+                    and left.name != right.name
+                ):
+                    raise ValueError(
+                        f"Conflicting instructor constraints for "
+                        f"{left.course or 'matching sections'}: {left.name} and "
+                        f"{right.name}"
+                    )
 
-    def required_instructor(self, course: str, section: str) -> str | None:
-        return self.required_instructors.get(
-            (course, section), self.required_instructors.get((course, None))
+    def constraints_for(
+        self, course: str, section: str,
+    ) -> tuple[ConstraintRule, ...]:
+        return tuple(
+            rule for rule in self.constraint_rules
+            if rule.applies_to(course, section)
         )

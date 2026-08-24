@@ -1,4 +1,5 @@
 import datetime
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -79,6 +80,21 @@ class StructuralRoleTests(unittest.TestCase):
 
 
 class ConfiguredSelectorTests(unittest.TestCase):
+    def test_days_array_expands_options_but_preserves_compound_days(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "timeslot.toml"
+            path.write_text(
+                "[[calendar.meeting_patterns]]\n"
+                'days = ["M", "W", "MWF"]\n'
+                "duration_minutes = 50\n"
+                'starts = ["09:00"]\n'
+                'roles = ["normal"]\n',
+                encoding="utf-8",
+            )
+            patterns = load_meeting_patterns(path)
+
+        self.assertEqual([pattern.days for pattern in patterns], ["M", "W", "MWF"])
+
     def test_course_and_atomic_course_selectors_target_one_coreq_row(self):
         lecture = make_section(number="1113", time_slot="MWF 11:00am")
         lab = make_section(number="1110", time_slot="MW 12:00pm")
@@ -108,6 +124,39 @@ class ConfiguredSelectorTests(unittest.TestCase):
             pattern_applies(NormalClass((seminar,)), seminar, pattern)
         )
         self.assertFalse(pattern_applies(NormalClass((other,)), other, pattern))
+
+    def test_production_config_gives_seminar_single_day_patterns(self):
+        patterns = load_meeting_patterns(ROOT / "config" / "timeslot.toml")
+        seminar_patterns = [
+            pattern for pattern in patterns
+            if "MATH 4971" in pattern.courses
+        ]
+
+        expected_starts = {
+            "M": (8, 9, 10, 11, 12, 13, 14),
+            "T": (8, 9.5, 11, 13, 14.5),
+            "W": (8, 9, 10, 11, 12, 13, 14),
+            "R": (8, 9.5, 11, 13, 14.5),
+            "F": (8, 9, 10, 11, 12, 13, 14),
+        }
+        actual = {
+            pattern.days: tuple(
+                start.hour + start.minute / 60 for start in pattern.starts
+            )
+            for pattern in seminar_patterns
+        }
+        self.assertEqual(actual, expected_starts)
+        durations = {
+            pattern.days: pattern.duration_minutes
+            for pattern in seminar_patterns
+        }
+        self.assertEqual(durations, {
+            "M": 50, "T": 80, "W": 50, "R": 80, "F": 50,
+        })
+        self.assertTrue(all(
+            pattern.roles == frozenset({"normal"})
+            for pattern in seminar_patterns
+        ))
 
     def test_production_config_grants_mw_noon_only_to_selected_atomic_row(self):
         patterns = load_meeting_patterns(ROOT / "config" / "timeslot.toml")

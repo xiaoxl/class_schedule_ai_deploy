@@ -9,7 +9,6 @@ from .candidates import (
 )
 from .config import (
     SolverConfig,
-    load_blackouts,
     load_meeting_patterns,
     load_rooms,
 )
@@ -46,7 +45,6 @@ __all__ = [
     "SolverConfig",
     "TIME_CHANGE_COST",
     "diff_schedules",
-    "load_blackouts",
     "load_meeting_patterns",
     "load_rooms",
     "solve",

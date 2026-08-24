@@ -73,7 +73,7 @@ def _initial(args: argparse.Namespace) -> int:
     persons_path = resolve_config_paths(args.config, args.term)["persons.toml"]
     results = build_initial_schedules(
         args.input, args.changes, persons_path, output_dir=output, seed=args.seed,
-        meeting_patterns=config.meeting_patterns, blackouts=config.blackouts,
+        meeting_patterns=config.meeting_patterns,
     )
     for label, result in results.items():
         print_initial_result(label, result)
@@ -136,7 +136,7 @@ def _validate(args: argparse.Namespace) -> int:
         raise FileNotFoundError(f"Term changes file does not exist: {changes_path}")
     evaluation = evaluate_schedule(
         schedule, config.preferences, config.persons, config.global_rules,
-        config.blackouts, config.meeting_patterns, config.required_instructors,
+        config.meeting_patterns, config.constraint_rules,
     )
     print(
         f"Atomic classes: {evaluation.atomic_classes}; "

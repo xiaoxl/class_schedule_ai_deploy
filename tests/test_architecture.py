@@ -19,6 +19,7 @@ from class_schedule.solver import (
     solve,
     solve_detailed,
 )
+from class_schedule.solver.config import load_meeting_patterns
 
 
 class DomainSemanticsTests(unittest.TestCase):
@@ -37,6 +38,20 @@ class DomainSemanticsTests(unittest.TestCase):
 
 
 class StrictConfigurationTests(unittest.TestCase):
+    def test_meeting_pattern_days_requires_an_array(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "timeslot.toml"
+            path.write_text(
+                "[[calendar.meeting_patterns]]\n"
+                'days = "MWF"\n'
+                "duration_minutes = 50\n"
+                'starts = ["09:00"]\n'
+                'roles = ["normal"]\n',
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValidationError):
+                load_meeting_patterns(path)
+
     def test_aliases_are_loaded_and_subject_scoped(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "persons.toml"
@@ -80,7 +95,6 @@ class SolverArchitectureTests(unittest.TestCase):
                 frozenset({"normal", "cross_listing"}),
             )],
             rooms=[RoomRecord("Corley", "101")],
-            blackouts=[],
             version="test-config",
         )
 

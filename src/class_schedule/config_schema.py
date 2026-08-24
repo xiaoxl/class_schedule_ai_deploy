@@ -81,25 +81,15 @@ class TimeWindowSchema(StrictModel):
         return days
 
 
-class WeightedFlagSchema(StrictModel):
-    weight: float = Field(ge=0, le=100)
-
-
-class FlatPreferenceRuleSchema(StrictModel):
+class RuleSelectorSchema(StrictModel):
     name: str | None = None
-    preferred_course: str | None = None
-    preferred_section: str | None = None
-    preferred_section_prefix: str | None = None
-    preferred_room: str | None = None
-    preferred_time: TimeWindowSchema | str | None = None
-    disliked_course: str | None = None
-    disliked_section: str | None = None
-    disliked_section_prefix: str | None = None
-    disliked_room: str | None = None
-    disliked_time: TimeWindowSchema | str | None = None
-    weight: float = Field(ge=0, le=100)
+    course: str | None = None
+    section: str | None = None
+    section_prefix: str | None = None
+    room: str | list[str] | None = None
+    time: TimeWindowSchema | str | None = None
 
-    @field_validator("preferred_time", "disliked_time")
+    @field_validator("time")
     @classmethod
     def validate_time_shorthand(
         cls, value: TimeWindowSchema | str | None,
@@ -111,46 +101,55 @@ class FlatPreferenceRuleSchema(StrictModel):
             )
         return value
 
-    @field_validator("preferred_course", "disliked_course")
+    @field_validator("course")
     @classmethod
     def validate_course(cls, value: str | None) -> str | None:
         if value is not None and not COURSE_PATTERN.fullmatch(value):
             raise ValueError(f"invalid course identifier: {value!r}")
         return value
 
+    @field_validator("room")
+    @classmethod
+    def validate_rooms(
+        cls, value: str | list[str] | None,
+    ) -> str | list[str] | None:
+        if value is None:
+            return None
+        rooms = [value] if isinstance(value, str) else value
+        if not rooms or any(not room.strip() for room in rooms):
+            raise ValueError("room selectors must contain nonblank room names")
+        if len(rooms) != len(set(rooms)):
+            raise ValueError("room selectors must not contain duplicates")
+        return value
+
     @model_validator(mode="after")
-    def exactly_one_direction(self):
+    def validate_selectors(self):
         if self.name is not None and not self.name.strip():
             raise ValueError("a rule's name must not be blank")
-        directions = []
-        for prefix in ("preferred", "disliked"):
-            values = self.selector_values(prefix)
-            if values:
-                directions.append(prefix)
-            section = values.get("section")
-            section_prefix = values.get("section_prefix")
-            if section is not None and "course" not in values:
-                raise ValueError(f"{prefix}_section requires {prefix}_course")
-            if section is not None and section_prefix is not None:
-                raise ValueError(
-                    f"a rule cannot set both {prefix}_section and "
-                    f"{prefix}_section_prefix"
-                )
-            if section_prefix is not None and not str(section_prefix).strip():
-                raise ValueError(f"{prefix}_section_prefix must not be blank")
-        if len(directions) != 1:
-            raise ValueError(
-                "a rule must contain preferred_* fields or disliked_* fields, "
-                "but not both"
+        if self.section is not None and self.course is None:
+            raise ValueError("section requires course")
+        if self.section is not None and self.section_prefix is not None:
+            raise ValueError("a rule cannot set both section and section_prefix")
+        if self.section_prefix is not None and not self.section_prefix.strip():
+            raise ValueError("section_prefix must not be blank")
+        if all(
+            value is None
+            for value in (
+                self.course, self.section, self.section_prefix, self.room, self.time,
             )
+        ):
+            raise ValueError("a rule must contain at least one selector")
         return self
 
-    def selector_values(self, prefix: str) -> dict[str, object]:
-        return {
-            field: value
-            for field in ("course", "section", "section_prefix", "room", "time")
-            if (value := getattr(self, f"{prefix}_{field}")) is not None
-        }
+
+class FlatPreferenceRuleSchema(RuleSelectorSchema):
+    weight: float = Field(ge=-100, le=100)
+
+    @model_validator(mode="after")
+    def require_nonzero_weight(self):
+        if self.weight == 0:
+            raise ValueError("a rule's weight must be positive or negative, not zero")
+        return self
 
 
 class InstructorPreferenceSchema(StrictModel):
@@ -158,10 +157,10 @@ class InstructorPreferenceSchema(StrictModel):
     allow_overload: bool = True
     allow_back_to_back: bool = True
     max_back_to_back: int | None = Field(default=None, ge=0)
-    prefers_online: WeightedFlagSchema | None = None
 
 
 class PreferencesFileSchema(StrictModel):
+    staff_count_weight: float = Field(default=100, ge=0, le=100)
     instructors: list[InstructorPreferenceSchema] = Field(default_factory=list)
     rules: list[FlatPreferenceRuleSchema] = Field(default_factory=list)
 
@@ -176,39 +175,24 @@ class PreferencesFileSchema(StrictModel):
         return self
 
 
-class RequiredInstructorSchema(StrictModel):
-    course: str
-    section: str | None = None
-    instructor: str
-
-    @field_validator("course")
-    @classmethod
-    def validate_course(cls, course: str) -> str:
-        if not COURSE_PATTERN.fullmatch(course):
-            raise ValueError(f"invalid course identifier: {course!r}")
-        return course
-
-    @field_validator("section", "instructor")
-    @classmethod
-    def require_nonblank(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("constraint values must not be blank")
-        return value
-
-
-class ConstraintsFileSchema(StrictModel):
-    required_instructors: list[RequiredInstructorSchema] = Field(default_factory=list)
+class ConstraintRuleSchema(RuleSelectorSchema):
+    direction: Literal["+", "-"]
 
     @model_validator(mode="after")
-    def unique_assignments(self):
-        selectors = [(item.course, item.section) for item in self.required_instructors]
-        if len(selectors) != len(set(selectors)):
-            raise ValueError("required instructor selectors must be unique")
+    def require_hard_value(self):
+        if self.name is None and self.room is None and self.time is None:
+            raise ValueError(
+                "a constraint rule requires name, room, and/or time"
+            )
         return self
 
 
+class ConstraintsFileSchema(StrictModel):
+    rules: list[ConstraintRuleSchema] = Field(default_factory=list)
+
+
 class MeetingPatternSchema(StrictModel):
-    days: str
+    days: list[str]
     duration_minutes: int = Field(gt=0)
     starts: list[str]
     roles: list[Literal[
@@ -225,9 +209,19 @@ class MeetingPatternSchema(StrictModel):
 
     @field_validator("days")
     @classmethod
-    def validate_days(cls, days: str) -> str:
-        if not days or any(day not in "MTWRF" for day in days):
-            raise ValueError(f"invalid meeting days: {days!r}")
+    def validate_days(cls, days: list[str]) -> list[str]:
+        if not days:
+            raise ValueError("meeting pattern requires at least one days option")
+        invalid = [
+            option for option in days
+            if not option
+            or any(day not in "MTWRF" for day in option)
+            or len(option) != len(set(option))
+        ]
+        if invalid:
+            raise ValueError(f"invalid meeting days options: {invalid!r}")
+        if len(days) != len(set(days)):
+            raise ValueError("meeting pattern days options must not contain duplicates")
         return days
 
     @field_validator("starts")
@@ -271,13 +265,8 @@ class MeetingPatternSchema(StrictModel):
         return self
 
 
-class BlackoutSchema(TimeWindowSchema):
-    pass
-
-
 class CalendarSchema(StrictModel):
     meeting_patterns: list[MeetingPatternSchema] = Field(default_factory=list)
-    blackouts: list[BlackoutSchema] = Field(default_factory=list)
 
 
 class TimeslotFileSchema(StrictModel):
