@@ -1,12 +1,11 @@
-"""Build next term's starting-point schedule CSVs from last term's file
-plus a change list for the production solve stage.
+"""Build a term's initial schedule from its cleaned pre-change draft.
 
-Two outputs, both by ``build_starting_templates``:
+Two outputs, both by ``build_initial_schedules``:
 
-  - **starting.csv** -- ``term_builder``'s full draft (departures
+  - **initial.csv** -- the complete result after departures
     reassigned to a placeholder, cancelled courses dropped, new courses
     from ``changes.new_sections`` appended);
-  - **starting_noadding.csv** -- the same cancellations, departures, and
+  - **initial_noadding.csv** -- the same cancellations, departures, and
     new-hire placement, but without new-course additions. It isolates the
     rollover from new offerings.
 
@@ -39,7 +38,11 @@ conflict graph recoloring has to color, never complicate it.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import random
+import shutil
+import uuid
 from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
@@ -61,9 +64,9 @@ from .schedule_model import (
 )
 from .term_builder import (
     DEFAULT_PLACEHOLDER_INSTRUCTOR,
-    DraftReport,
+    InitialReport,
     TermChanges,
-    build_draft_schedule,
+    build_initial_schedule,
     load_changes,
 )
 
@@ -223,8 +226,8 @@ def recolor_placeholder(
     return recolored, {name: tuple(ids) for name, ids in assignments.items()}
 
 
-def build_starting_templates(
-    template_path: str | Path,
+def build_initial_schedules(
+    draft_path: str | Path,
     changes_path: str | Path,
     persons_path: str | Path = "config/persons.toml",
     *,
@@ -234,18 +237,20 @@ def build_starting_templates(
     meeting_patterns: Iterable[MeetingPatternLike] | None = None,
     blackouts: Iterable[TimeWindowLike] = (),
 ) -> dict[str, dict[str, object]]:
-    """Build both starting-point CSVs (see the module docstring).
+    """Build the initial schedule and its no-additions audit variant.
 
-    Returns ``{"starting": {...}, "starting_noadding": {...}}``, each
+    Returns ``{"initial": {...}, "initial_noadding": {...}}``, each
     with ``schedule``, ``report`` (the underlying
-    ``term_builder.DraftReport``), ``hire_assignments``, and
+    ``term_builder.InitialReport``), ``hire_assignments``, and
     ``placeholder_identities``. Both CSVs are written to
-    ``output_dir/starting.csv`` and ``output_dir/starting_noadding.csv``.
+    ``output_dir/initial.csv`` and ``output_dir/initial_noadding.csv``.
     """
     persons = load_persons(persons_path)
-    template = read_schedule(template_path, persons=persons)
+    draft = read_schedule(draft_path, persons=persons)
     changes = load_changes(changes_path)
-    output_dir = Path(output_dir)
+    destination = Path(output_dir)
+    if destination.exists():
+        raise FileExistsError(f"Refusing to overwrite initial result: {destination}")
 
     patterns = None if meeting_patterns is None else tuple(meeting_patterns)
     blackout_windows = tuple(blackouts)
@@ -266,33 +271,74 @@ def build_starting_templates(
                         f"{section.time_slot!r}"
                     )
 
-    results: dict[str, dict[str, object]] = {}
-    variants: tuple[tuple[str, TermChanges], ...] = (
-        ("starting", changes),
-        ("starting_noadding", replace(changes, new_sections=())),
-    )
-    for label, variant_changes in variants:
-        draft, report = build_draft_schedule(
-            template, variant_changes, placeholder_instructor=placeholder_instructor,
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = destination.parent / f".{destination.name}-staging-{uuid.uuid4().hex}"
+    staging.mkdir()
+    try:
+        results: dict[str, dict[str, object]] = {}
+        variants: tuple[tuple[str, TermChanges], ...] = (
+            ("initial", changes),
+            ("initial_noadding", replace(changes, new_sections=())),
         )
-        placed, hire_assignments = place_new_hires(
-            draft, variant_changes.new_hires, persons, placeholder=placeholder_instructor,
-        )
-        recolored, placeholder_identities = recolor_placeholder(
-            placed, placeholder=placeholder_instructor, seed=seed,
-        )
-        recolored.to_dataframe().to_csv(output_dir / f"{label}.csv", index=False)
-        results[label] = {
-            "schedule": recolored,
-            "report": report,
-            "hire_assignments": hire_assignments,
-            "placeholder_identities": placeholder_identities,
+        for label, variant_changes in variants:
+            changed, report = build_initial_schedule(
+                draft, variant_changes, placeholder_instructor=placeholder_instructor,
+            )
+            placed, hire_assignments = place_new_hires(
+                changed, variant_changes.new_hires, persons,
+                placeholder=placeholder_instructor,
+            )
+            recolored, placeholder_identities = recolor_placeholder(
+                placed, placeholder=placeholder_instructor, seed=seed,
+            )
+            recolored.to_dataframe().to_csv(staging / f"{label}.csv", index=False)
+            results[label] = {
+                "schedule": recolored,
+                "report": report,
+                "hire_assignments": hire_assignments,
+                "placeholder_identities": placeholder_identities,
+            }
+        initial = results["initial"]["schedule"]
+        initial.to_instructor_excel(staging / "initial_instructor.xlsx")
+        initial.to_room_excel(staging / "initial_room.xlsx")
+        initial_path = staging / "initial.csv"
+        noadding_path = staging / "initial_noadding.csv"
+        instructor_path = staging / "initial_instructor.xlsx"
+        room_path = staging / "initial_room.xlsx"
+
+        def sha256(path: str | Path) -> str:
+            return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+        manifest = {
+            "schema_version": 1,
+            "role": "initial",
+            "draft": {"path": str(draft_path), "sha256": sha256(draft_path)},
+            "changes": {"path": str(changes_path), "sha256": sha256(changes_path)},
+            "initial": {"path": initial_path.name, "sha256": sha256(initial_path)},
+            "initial_noadding": {
+                "path": noadding_path.name,
+                "sha256": sha256(noadding_path),
+            },
+            "files": {
+                path.name: sha256(path)
+                for path in (
+                    initial_path, noadding_path, instructor_path, room_path
+                )
+            },
         }
-    return results
+        (staging / "manifest.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+        staging.replace(destination)
+        return results
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
 
 
-def print_starting_result(label: str, result: dict[str, object]) -> None:
-    report: DraftReport = result["report"]
+def print_initial_result(label: str, result: dict[str, object]) -> None:
+    report: InitialReport = result["report"]
     hire_assignments: dict[str, tuple[str, ...]] = result["hire_assignments"]
     placeholder_identities: dict[str, tuple[str, ...]] = result["placeholder_identities"]
 
@@ -317,7 +363,7 @@ def print_starting_result(label: str, result: dict[str, object]) -> None:
     if len(placeholder_identities) > 1:
         print(
             f"{len(placeholder_identities)} distinct identities were still needed "
-            "by the draft's greedy conflict coloring. This is an operational "
+            "by the initial schedule's greedy conflict coloring. This is an operational "
             "placeholder count, not a proven minimum or a hiring requirement; "
             "run class-schedule solve against the qualified-instructor pool next."
         )

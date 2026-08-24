@@ -1,0 +1,106 @@
+# Final publication source: 27S/ver20
+# Reproducible manual revision. All examples below are commented out.
+# Apply with:
+# class-schedule --config config final 27S ver20
+
+term = "27S"
+source_version = "ver20"
+
+# Edit values first, then lock every field the solver must preserve.
+# [[edits]]
+# course_id = "MATH 1113-F01"
+# instructor = "Taylor, Teresa L."
+# time_slot = "TR 9:30am"
+# building = "Corley"
+# room = "269"
+
+# [[locks]]
+# course_id = "MATH 1113-F01"
+# fields = ["instructor", "time", "building", "room"]
+
+# [[unassign]]
+# course_id = "STAT 2163-004"
+# placeholder = "Staff"
+
+# Atomic-class record map. record is zero-based and is only needed
+# when an edit or lock should target one row of a two-row class.
+# MATH 1113-F01 | record=0 | MATH 1113-F01 | Yousuf, Marium | (blank) |
+# MATH 1113-F01 | record=1 | MATH 1113-F01 | Yousuf, Marium | MWF 10:00am | Corley 269
+# MATH 1914-001 | record=0 | MATH 1914-001 | Jordan, Susan M. | MWF 8:00am | Corley 101
+# MATH 1914-001 | record=1 | MATH 1914-001 | Jordan, Susan M. | T 9:30am | Corley 101
+# MATH 1914-003 | record=0 | MATH 1914-003 | Jordan, Susan M. | T 8:00am | Corley 101
+# MATH 1914-003 | record=1 | MATH 1914-003 | Jordan, Susan M. | MWF 11:00am | Corley 101
+# MATH 2914-001 | record=0 | MATH 2914-001 | Jordan, Susan M. | MWF 9:00am | Corley 101
+# MATH 2914-001 | record=1 | MATH 2914-001 | Jordan, Susan M. | R 9:30am | Corley 101
+# MATH 2914-002 | record=0 | MATH 2914-002 | Jordan, Susan M. | R 1:00pm | Corley 101
+# MATH 2914-002 | record=1 | MATH 2914-002 | Jordan, Susan M. | MWF 1:00pm | Corley 101
+# MATH 2914-003 | record=0 | MATH 2914-003 | Yousuf, Marium | MWF 2:00pm | Corley 101
+# MATH 2914-003 | record=1 | MATH 2914-003 | Yousuf, Marium | R 2:30pm | Corley 101
+# MATH 2924-001 | record=0 | MATH 2924-001 | Yousuf, Marium | MWF 1:00pm | Corley 102
+# MATH 2924-001 | record=1 | MATH 2924-001 | Yousuf, Marium | R 1:00pm | Corley 102
+# MATH 2924-002 | record=0 | MATH 2924-002 | Yousuf, Marium | MWF 8:00am | Rothwell 206
+# MATH 2924-002 | record=1 | MATH 2924-002 | Yousuf, Marium | T 1:00pm | Rothwell 206
+# MATH 2924-003 | record=0 | MATH 2924-003 | Limperis, Thomas G. | MWF 10:00am | Rothwell 306
+# MATH 2924-003 | record=1 | MATH 2924-003 | Limperis, Thomas G. | R 9:30am | Rothwell 206
+# MATH 2934-001 | record=0 | MATH 2934-001 | Staff | T 9:30am | Rothwell 207
+# MATH 2934-001 | record=1 | MATH 2934-001 | Staff | MWF 10:00am | Rothwell 207
+# MATH 2934-002 | record=0 | MATH 2934-002 | Staff | MWF 11:00am | Corley 269
+# MATH 2934-002 | record=1 | MATH 2934-002 | Staff | R 11:00am | Corley 101
+# MATH 5173-TC1 | record=0 | MATH 5173-TC1 | Jordan, Scott M. | (blank) |
+# MATH 5173-TC1 | record=1 | STAT 4173-TC1 | Jordan, Scott M. | (blank) |
+# MATH 4123-001 | record=0 | MATH 4123-001 | Limperis, Thomas G. | MWF 8:00am | Corley 268
+# MATH 4123-001 | record=1 | MATH 4123-H01 | Limperis, Thomas G. | MWF 8:00am | Corley 268
+# MATH 0803-001 | record=0 | MATH 0803-001 | Winn, Janet L. | TR 9:30am | Corley 103
+# MATH 0803-001 | record=1 | MATH 1003-001 | Winn, Janet L. | MWF 9:00am | Corley 103
+# MATH 0803-002 | record=0 | MATH 0803-002 | Growns, Landon C. | MWF 9:00am | Ross Pendergraft Library 331
+# MATH 0803-002 | record=1 | MATH 1003-002 | Growns, Landon C. | MWF 10:00am | Ross Pendergraft Library 331
+# MATH 0803-003 | record=0 | MATH 0803-003 | Ballard, Kasey L. | MWF 1:00pm | Corley 103
+# MATH 0803-003 | record=1 | MATH 1003-003 | Ballard, Kasey L. | MWF 2:00pm | Corley 103
+# MATH 0803-TC1 | record=0 | MATH 0803-TC1 | King, Jamie L. | (blank) |
+# MATH 0803-TC1 | record=1 | MATH 1003-TC1 | King, Jamie L. | (blank) |
+# MATH 0903-001 | record=0 | MATH 0903-001 | Growns, Landon C. | TR 11:00am | Corley 104
+# MATH 0903-001 | record=1 | MATH 1113-001 | Growns, Landon C. | MWF 11:00am | Corley 104
+# MATH 0903-002 | record=0 | MATH 0903-002 | Winn, Janet L. | MWF 8:00am | Corley 104
+# MATH 0903-002 | record=1 | MATH 1113-002 | Winn, Janet L. | TR 8:00am | Corley 104
+# MATH 0903-TC1 | record=0 | MATH 0903-TC1 | Staff | (blank) |
+# MATH 0903-TC1 | record=1 | MATH 1113-TC1 | Staff | (blank) |
+# MATH 1110-003 | record=0 | MATH 1110-003 | Growns, Landon C. | MW 2:00pm | Rothwell 221
+# MATH 1110-003 | record=1 | MATH 1113-003 | Growns, Landon C. | MWF 1:00pm | Rothwell 221
+# MATH 0803-004 | record=0 | MATH 0803-004 | Staff 2 | MWF 11:00am | Corley 267
+# MATH 0803-004 | record=1 | MATH 1003-004 | Staff 2 | MWF 10:00am | Corley 267
+# MATH 1003-005 | record=0 | MATH 1003-005 | Winn, Janet L. | MWF 10:00am | Corley 104
+# MATH 1003-006 | record=0 | MATH 1003-006 | King, Jamie L. | MWF 9:00am | Rothwell 221
+# MATH 1003-TC2 | record=0 | MATH 1003-TC2 | King, Jamie L. | (blank) |
+# MATH 1113-006 | record=0 | MATH 1113-006 | Taylor, Teresa L. | TR 9:30am | Corley 102
+# MATH 1113-TC2 | record=0 | MATH 1113-TC2 | Ballard, Kasey L. | (blank) |
+# MATH 1203-TC1 | record=0 | MATH 1203-TC1 | Cox, Allie M. | (blank) |
+# MATH 2033-001 | record=0 | MATH 2033-001 | Taylor, Teresa L. | MWF 10:00am | Corley 102
+# MATH 2043-001 | record=0 | MATH 2043-001 | Taylor, Teresa L. | MWF 9:00am | Corley 102
+# MATH 2043-TC1 | record=0 | MATH 2043-TC1 | Taylor, Teresa L. | (blank) |
+# MATH 2223-001 | record=0 | MATH 2223-001 | Cox, Allie M. | MWF 11:00am | Corley 103
+# MATH 2223-002 | record=0 | MATH 2223-002 | Cox, Allie M. | TR 11:00am | Corley 103
+# MATH 2223-003 | record=0 | MATH 2223-003 | Cox, Allie M. | MWF 10:00am | Corley 103
+# MATH 2223-TC1 | record=0 | MATH 2223-TC1 | Cox, Allie M. | (blank) |
+# MATH 2243-001 | record=0 | MATH 2243-001 | Overduin, Matthew D. | MWF 1:00pm | Corley 104
+# MATH 2243-002 | record=0 | MATH 2243-002 | Overduin, Matthew D. | TR 9:30am | Ross Pendergraft Library 220
+# MATH 2703-001 | record=0 | MATH 2703-001 | Overduin, Matthew D. | MWF 10:00am | Corley 101
+# MATH 2703-002 | record=0 | MATH 2703-002 | Limperis, Thomas G. | TR 1:00pm | Corley 268
+# MATH 2703-TC1 | record=0 | MATH 2703-TC1 | Ballard, Kasey L. | (blank) |
+# MATH 3033-001 | record=0 | MATH 3033-001 | Taylor, Teresa L. | TR 11:00am | Corley 102
+# MATH 3123-001 | record=0 | MATH 3123-001 | Overduin, Matthew D. | MWF 2:00pm | Corley 102
+# MATH 3243-001 | record=0 | MATH 3243-001 | Xiao, Xinli | MWF 10:00am | Rothwell 206
+# MATH 3243-002 | record=0 | MATH 3243-002 | Xiao, Xinli | MWF 8:00am | Rothwell 212
+# MATH 4003-001 | record=0 | MATH 4003-001 | Xiao, Xinli | MWF 9:00am | Rothwell 206
+# MATH 4971-001 | record=0 | MATH 4971-001 | Xiao, Xinli | T 11:00am | Corley 101
+# MATH 4993-001 | record=0 | MATH 4993-001 | Limperis, Thomas G. | (blank) |
+# STAT 2163-001 | record=0 | STAT 2163-001 | King, Jamie L. | MWF 10:00am | Rothwell 221
+# STAT 2163-002 | record=0 | STAT 2163-002 | Bain, Leslie M. | MWF 9:00am | Corley 104
+# STAT 2163-003 | record=0 | STAT 2163-003 | Bain, Leslie M. | TR 1:00pm | Corley 104
+# STAT 2163-TC1 | record=0 | STAT 2163-TC1 | Bain, Leslie M. | (blank) |
+# STAT 2163-TC2 | record=0 | STAT 2163-TC2 | Bain, Leslie M. | (blank) |
+# STAT 3113-001 | record=0 | STAT 3113-001 | Xiao, Xinli | MWF 11:00am | Rothwell 213
+# STAT 3153-001 | record=0 | STAT 3153-001 | Jordan, Scott M. | MWF 9:00am | Rothwell 207
+# STAT 3153-002 | record=0 | STAT 3153-002 | Jordan, Scott M. | MWF 11:00am | Corley 102
+# STAT 3183-001 | record=0 | STAT 3183-001 | Jordan, Scott M. | MWF 1:00pm | Rothwell 213
+# MATH 1003-007 | record=0 | MATH 1003-007 | Staff | MWF 1:00pm |
+# STAT 2163-004 | record=0 | STAT 2163-004 | Bain, Leslie M. | MWF 2:00pm | Corley 104

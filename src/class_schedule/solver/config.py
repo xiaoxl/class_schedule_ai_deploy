@@ -135,8 +135,8 @@ class SolverConfig:
             location
             for preference in self.preferences.values()
             for location in (
-                *preference.preferred_locations,
-                *preference.disliked_locations,
+                *(item.location for item in preference.preferred_locations),
+                *(item.location for item in preference.disliked_locations),
                 *(rule.room for rule in preference.rules if rule.room),
             )
         } | {rule.room for rule in self.global_rules if rule.room}

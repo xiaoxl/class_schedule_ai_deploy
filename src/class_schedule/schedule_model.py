@@ -466,19 +466,10 @@ OVERLOAD_TOLERANCE = 2.0
 OVERLOAD_FAR_THRESHOLD = 4
 OVERLOAD_FAR_PENALTY = 50.0
 
-# Every penalty in this system shares one 0-100 scale (see
-# PreferenceRecord.overload_penalty and PreferenceRule.weight) -- 100 is
-# the practical ceiling used throughout, though UNDER_LOAD_PENALTY itself
-# is tuned slightly below it.
+# Every penalty in this system shares one 0-100 scale. Named preferences
+# carry their own weights; these constants cover separate scheduling policies.
 UNDER_LOAD_PENALTY = 90.0
 BACK_TO_BACK_PENALTY = 10.0
-DISLIKED_TIME_PENALTY = 5.0
-DISLIKED_LOCATION_PENALTY = 5.0
-DISLIKED_COURSE_PENALTY = 5.0
-# Same mild-nudge tier as the DISLIKED_* penalties above -- prefers_online
-# is the same shape of preference (a soft affinity about *how* a section
-# is taught), just phrased as a "prefer" instead of a "dislike".
-PREFERS_ONLINE_PENALTY = 5.0
 
 
 def weekday_time_overlap(
@@ -557,12 +548,13 @@ class PreferenceRule:
     `[[instructors]]` block, scoped to that instructor).
 
     ``course`` ("SUBJECT NUMBER", matching persons.toml's own
-    convention), ``section``, ``room``, and ``time`` are all optional
+    convention), ``section``, ``section_prefix``, ``room``, and ``time`` are all optional
     match keys -- an unset key matches anything, so a rule can be as
     broad ("this instructor generally avoids Corley") or as narrow ("this
     exact course-section must land in this exact room") as its fields
     specify. ``section`` only makes sense alongside ``course`` -- a bare
-    section code like "F01" repeats across unrelated courses.
+    section code like "F01" repeats across unrelated courses. In contrast,
+    ``section_prefix`` intentionally matches across courses, e.g. ``"TC"``.
 
     ``direction`` is ``"prefer"`` (subtracts ``weight`` from a matching
     candidate's cost -- a reward the solver seeks out) or ``"dislike"``
@@ -574,6 +566,7 @@ class PreferenceRule:
 
     course: str | None = None
     section: str | None = None
+    section_prefix: str | None = None
     room: str | None = None
     time: TimeWindow | None = None
     direction: str = "dislike"
@@ -594,6 +587,11 @@ class PreferenceRule:
             return False
         if self.section is not None and self.section != section:
             return False
+        if (
+            self.section_prefix is not None
+            and not section.upper().startswith(self.section_prefix.upper())
+        ):
+            return False
         if self.room is not None and not location_matches(building, room, (self.room,)):
             return False
         if self.time is not None and not self.time.overlaps(days, start, end):
@@ -603,6 +601,24 @@ class PreferenceRule:
     @property
     def signed_weight(self) -> float:
         return -self.weight if self.direction == "prefer" else self.weight
+
+
+@dataclass(frozen=True)
+class WeightedTimePreference:
+    window: TimeWindow
+    weight: float
+
+
+@dataclass(frozen=True)
+class WeightedLocationPreference:
+    location: str
+    weight: float
+
+
+@dataclass(frozen=True)
+class WeightedCoursePreference:
+    course: str
+    weight: float
 
 
 @dataclass(frozen=True)
@@ -616,12 +632,10 @@ class PreferenceRecord:
     is ``True``, 100 (this system's practical ceiling) when it's
     ``False``.
 
-    ``prefers_online`` is a blanket affinity for records without a physical
-    meeting -- a mild scored nudge (``PREFERS_ONLINE_PENALTY``) against any
-    physical assignment, on the same tier as the ``disliked_*`` fields.
-    It's blanket, not course-scoped -- someone who only wants a *specific*
-    course online (not every section they teach) needs a note in
-    ``rules`` instead; this field can't express that.
+    Every named preferred/disliked time, location, and course carries its
+    own weight. ``preferred_online_weight`` is the equivalent blanket
+    affinity for records without a physical meeting. Someone who only wants
+    one specific course online still needs a compound ``rules`` entry.
 
     ``max_back_to_back`` caps how many consecutive same-day meetings this
     instructor tolerates before it's scored -- ``None`` means no cap
@@ -639,13 +653,13 @@ class PreferenceRecord:
     allow_overload: bool = True
     allow_back_to_back: bool = True
     max_back_to_back: int | None = None
-    prefers_online: bool = False
-    preferred_times: tuple[TimeWindow, ...] = ()
-    disliked_times: tuple[TimeWindow, ...] = ()
-    preferred_locations: tuple[str, ...] = ()
-    disliked_locations: tuple[str, ...] = ()
-    preferred_courses: tuple[str, ...] = ()
-    disliked_courses: tuple[str, ...] = ()
+    preferred_online_weight: float | None = None
+    preferred_times: tuple[WeightedTimePreference, ...] = ()
+    disliked_times: tuple[WeightedTimePreference, ...] = ()
+    preferred_locations: tuple[WeightedLocationPreference, ...] = ()
+    disliked_locations: tuple[WeightedLocationPreference, ...] = ()
+    preferred_courses: tuple[WeightedCoursePreference, ...] = ()
+    disliked_courses: tuple[WeightedCoursePreference, ...] = ()
     rules: tuple[PreferenceRule, ...] = ()
 
     @property
@@ -700,17 +714,39 @@ def load_preferences(path: str | Path) -> dict[str, PreferenceRecord]:
             allow_overload=entry.allow_overload,
             allow_back_to_back=entry.allow_back_to_back,
             max_back_to_back=entry.max_back_to_back,
-            prefers_online=entry.prefers_online,
+            preferred_online_weight=(
+                entry.prefers_online.weight if entry.prefers_online else None
+            ),
             preferred_times=tuple(
-                TimeWindow.from_config(w.model_dump()) for w in entry.preferred_times
+                WeightedTimePreference(
+                    TimeWindow.from_config(w.model_dump(exclude={"weight"})),
+                    w.weight,
+                )
+                for w in entry.preferred_times
             ),
             disliked_times=tuple(
-                TimeWindow.from_config(w.model_dump()) for w in entry.disliked_times
+                WeightedTimePreference(
+                    TimeWindow.from_config(w.model_dump(exclude={"weight"})),
+                    w.weight,
+                )
+                for w in entry.disliked_times
             ),
-            preferred_locations=tuple(entry.preferred_locations),
-            disliked_locations=tuple(entry.disliked_locations),
-            preferred_courses=tuple(entry.preferred_courses),
-            disliked_courses=tuple(entry.disliked_courses),
+            preferred_locations=tuple(
+                WeightedLocationPreference(item.location, item.weight)
+                for item in entry.preferred_locations
+            ),
+            disliked_locations=tuple(
+                WeightedLocationPreference(item.location, item.weight)
+                for item in entry.disliked_locations
+            ),
+            preferred_courses=tuple(
+                WeightedCoursePreference(item.course, item.weight)
+                for item in entry.preferred_courses
+            ),
+            disliked_courses=tuple(
+                WeightedCoursePreference(item.course, item.weight)
+                for item in entry.disliked_courses
+            ),
             rules=tuple(_parse_rule(r.model_dump(exclude_none=True)) for r in entry.rules),
         )
         for entry in raw.instructors
@@ -734,11 +770,15 @@ def _parse_rule(raw: Mapping[str, object]) -> PreferenceRule:
             f"Rule direction must be 'prefer' or 'dislike', got {direction!r}"
         )
     section = raw.get("section")
+    section_prefix = raw.get("section_prefix")
     if section is not None and "course" not in raw:
         raise ValueError("A rule's 'section' requires 'course' to also be set")
     return PreferenceRule(
         course=str(raw["course"]) if "course" in raw else None,
         section=str(section) if section is not None else None,
+        section_prefix=(
+            str(section_prefix).strip() if section_prefix is not None else None
+        ),
         room=str(raw["room"]) if "room" in raw else None,
         time=TimeWindow.from_config(raw["time"]) if "time" in raw else None,
         direction=direction,
@@ -1002,12 +1042,10 @@ def check_soft_preferences(
     ``max_load`` -- see the module comment above ``OVERLOAD_TOLERANCE`` for
     the full over/under contract. Being outside a
     ``preferred_times``/``preferred_locations``/``preferred_courses``
-    match is not reported as a violation: matching candidates receive a
-    reward in the solver, while absence of a match adds no report finding.
-    ``disliked_courses`` (subject + number, e.g. "MATH 0903", matching
-    persons.toml's own ``courses`` convention) mirrors
-    ``disliked_locations`` -- a mild nudge (``DISLIKED_COURSE_PENALTY``)
-    when an instructor teaches a course they've listed as disliked.
+    match is not reported as a violation: matching candidates receive their
+    configured weighted reward in the solver, while absence of a match adds
+    no report finding. Disliked entries add their own configured weight to
+    both candidate cost and the final report.
 
     ``global_rules`` plus each matching instructor's own ``rules`` (see
     ``PreferenceRule``) are checked too, but only their ``"dislike"``
@@ -1066,40 +1104,45 @@ def check_soft_preferences(
                 ))
         if preference is None:
             continue
-        for window in preference.disliked_times:
-            if window.overlaps(section.days, section.start, section.end):
+        for item in preference.disliked_times:
+            if item.window.overlaps(section.days, section.start, section.end):
                 findings.append(SoftFinding(
                     "disliked_time", section.instructor,
                     f"{section.course_id}: falls in a disliked time "
-                    f"({window.reason or section.time_slot})",
-                    DISLIKED_TIME_PENALTY,
+                    f"({item.window.reason or section.time_slot})",
+                    item.weight,
                 ))
-        if course in preference.disliked_courses:
-            findings.append(SoftFinding(
-                "disliked_course", section.instructor,
-                f"{section.course_id}: {section.instructor} dislikes "
-                f"teaching {course}",
-                DISLIKED_COURSE_PENALTY,
-            ))
-        if preference.prefers_online and not section.is_online:
+        for item in preference.disliked_courses:
+            if item.course == course:
+                findings.append(SoftFinding(
+                    "disliked_course", section.instructor,
+                    f"{section.course_id}: {section.instructor} dislikes "
+                    f"teaching {course}",
+                    item.weight,
+                ))
+        if (
+            preference.preferred_online_weight is not None
+            and not section.is_online
+        ):
             findings.append(SoftFinding(
                 "online_preference", section.instructor,
                 f"{section.course_id}: {section.instructor} prefers "
                 f"a non-physical section but this one meets in person",
-                PREFERS_ONLINE_PENALTY,
+                preference.preferred_online_weight,
             ))
         if section.is_online:
             continue
-        if preference.disliked_locations and location_matches(
-            section.building, section.room, preference.disliked_locations
-        ):
-            findings.append(SoftFinding(
-                "disliked_location", section.instructor,
-                f"{section.course_id}: room "
-                f"{f'{section.building} {section.room}'.strip()!r} is a "
-                f"disliked location",
-                DISLIKED_LOCATION_PENALTY,
-            ))
+        for item in preference.disliked_locations:
+            if location_matches(
+                section.building, section.room, (item.location,)
+            ):
+                findings.append(SoftFinding(
+                    "disliked_location", section.instructor,
+                    f"{section.course_id}: room "
+                    f"{f'{section.building} {section.room}'.strip()!r} is a "
+                    f"disliked location",
+                    item.weight,
+                ))
 
     by_instructor: dict[str, list[Section]] = {}
     for section in sections:

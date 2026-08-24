@@ -12,21 +12,22 @@ uv sync
 uv run class-schedule --config config initialize 27S `
   "inputs/27S/Course Schedule Report.csv"
 
-uv run class-schedule --config config draft 27S `
-  work/27S/normalized/sections.csv inputs/27S/changes.toml
+uv run class-schedule --config config initial 27S `
+  work/27S/draft/draft.csv inputs/27S/changes.toml
 
 uv run class-schedule --config config solve 27S `
-  --input work/27S/draft/starting.csv `
-  --baseline work/27S/draft/starting.csv --attempts 5 --seconds 45
+  --input work/27S/initial/initial.csv --attempts 5 --seconds 45
 
 # 编辑 out/27S/ver10/overrides.toml，启用 edit/lock 后刷新 final
 uv run class-schedule --config config final 27S ver10
 ```
 
-`initialize` 在清洗的同时，直接从尚未应用 `changes.toml` 的原输入排课生成
+`initialize` 在清洗的同时生成 change 前的 `work/27S/draft/draft.csv`，并直接从
+尚未应用 `changes.toml` 的原输入排课生成
 `inputs/27S/Course Schedule Report_instructor.xlsx` 和
-`inputs/27S/Course Schedule Report_room.xlsx`。这两份表是输入快照视图，不是 draft
-或 solver 结果。
+`inputs/27S/Course Schedule Report_room.xlsx`。这两份表是同一份 draft Schedule 的
+教师/教室视图，不是 initial 或 solver 结果。`initial` 才应用完整 changes；
+每一个正常 ver 都独立从同一份 initial 重新求解，不读取上一版 ver。
 
 `verN` 是不覆盖的自动求解快照；`final` 是从指定 ver 应用人工调整后可反复
 刷新的发布目录。空 override 不会生成 final。final 的 `changes.csv` 始终直接
@@ -42,8 +43,9 @@ out/27S/ver10/
   27S_ver10_room.xlsx
   report.md
   attempts.csv
-  changes.csv              # 从最初 baseline 到当前结果的化简累计变动
-  baseline.csv             # 该版本使用的 baseline 快照
+  changes.csv              # 从 initial 到当前结果的化简累计变动
+  baseline.csv             # 不可变 initial 快照
+  applied_changes.toml     # 生成 initial 时使用的 changes 快照
   overrides.toml          # 可编辑，随后用于刷新 final
   applied_overrides.toml  # 生成本 ver 时实际使用的配置
   manifest.json

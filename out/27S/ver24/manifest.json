@@ -1,0 +1,88 @@
+{
+  "schema_version": 4,
+  "term": "27S",
+  "version": "ver24",
+  "parent": null,
+  "created_at": "2026-08-24T04:19:12.378320+00:00",
+  "input": {
+    "path": "work\\27S\\initial\\initial.csv",
+    "sha256": "4ba0fe1017d0f01f658321a40b6cf9abd4796429963e0ce3d32d3bfcc0bb798c"
+  },
+  "initial_baseline": {
+    "path": "work\\27S\\initial\\initial.csv",
+    "sha256": "4ba0fe1017d0f01f658321a40b6cf9abd4796429963e0ce3d32d3bfcc0bb798c",
+    "snapshot": "baseline.csv",
+    "role": "initial"
+  },
+  "configuration": {
+    "version": "f1d7cf69b459",
+    "files": [
+      {
+        "path": "config\\persons.toml",
+        "sha256": "59a528d34dce009fbc052e182d0d07d73c1683773849940f94b601f46ea98286"
+      },
+      {
+        "path": "config\\preferences.toml",
+        "sha256": "48eba0b69a8729053a0b2bad7a645645995898edee3b57b58c38f28b461cbd3b"
+      },
+      {
+        "path": "config\\timeslot.toml",
+        "sha256": "e725563121ba6731eff314a2976125006baab8642eedaad6a24338ae9bac4d96"
+      },
+      {
+        "path": "config\\locations.toml",
+        "sha256": "a7793c98d7dce6425530886a73d9ac47e5f5909570b413c76378c22c6bd26f34"
+      }
+    ]
+  },
+  "term_changes": {
+    "path": "inputs\\27S\\changes.toml",
+    "sha256": "a8141ee9088bd14920af2cc07b324a68f7b4118c0382a52b83dba6d4217e31bc",
+    "scope": "cancel_courses",
+    "configured_cancels": [
+      {
+        "subject": "MATH",
+        "number": "3203",
+        "section": null
+      },
+      {
+        "subject": "MATH",
+        "number": "4993",
+        "section": null
+      }
+    ],
+    "cancelled_course_validation": "passed",
+    "snapshot": "applied_changes.toml"
+  },
+  "applied_overrides_sha256": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c",
+  "override_workspace": {
+    "path": "overrides.toml",
+    "mutable": true,
+    "source_version": "ver24"
+  },
+  "selected_attempt": 3,
+  "solver": {
+    "status": "feasible",
+    "objective": -815.0,
+    "best_bound": -1335.0,
+    "random_seed": 117919714,
+    "time_limit_seconds": 20.0,
+    "attempts": 3
+  },
+  "validation": {
+    "hard_violations": 0,
+    "soft_penalty": 200.0,
+    "worst_overload": 6.0
+  },
+  "files": {
+    "27S_ver24.csv": "62ffe96f84941b3bc7aeefb822a8023b8bf09abb2e063ff5868d468ed8de1f7a",
+    "27S_ver24_instructor.xlsx": "7cd9fcdb581469917514b508b2f991d02f72c6bb43358fb2ce44f7f65aa539ab",
+    "27S_ver24_room.xlsx": "af522d84739508b82343ead09ca2202ed79a17c61b6a9b99ae0c0df30220d92f",
+    "report.md": "b0a40f6859319d8a487e1ec674e98e371731083c10220286b1ad8eb9752d3939",
+    "attempts.csv": "5cd210be2e6e4ea3e72ee650a610015b4f2ea75e5a1b35d3445a56bd5655d9e5",
+    "changes.csv": "dd2919b6086cac6f8ca651f7c12693bc88dfcc60682178498f441641cffd8fb1",
+    "baseline.csv": "9e6a2c9c9b2f9934953f67e8fce96a6f02297db9aa676720ed43fa9203643d7d",
+    "applied_overrides.toml": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c",
+    "applied_changes.toml": "a8141ee9088bd14920af2cc07b324a68f7b4118c0382a52b83dba6d4217e31bc"
+  }
+}

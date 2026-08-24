@@ -8,6 +8,9 @@ from class_schedule.schedule_model import (
     PreferenceRule,
     Schedule,
     TimeWindow,
+    WeightedCoursePreference,
+    WeightedLocationPreference,
+    WeightedTimePreference,
     check_conflicts,
     teaching_loads,
 )
@@ -40,26 +43,28 @@ class NamedPreferenceCostTests(unittest.TestCase):
     def test_matching_preferred_fields_reward_the_candidate(self):
         preference = PreferenceRecord(
             name="Alice",
-            preferred_times=(TimeWindow(
-                frozenset("MWF"), datetime.time(8), datetime.time(10)
+            preferred_times=(WeightedTimePreference(
+                TimeWindow(frozenset("MWF"), datetime.time(8), datetime.time(10)),
+                7,
             ),),
-            preferred_locations=("Corley",),
-            preferred_courses=("MATH 1113",),
+            preferred_locations=(WeightedLocationPreference("Corley", 11),),
+            preferred_courses=(WeightedCoursePreference("MATH 1113", 13),),
         )
         cost = preference_cost(
             "Alice", "MWF", datetime.time(9), datetime.time(9, 50),
             "Corley", "101", "MATH 1113", "001", {"Alice": preference},
         )
-        self.assertEqual(cost, -15.0)
+        self.assertEqual(cost, -31.0)
 
     def test_nonmatching_preferred_fields_do_not_change_cost(self):
         preference = PreferenceRecord(
             name="Alice",
-            preferred_times=(TimeWindow(
-                frozenset("TR"), datetime.time(13), datetime.time(15)
+            preferred_times=(WeightedTimePreference(
+                TimeWindow(frozenset("TR"), datetime.time(13), datetime.time(15)),
+                7,
             ),),
-            preferred_locations=("Rothwell",),
-            preferred_courses=("MATH 2934",),
+            preferred_locations=(WeightedLocationPreference("Rothwell", 11),),
+            preferred_courses=(WeightedCoursePreference("MATH 2934", 13),),
         )
         cost = preference_cost(
             "Alice", "MWF", datetime.time(9), datetime.time(9, 50),
@@ -214,7 +219,7 @@ class SolvePrefersOnlineTests(unittest.TestCase):
         # the conflict means reassigning it away from Bob to whichever of
         # Alice/Carol the solver picks. Alice prefers online, Carol has
         # no preference; both cost the same INSTRUCTOR_CHANGE_COST, so
-        # Alice's PREFERS_ONLINE_PENALTY (for landing on this in-person
+        # Alice's configured online-preference penalty (for landing on this in-person
         # section) should make Carol the strictly cheaper pick.
         moved = make_section(
             subject="MATH", number="1113", section="001", instructor="Bob", room="101",
@@ -230,7 +235,7 @@ class SolvePrefersOnlineTests(unittest.TestCase):
                 "Carol": PersonRecord(name="Carol", max_load=15, courses=["MATH 1113"]),
             },
             preferences={
-                "Alice": PreferenceRecord(name="Alice", prefers_online=True),
+                "Alice": PreferenceRecord(name="Alice", preferred_online_weight=5),
                 "Carol": PreferenceRecord(name="Carol"),
             },
         )

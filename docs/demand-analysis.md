@@ -38,4 +38,4 @@ needs_new_section = projected_avg_enrollment > 0.5 * avg_capacity_per_section
 
 缺少 Cube1 匹配的 CRN 不按零人数静默处理，而会从 enrollment total 排除并
 列在警告中。将确认的新 section 手工写入 `inputs/<term>/changes.toml`，再
-进入 draft 流程。
+进入 initial 构建流程。

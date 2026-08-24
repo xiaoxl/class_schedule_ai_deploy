@@ -2,7 +2,7 @@
 
 ## 覆盖文件
 
-不要直接编辑 `starting.csv` 后失去修改来源。将人工决定写入独立 TOML：
+不要直接编辑 `initial.csv`、ver CSV 或 final CSV。将最终人工决定写入独立 TOML：
 
 ```toml
 term = "27S"
@@ -116,20 +116,21 @@ uv run class-schedule --config config solve 27S `
 
 正常人工后修订使用 `final`；`solve --overrides` 不会刷新 final。
 
-`changes.csv` 不按父版本计算，而是累计比较该版本最开始使用的 start/change
-baseline。每次生成 `verN` 时，系统把完整基线保存为同目录的 `baseline.csv`；
-final 固定读取源 `verN/baseline.csv`，不读取以后可能被覆盖的
-`out/<term>/starting.csv`。
+每个自动 ver 的 `changes.csv` 都直接比较同一份 initial。每次 solve 都重新验证
+initial manifest，并把完整 initial 保存为该 ver 的 `baseline.csv`；自动 ver
+之间不互相作为输入。final 固定继承所选父 `verN/baseline.csv`。发布时直接复制
+已验证 CSV 字节，不重新展开 Schedule，因此 initial 与每个 `baseline.csv` 的
+SHA-256 完全相同。
 
 累计变化不是把“start→ver”和“ver→final”两张表机械拼接，而是直接比较
-`baseline Schedule` 与 `final Schedule`，所以会自动化简：同一字段的
+initial baseline 与 `final Schedule`，所以会自动化简：同一字段的
 `A→B` 加 `B→C` 只输出 `A→C`；`A→B` 后又改回 `A` 时不输出该字段。
 
-例如 baseline、自动 ver 和手调 final 分别是：
+例如 initial、自动 ver 和手调 final 分别是：
 
 | 阶段 | 时间 | 教室 |
 |---|---|---|
-| baseline | `MWF 9:00am` | `Corley 101` |
+| initial | `MWF 9:00am` | `Corley 101` |
 | ver10 | `MWF 10:00am` | `Corley 101` |
 | final | `MWF 9:00am` | `Corley 102` |
 
@@ -148,26 +149,26 @@ Course ID,Field,Before,After
 
 | Field | 含义 |
 |---|---|
-| `status` | 课程记录相对 baseline 新增或删除 |
+| `status` | 课程记录相对 initial 新增或删除 |
 | `instructor` | 教师变化 |
 | `time` | 完整 time slot 变化 |
 | `room` | 完整 `Building Room` 变化；building 或 room 任一变化都归入此项 |
 
 它不报告标题、CRN、容量等非求解字段变化；这些字段应在 clean/draft 输入阶段
 审计，而不是通过 final 手调。`changes.csv` 的用途是描述最终排课状态相对
-baseline 的可执行字段差异。
+initial 的可执行字段差异。
 
-底层 solve 如果使用新的 start，应明确传入：
+正常首版直接读取 initial：
 
 ```powershell
 uv run class-schedule --config config solve 27S `
-  --input out/27S/ver6/27S_ver6.csv `
-  --baseline work/27S/ver7/draft/starting.csv
+  --input work/27S/initial/initial.csv
 ```
 
-manifest 同时记录 `input`、原始 `change_baseline` 的路径/哈希以及
-`baseline.csv` 快照名。report 的 Before/After、Teaching loads 和 Simplified
-Changes 均以该快照为 Before。
+生成下一个自动版本时重复同一条 initial solve 命令即可；版本号自动递增，但输入
+仍是 initial。普通 solve 若传入旧 ver 或 `--parent` 会失败。只有历史重建可显式同时使用
+`--historical-backfill` 和 `--baseline <path>`。report 的 Before/After、Teaching loads 和 Simplified
+Changes 均以 initial 为 Before。
 
 ## 版本目录
 
@@ -180,8 +181,9 @@ out/27S/ver10/
   27S_ver10_room.xlsx        按教室分 worksheet 的周课表
   report.md          指标、负载、变更、遗留问题
   attempts.csv       所有独立求解尝试的状态和指标
-  changes.csv        相对 start/change baseline 的累计字段级变化
-  baseline.csv       生成该版本时使用的完整 start/change baseline 快照
+  changes.csv        相对 initial 的累计字段级变化
+  baseline.csv       本次直接复制的不可变 initial 快照
+  applied_changes.toml  生成 initial 时使用的 changes 快照
   overrides.toml     允许编辑的、绑定 ver10 的 final 手调工作文件
   applied_overrides.toml  生成 ver10 时实际使用的覆盖文件，不可编辑
   manifest.json      输入、配置、覆盖、输出文件哈希和求解参数
@@ -203,14 +205,14 @@ objective、bound、random seed、时间预算、hard/soft/overload 指标以及
 产物哈希。版本目录的 `overrides.toml` 是唯一明确允许修改、且不进入 immutable
 files 哈希表的工作文件；其余产物以及 `applied_overrides.toml` 均不可编辑。
 
-manifest schema v3 的关键字段：
+manifest schema v4 的关键字段：
 
 | 字段 | 含义 |
 |---|---|
-| `term`, `version`, `parent` | 发布身份；final 的 version 是 `final`，parent 是源 ver |
+| `term`, `version`, `parent` | 自动 ver 的 parent 为空；final 的 parent 是所选源 ver |
 | `input.path/sha256` | 本次求解实际读取的 ver/start CSV |
-| `change_baseline.path/sha256` | 首次发布时原始 baseline 的来源和哈希 |
-| `change_baseline.snapshot` | 当前目录内固定为 `baseline.csv` 的快照名 |
+| `initial_baseline.path/sha256/role` | initial 基线来源、哈希以及固定的 `role = initial` |
+| `initial_baseline.snapshot` | 当前目录内固定为 `baseline.csv` 的快照名 |
 | `configuration.version/files` | 四个实际配置文件的聚合版本、路径与哈希 |
 | `applied_overrides_sha256` | 本次实际应用配置的哈希 |
 | `override_workspace` | override 路径、是否 mutable、绑定的 source version |

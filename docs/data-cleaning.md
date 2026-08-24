@@ -2,8 +2,8 @@
 
 ## 输入
 
-生产流程的第一步是 `initialize`；它先调用同一套 `clean` 能力，再生成原输入的
-教师和教室周课表。`initialize`/`clean` 接受 `.csv`、`.xlsx`。旧二进制 `.xls` 不在依赖范围内，应先另存
+生产流程的第一步是 `initialize`；它先调用同一套 `clean` 能力，再发布 change 前
+`draft.csv` 以及原输入的教师和教室周课表。`initialize`/`clean` 接受 `.csv`、`.xlsx`。旧二进制 `.xls` 不在依赖范围内，应先另存
 为 `.xlsx`。空行被删除；每个非空数据行单独
 解析，所以一行错误不会阻止其他行输出。
 
@@ -49,6 +49,9 @@ work/27S/normalized/
   rejected_rows.csv
   validation.md
   source_manifest.json
+
+work/27S/draft/
+  draft.csv
 ```
 
 同时在原输入所在文件夹生成：
@@ -60,10 +63,11 @@ inputs/27S/
   Course Schedule Report_room.xlsx
 ```
 
-两本 Excel 直接来自该原输入经规范化、人员别名解析和原子分组后的 `Schedule`。
+`draft.csv` 和两本 Excel 直接来自该原输入经规范化、人员别名解析和原子分组后的
+同一个 `Schedule`。
 此时尚未读取 `changes.toml`，也没有新员工预放置、preference、override 或 solver
 变动，因此它们是 change 前输入的周课表变形。存在拒绝行或 grouping warning 时，
-清洗审计包仍会写出，但不会发布可能不完整的两本 Excel。`clean` 子命令保留为只需
+清洗审计包仍会写出，但不会发布可能不完整的 draft 和两本 Excel。`clean` 子命令保留为只需
 清洗审计包、不需要输入视图时的底层入口。
 
 `sections.csv` 的列和顺序固定：
@@ -111,14 +115,14 @@ Hybrid 的无 room 行必须同时没有物理会议时间（`ONLINE`、`TBA` �
 - `source_manifest.json` 保存源路径、SHA-256、行数和规范列版本。
 - 有拒绝行或 grouping warning 时命令退出码为 1，但审计文件仍完整生成。
 
-进入 `draft` 或 `solve` 前，应保证 `rejected_rows.csv` 为空且
+进入 `initial` 前，应保证 `rejected_rows.csv` 为空且
 `validation.md` 没有 grouping warning。
 
 ## 进入排课对象
 
 清洗完成后的 `sections.csv` 仍是审计和交换格式，不是后续规则直接操作的
 对象。磁盘入口的完整职责和禁止事项见[架构文档的 `schedule_io.py` 文件边界](index.md#schedule_iopy-文件边界)。
-`draft`、`solve`、`validate` 和 `diff` 都先调用：
+`draft`、`initial`、`solve`、`validate` 和 `diff` 都先调用：
 
 ```python
 schedule = read_schedule(
@@ -130,3 +134,16 @@ schedule = read_schedule(
 返回值是已经完成原子分组的 `Schedule`。此后统计、调课和求解不得直接遍历
 CSV/DataFrame 行。输出 CSV 是 `Schedule.to_dataframe()` 的展开表示，因此
 cross-list 等双行原子课会重新出现两行，但教学负载仍按原子对象只算一次。
+
+## draft 到 initial
+
+`draft.csv` 严格是 change 前快照，不读取 `changes.toml`。随后执行：
+
+```powershell
+uv run class-schedule --config config initial 27S `
+  work/27S/draft/draft.csv inputs/27S/changes.toml
+```
+
+得到 `work/27S/initial/initial.csv`、`initial_noadding.csv`、教师/教室 Excel 和
+`manifest.json`。manifest 固定记录 draft、changes 和 initial 的 SHA-256；正常
+solve 会验证这些哈希，因此修改 changes 后必须重建 initial。

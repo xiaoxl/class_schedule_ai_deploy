@@ -8,9 +8,9 @@ import pandas as pd
 from class_schedule.class_model import NormalClass, Section
 from class_schedule.schedule_model import PersonRecord, Schedule, check_conflicts
 from class_schedule.solver import MeetingPattern
-from class_schedule.starting_template import (
+from class_schedule.initial_builder import (
     _classes_conflict,
-    build_starting_templates,
+    build_initial_schedules,
     place_new_hires,
     recolor_placeholder,
 )
@@ -202,7 +202,7 @@ class RecolorPlaceholderTests(unittest.TestCase):
         self.assertEqual(first_assignments, second_assignments)
 
 
-class BuildStartingTemplatesTests(unittest.TestCase):
+class BuildInitialSchedulesTests(unittest.TestCase):
     def test_writes_both_conflict_free_csvs_and_places_a_new_hire(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -237,9 +237,10 @@ class BuildStartingTemplatesTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            results = build_starting_templates(
+            output = tmp_path / "initial"
+            results = build_initial_schedules(
                 template_path, changes_path, persons_path,
-                output_dir=tmp_path, seed=1,
+                output_dir=output, seed=1,
                 meeting_patterns=[MeetingPattern(
                     "MWF", 50,
                     (datetime.time(9), datetime.time(10)),
@@ -247,23 +248,26 @@ class BuildStartingTemplatesTests(unittest.TestCase):
                 )],
             )
 
-            self.assertTrue((tmp_path / "starting.csv").exists())
-            self.assertTrue((tmp_path / "starting_noadding.csv").exists())
+            self.assertTrue((output / "initial.csv").exists())
+            self.assertTrue((output / "initial_noadding.csv").exists())
+            self.assertTrue((output / "initial_instructor.xlsx").exists())
+            self.assertTrue((output / "initial_room.xlsx").exists())
+            self.assertTrue((output / "manifest.json").exists())
 
-            starting = results["starting"]
+            initial = results["initial"]
             self.assertEqual(
-                starting["hire_assignments"], {"Yousuf, Marium": ("MATH 1113-001",)}
+                initial["hire_assignments"], {"Yousuf, Marium": ("MATH 1113-001",)}
             )
-            self.assertEqual(check_conflicts(starting["schedule"]), [])
+            self.assertEqual(check_conflicts(initial["schedule"]), [])
 
-            # starting_noadding never sees the new MATH 1003 course at all.
-            noadding = results["starting_noadding"]
+            # initial_noadding never sees the new MATH 1003 course at all.
+            noadding = results["initial_noadding"]
             with self.assertRaises(KeyError):
                 noadding["schedule"].get("MATH 1003-001")
             self.assertEqual(check_conflicts(noadding["schedule"]), [])
 
             written_back = Schedule.from_dataframe(
-                pd.read_csv(tmp_path / "starting.csv", dtype=str)
+                pd.read_csv(output / "initial.csv", dtype=str)
             )
             self.assertEqual(check_conflicts(written_back), [])
 
@@ -285,16 +289,18 @@ class BuildStartingTemplatesTests(unittest.TestCase):
             )
             persons = root / "persons.toml"
             persons.write_text("", encoding="utf-8")
+            output = root / "initial"
 
             with self.assertRaisesRegex(ValueError, "unconfigured meeting"):
-                build_starting_templates(
-                    template, changes, persons, output_dir=root,
+                build_initial_schedules(
+                    template, changes, persons, output_dir=output,
                     meeting_patterns=[MeetingPattern(
                         "MWF", 50,
                         (datetime.time(11), datetime.time(12)),
                         frozenset({"normal"}),
                     )],
                 )
+            self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

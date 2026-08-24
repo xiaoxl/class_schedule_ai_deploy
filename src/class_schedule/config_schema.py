@@ -77,9 +77,42 @@ class TimeWindowSchema(StrictModel):
         return days
 
 
+class WeightedTimeWindowSchema(TimeWindowSchema):
+    weight: float = Field(ge=0, le=100)
+
+
+class WeightedLocationSchema(StrictModel):
+    location: str
+    weight: float = Field(ge=0, le=100)
+
+    @field_validator("location")
+    @classmethod
+    def require_location(cls, location: str) -> str:
+        if not location.strip():
+            raise ValueError("weighted location must not be blank")
+        return location
+
+
+class WeightedCourseSchema(StrictModel):
+    course: str
+    weight: float = Field(ge=0, le=100)
+
+    @field_validator("course")
+    @classmethod
+    def validate_course(cls, course: str) -> str:
+        if not COURSE_PATTERN.fullmatch(course):
+            raise ValueError(f"invalid course identifier: {course!r}")
+        return course
+
+
+class WeightedFlagSchema(StrictModel):
+    weight: float = Field(ge=0, le=100)
+
+
 class RuleSchema(StrictModel):
     course: str | None = None
     section: str | None = None
+    section_prefix: str | None = None
     room: str | None = None
     time: TimeWindowSchema | None = None
     direction: Literal["prefer", "dislike"] = "dislike"
@@ -89,6 +122,10 @@ class RuleSchema(StrictModel):
     def section_requires_course(self):
         if self.section is not None and self.course is None:
             raise ValueError("a rule's section requires course")
+        if self.section is not None and self.section_prefix is not None:
+            raise ValueError("a rule cannot set both section and section_prefix")
+        if self.section_prefix is not None and not self.section_prefix.strip():
+            raise ValueError("a rule's section_prefix must not be blank")
         if self.course is not None and not COURSE_PATTERN.fullmatch(self.course):
             raise ValueError(f"invalid course identifier: {self.course!r}")
         return self
@@ -99,22 +136,37 @@ class InstructorPreferenceSchema(StrictModel):
     allow_overload: bool = True
     allow_back_to_back: bool = True
     max_back_to_back: int | None = Field(default=None, ge=0)
-    prefers_online: bool = False
-    preferred_times: list[TimeWindowSchema] = Field(default_factory=list)
-    disliked_times: list[TimeWindowSchema] = Field(default_factory=list)
-    preferred_locations: list[str] = Field(default_factory=list)
-    disliked_locations: list[str] = Field(default_factory=list)
-    preferred_courses: list[str] = Field(default_factory=list)
-    disliked_courses: list[str] = Field(default_factory=list)
+    prefers_online: WeightedFlagSchema | None = None
+    preferred_times: list[WeightedTimeWindowSchema] = Field(default_factory=list)
+    disliked_times: list[WeightedTimeWindowSchema] = Field(default_factory=list)
+    preferred_locations: list[WeightedLocationSchema] = Field(default_factory=list)
+    disliked_locations: list[WeightedLocationSchema] = Field(default_factory=list)
+    preferred_courses: list[WeightedCourseSchema] = Field(default_factory=list)
+    disliked_courses: list[WeightedCourseSchema] = Field(default_factory=list)
     rules: list[RuleSchema] = Field(default_factory=list)
 
-    @field_validator("preferred_courses", "disliked_courses")
-    @classmethod
-    def validate_courses(cls, courses: list[str]) -> list[str]:
-        invalid = [course for course in courses if not COURSE_PATTERN.fullmatch(course)]
-        if invalid:
-            raise ValueError(f"invalid course identifiers: {invalid}")
-        return courses
+    @model_validator(mode="after")
+    def unique_weighted_selectors(self):
+        for field, attribute in (
+            ("preferred_locations", "location"),
+            ("disliked_locations", "location"),
+            ("preferred_courses", "course"),
+            ("disliked_courses", "course"),
+        ):
+            values = [getattr(item, attribute) for item in getattr(self, field)]
+            if len(values) != len(set(values)):
+                raise ValueError(f"{field} must not contain duplicate selectors")
+        for rule in self.rules:
+            selector_count = sum(
+                value is not None
+                for value in (rule.course, rule.section, rule.room, rule.time)
+            )
+            if rule.section_prefix is None and selector_count < 2:
+                raise ValueError(
+                    "single-selector instructor rules belong in a weighted "
+                    "time, location, or course preference list"
+                )
+        return self
 
 
 class PreferencesFileSchema(StrictModel):

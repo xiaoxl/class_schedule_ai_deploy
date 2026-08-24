@@ -9,10 +9,6 @@ from .. import record_utils
 from ..class_model import Class, Section
 from ..pattern_rules import pattern_applies, section_pattern_role
 from ..schedule_model import (
-    DISLIKED_COURSE_PENALTY,
-    DISLIKED_LOCATION_PENALTY,
-    DISLIKED_TIME_PENALTY,
-    PREFERS_ONLINE_PENALTY,
     PersonRecord,
     PreferenceRecord,
     PreferenceRule,
@@ -79,29 +75,35 @@ def preference_cost(
     if preference is None:
         return cost
     cost -= sum(
-        DISLIKED_TIME_PENALTY
-        for window in preference.preferred_times
-        if window.overlaps(days, start, end)
+        item.weight
+        for item in preference.preferred_times
+        if item.window.overlaps(days, start, end)
     )
     cost += sum(
-        DISLIKED_TIME_PENALTY
-        for window in preference.disliked_times
-        if window.overlaps(days, start, end)
+        item.weight
+        for item in preference.disliked_times
+        if item.window.overlaps(days, start, end)
     )
-    if preference.preferred_locations and location_matches(
-        building, room, preference.preferred_locations
-    ):
-        cost -= DISLIKED_LOCATION_PENALTY
-    if preference.disliked_locations and location_matches(
-        building, room, preference.disliked_locations
-    ):
-        cost += DISLIKED_LOCATION_PENALTY
-    if course in preference.preferred_courses:
-        cost -= DISLIKED_COURSE_PENALTY
-    if course in preference.disliked_courses:
-        cost += DISLIKED_COURSE_PENALTY
-    if preference.prefers_online and days is not None:
-        cost += PREFERS_ONLINE_PENALTY
+    cost -= sum(
+        item.weight
+        for item in preference.preferred_locations
+        if location_matches(building, room, (item.location,))
+    )
+    cost += sum(
+        item.weight
+        for item in preference.disliked_locations
+        if location_matches(building, room, (item.location,))
+    )
+    cost -= sum(
+        item.weight for item in preference.preferred_courses
+        if item.course == course
+    )
+    cost += sum(
+        item.weight for item in preference.disliked_courses
+        if item.course == course
+    )
+    if preference.preferred_online_weight is not None and days is not None:
+        cost += preference.preferred_online_weight
     return cost
 
 

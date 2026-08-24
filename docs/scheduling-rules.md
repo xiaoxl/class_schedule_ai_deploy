@@ -48,9 +48,9 @@ CLI validate、求解尝试评估、版本报告和 Web API 都使用这组领�
   `available` rooms 做笛卡尔积。selector 由结构 `roles`、当前记录 `courses`
   和完整原子课集合 `atomic_courses` 组成；Python 匹配器不包含具体课程号。
 - blackout 相交的新增时间候选被排除。
-- `changes.toml` 中新增的物理 section 在 draft 阶段必须精确匹配其原子类型可用的
+- `changes.toml` 中新增的物理 section 在 initial 阶段必须精确匹配其原子类型可用的
   meeting pattern（days、duration、start），并且不能与 blackout 相交；不合法时
-  在写出 `starting.csv` 前直接失败。
+  在写出 `initial.csv` 前直接失败。
 - 单行课程每位教师最多保留成本最低的 40 个候选；双行课程每位教师最多
   10 个，减少组合爆炸。
 - 当前原始候选通常会补回，即使它不在 room 列表，以兼容历史排课。但 blackout
@@ -102,9 +102,9 @@ CLI validate、求解尝试评估、版本报告和 Web API 都使用这组领�
 | 更换教师 | 10 |
 | 更换时间 | 5 |
 | 更换 building/room 组合 | 5 |
-| preferred time/location/course 匹配 | 每项 `-5` |
-| disliked time/location/course | 每项 5 |
-| prefers online 但安排物理课 | 5 |
+| preferred time/location/course 匹配 | 每项 `-weight` |
+| disliked time/location/course 匹配 | 每项 `+weight` |
+| prefers online 但安排物理课 | `+weight` |
 | 不允许 back-to-back，或超过连续课上限 | 每处 10 |
 | 低于 `max_load` | 每位教师 90 |
 | 超过 `max_load + 2` 且 `allow_overload=true` | 10 |
@@ -112,6 +112,10 @@ CLI validate、求解尝试评估、版本报告和 Web API 都使用这组领�
 | allow overload 且超过 `max_load + 4` | 额外 50 |
 | 自定义 dislike rule | `+weight` |
 | 自定义 prefer rule | `-weight` |
+
+所有命名偏好条目都在 `preferences.toml` 中显式携带 `weight`，范围为 `0-100`；
+同一候选匹配多个条目时逐项相加。单条件课程、地点和时间偏好不再通过
+`instructors.rules` 绕行，只有复合 AND 和 section 前缀规则保留在那里。
 
 `max_load` 是目标：不足和过量都是软目标；只有上节所述 `+6` 是模型硬上界。
 偏好报告只列“违反项”，因此已满足的 prefer 奖励不会出现在 reported soft

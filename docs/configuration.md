@@ -123,21 +123,26 @@ name = "Xiao, Xinli"
 allow_overload = false
 allow_back_to_back = true
 max_back_to_back = 3
-prefers_online = false
+prefers_online = { weight = 20 }
 preferred_times = []
 disliked_times = [
-  { days = ["M", "W", "F"], between = ["08:00", "09:00"], reason = "no early MWF" },
+  { days = ["M", "W", "F"], between = ["08:00", "09:00"], reason = "no early MWF", weight = 50 },
 ]
 preferred_locations = []
-disliked_locations = ["Rothwell"]
+disliked_locations = [{ location = "Rothwell", weight = 25 }]
 preferred_courses = []
-disliked_courses = ["MATH 2934"]
+disliked_courses = [{ course = "MATH 2934", weight = 50 }]
 
   [[instructors.rules]]
   course = "STAT 3113"
   room = "Corley 101"
   direction = "prefer"
   weight = 50
+
+  [[instructors.rules]]
+  section_prefix = "TC"
+  direction = "dislike"
+  weight = 10
 
 [[rules]]
 course = "MATH 1113"
@@ -151,19 +156,26 @@ weight = 100
 - `allow_overload` 只改变超载软惩罚，不解除求解器绝对负载上界。
 - `allow_back_to_back = false` 对每个相邻连续课惩罚；为 true 且设置
   `max_back_to_back = N` 时，从同日连续第 `N+1` 门开始逐门惩罚。
-- `prefers_online = true` 会惩罚其每个物理课候选。
-- `preferred_times`、`preferred_locations`、`preferred_courses` 匹配候选时各奖励
-  5 分（目标成本减 5）；未匹配不会作为违规写入报告。
-- `disliked_times`、`disliked_locations`、`disliked_courses` 匹配候选时各惩罚 5 分。
-- rule 的 `course`、`section`、`room`、`time` 都是可选匹配条件；条件之间
+- `prefers_online = { weight = N }` 会对其每个物理课候选增加 `N` 分成本；省略表示
+  没有在线偏好。
+- `preferred_times`、`preferred_locations`、`preferred_courses` 的每个条目都必须写
+  `weight`，匹配候选时减去该权重；未匹配不会作为违规写入报告。
+- `disliked_times`、`disliked_locations`、`disliked_courses` 的每个条目也必须写
+  `weight`，匹配候选时增加该权重，并按相同权重写入报告。
+- 同一候选匹配多个条目时权重相加；所有偏好权重范围都是 `0-100`。
+- rule 的 `course`、`section`、`section_prefix`、`room`、`time` 都是可选匹配条件；条件之间
   是 AND。`section` 必须与 `course` 同时出现。
-- 顶层 `[[rules]]` 对所有教师生效；嵌套 `[[instructors.rules]]` 只对该教师。
+- `section_prefix` 是不绑定课程的大小写无关前缀匹配，例如 `"TC"` 匹配
+  `TC1`、`TC2`；不可与精确的 `section` 同时出现。
+- 单独的课程、地点或时间偏好应写入上述加权列表。顶层 `[[rules]]` 对所有教师
+  生效；嵌套 `[[instructors.rules]]` 只保留多条件 AND 或 `section_prefix` 等列表
+  无法表达的规则。教师下只有一个 course/room/time selector 的 rule 会被严格拒绝。
 - `direction` 只能是 `prefer` 或 `dislike`，`weight` 范围 0 到 100。
 - prefer 以负成本奖励匹配候选；dislike 以正成本惩罚匹配候选。
 
 ## changes.toml
 
-`inputs/<term>/changes.toml` 用于从上学期排课生成草案。
+`inputs/<term>/changes.toml` 用于把清洗后的 change 前 draft 变成 initial。
 
 ```toml
 departures = ["Old, Instructor"]
@@ -186,9 +198,18 @@ Building = ""
 Room = ""
 ```
 
-`departures` 将其原课程改给 `Staff`，不删除课程；`new_hires` 只触发草案
+`departures` 将其原课程改给 `Staff`，不删除课程；`new_hires` 只触发 initial
 预放置，人员本身仍必须先写入 persons；新课空教师也填为 `Staff`。双行
 原子课程要写两份 `[[new_courses]]`。
+
+`initial` 命令一次性应用全部学期变动，并在 `work/<term>/initial/manifest.json`
+记录 draft、changes 和 initial 的哈希。修改 `cancel_courses`、`departures`、
+`new_hires` 或 `new_courses` 后都必须重建 initial，并从新的 initial 开始一条
+新的 ver 链。solve 只验证取消课程已经不在输入中，不会在求解阶段偷偷增删课程；
+否则直接失败并提示重建 initial。每个 ver 保存 initial 使用的
+`applied_changes.toml` 快照。
+`validate` 读取同一默认文件但不会改写 Schedule；若输入仍含取消课程，会报告
+`HARD [cancelled_course]` 并返回非零状态。
 
 ## overrides.toml
 

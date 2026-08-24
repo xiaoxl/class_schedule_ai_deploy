@@ -9,7 +9,7 @@ from ortools.sat.python import cp_model
 from ..class_model import Section
 from ..overrides import LockMap, locks_for_section
 from ..schedule_model import Schedule
-from ..starting_template import is_placeholder_instructor, recolor_placeholder
+from ..initial_builder import is_placeholder_instructor, recolor_placeholder
 from .candidates import (
     MAX_CANDIDATES_PAIRED_SECTION,
     MAX_CANDIDATES_SINGLE_SECTION,

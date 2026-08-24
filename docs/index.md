@@ -10,9 +10,11 @@
   -> clean: 固定字段、拒绝坏行、保存源文件哈希
   -> normalized sections.csv
   -> read_schedule(): 构造 Section，再分组为 Schedule[原子课程]
-  -> draft/override: 只修改 Schedule 对象
+  -> draft/draft.csv: 清洗并分组后的 change 前 Schedule
+  -> initial: 对 draft 应用完整 changes.toml、新聘预放置和 Staff 分色
+  -> initial/initial.csv: 自动排课唯一合法起点
   -> evaluate_schedule(): 行数、原子课数、负载、hard、soft
-  -> solve: 从 Schedule 建立 CP-SAT，返回新的 Schedule
+  -> solve: 每次都从 initial 建立 CP-SAT，返回独立的新 ver Schedule
   -> evaluate/diff/export
   -> out/<term>/verN/: 不覆盖快照 + baseline + 可编辑 override 模板
   -> 编辑 verN/overrides.toml
@@ -45,7 +47,7 @@ cross-list 也在原子分组阶段统一识别，但不是向 DataFrame“注�
 `CrossListingClass.COURSE_PAIRS` 按相同 section 自动识别，输入和输出的
 `Cross-List` 都可以保持空白。
 
-CLI 的 `initialize`、`draft`、`solve`、`validate`、`diff`，版本发布和 starting template
+CLI 的 `initialize`、`draft`、`initial`、`solve`、`validate`、`diff`，版本发布和 initial builder
 都通过 `read_schedule()` 取得对象；term builder 只接收已经分组的 `Schedule`。
 负载统计、偏好评估、
 冲突检查、人工调整和 solver 不得依赖 `pandas`，也不得自行读取排课文件。
@@ -68,7 +70,7 @@ Excel 输出同样只处理 `Schedule`。
 1. 一个磁盘排课文件每次进入业务层都必须经过 `read_schedule()`；
 2. 所有教学负载由 `teaching_loads(Schedule)` 计算，不能按输出行求和；
 3. 所有确定性检查由 `evaluate_schedule(Schedule, ...)` 汇总；
-4. draft、人工 edit/lock、Staff 重着色和 solver 的输入输出都是 `Schedule`；
+4. draft、initial、人工 edit/lock、Staff 重着色和 solver 的输入输出都是 `Schedule`；
 5. 只有发布或中间审计时才用 `Schedule.to_dataframe()` 展开回 CSV；再次读入时
    必须重新经过原子分组。
 
@@ -77,8 +79,9 @@ Excel 输出同样只处理 `Schedule`。
 | 目录 | 职责 | 是否手工编辑 |
 |---|---|---|
 | `inputs/<term>/` | 原始导出、change 前自动 Excel 视图和学期滚动 `changes.toml` | 原始文件和 changes 是；自动 Excel 否 |
-| `work/<term>/normalized/` | 清洗中间产物 | 否 |
-| `work/<term>/draft/` | 可求解的起始排课 | 通常否 |
+| `work/<term>/normalized/` | 清洗审计包，含保留 concurrent 行的规范表 | 否 |
+| `work/<term>/draft/draft.csv` | 清洗、原子分组后的 change 前课表 | 否 |
+| `work/<term>/initial/` | 应用 changes 后的求解起点、Excel 和 provenance manifest | 否 |
 | `config/catalog/` | 推荐位置：跨学期人员与房间事实 | 是 |
 | `config/terms/<term>/` | 推荐位置：学期偏好与时间表 | 是 |
 | `config/*.toml` | 旧平铺布局，仍作为兼容回退 | 是 |
@@ -101,12 +104,11 @@ uv sync
 uv run class-schedule --config config initialize 27S `
   "inputs/27S/Course Schedule Report.csv"
 
-uv run class-schedule --config config draft 27S `
-  work/27S/normalized/sections.csv inputs/27S/changes.toml
+uv run class-schedule --config config initial 27S `
+  work/27S/draft/draft.csv inputs/27S/changes.toml
 
 uv run class-schedule --config config solve 27S `
-  --input work/27S/draft/starting.csv `
-  --baseline work/27S/draft/starting.csv --attempts 5 --seconds 45
+  --input work/27S/initial/initial.csv --attempts 5 --seconds 45
 
 uv run class-schedule --config config final 27S ver10 `
   --attempts 5 --seconds 45
@@ -122,8 +124,9 @@ uv run class-schedule --config config diff 27S `
 还会把 `<输入stem>_instructor.xlsx`、`<输入stem>_room.xlsx` 写在原输入文件旁边。
 这两本工作簿只由原输入清洗并分组后的 `Schedule` 生成，函数接口不接受
 `changes.toml`、preferences、overrides 或 solver 结果，因而严格表示 change 前快照。
-`draft` 默认输出到
-`work/<term>/draft/`，`solve` 默认写入下一个不存在的
+`initialize` 成功时同时发布 `work/<term>/draft/draft.csv`；也可用底层 `draft`
+命令把现有规范表显式转成 change 前 Schedule。`initial` 默认输出到
+`work/<term>/initial/`。`solve` 默认读取其中的 `initial.csv` 并写入下一个不存在的
 `out/<term>/verN/`：扫描所有名称严格为 `ver数字` 的目录，然后使用
 `max(N) + 1`。归档目录如 `ver4_validation` 不参与编号。任何已有版本目录
 都不会被覆盖；`--version` 只用于明确的历史回填，正常运行不要填写。
@@ -139,21 +142,22 @@ uv run class-schedule --config config diff 27S `
 |---|---|---|
 | 目的 | 保存一次自动求解快照 | 保存人工决定后的当前最终版本 |
 | 是否覆盖 | 否；自动追加下一号 | 是；每次原子刷新同一目录 |
-| 输入 | starting/draft 或显式 input | 指定 `verN` 的 CSV 和内置 overrides |
-| parent | 从 input 推断或显式指定 | 必须是命令选择的源 `verN` |
+| 输入 | 每个 ver 都是同一份 initial | 指定 `verN` 的 CSV 和内置 overrides |
+| parent | 始终为空；自动 ver 之间不是输入继承关系 | 必须是命令选择的源 `verN` |
 | overrides.toml | 可编辑工作文件，不计入 immutable files 哈希 | 本次实际使用配置的只读副本 |
 | applied_overrides.toml | 生成该 ver 时实际使用的配置 | 与本次 final 实际配置一致 |
-| baseline.csv | 该 ver 的最初 change baseline 快照 | 从父 ver 继承的同一逻辑基线 |
-| changes.csv | baseline 到 ver 的直接化简 diff | baseline 到 final 的直接化简 diff |
+| baseline.csv | 每次直接复制同一份 initial | 从父 ver 继承的 initial 快照 |
+| changes.csv | initial 到 ver 的直接化简 diff | initial 到 final 的直接化简 diff |
 
-final 的累计变化不是连接两张 CSV。系统保留父 ver 的 `baseline.csv`，然后直接
-调用领域层 diff 比较 `baseline Schedule` 与 `final Schedule`。因此同一字段
+final 的累计变化不是连接两张 CSV。系统保留父 ver 的 `baseline.csv`，它就是
+首版使用的 initial 快照；然后直接调用领域层 diff 比较 initial 与 final。因此同一字段
 `A→B→C` 只留下 `A→C`，`A→B→A` 完全消失；新增后又删除且首尾都不存在的课程
 也不会留下中间噪声。
 
-`out/<term>/starting.csv` 以后即使被新流程覆盖，也不会改变已有 ver/final 的
-累计变化基线。final 缺少父 ver 的 `baseline.csv` 时明确失败，不退回当前
-starting，也不猜测旧版本数据。
+每次自动生成 ver 都重新验证 `work/<term>/initial/manifest.json`，并直接复制同一
+`initial.csv` 作为 baseline。把旧 ver 传给普通 solve 会明确失败。final 才读取
+指定父 ver，并继承其中已验证哈希的 `baseline.csv`；缺失、被修改或 manifest
+未声明 `role = initial` 时明确失败。
 
 ## 代码依赖关系
 
@@ -165,13 +169,13 @@ starting，也不猜测旧版本数据。
 | `schedule_io.py` | CSV/XLSX 到原子 `Schedule` 的唯一磁盘入口 | persons 别名 |
 | `schedule_model.py` | 整表分组、编辑、负载和统一评估 | persons/preferences 对象 |
 | `term_builder.py` | 上学期向新学期滚动 | `changes.toml` |
-| `starting_template.py` | 新聘教师预放置、Staff 分色 | `persons.toml` |
+| `initial_builder.py` | draft→initial、新聘教师预放置、Staff 分色和 initial manifest | changes/persons |
 | `solver/config.py` | 四类配置解析、交叉引用校验、哈希 | TOML 文件 |
 | `solver/candidates.py` | 教师/时间/房间候选与候选成本 | 全部 SolverConfig、locks |
 | `solver/constraints.py` | CP-SAT 的组合、冲突、负载约束 | 候选、偏好 |
 | `solver/engine.py` | 建模、求解、随机种子、结果状态 | candidates/constraints |
 | `overrides.py` | 手调值、字段锁、term/source_version 校验和模板内容 | `overrides.toml` |
-| `schedule_run.py` | 多次求解、baseline 快照、final API、选优和原子发布 | 以上全部 |
+| `schedule_run.py` | 多次求解、initial 基线继承、final API、选优和原子发布 | 以上全部 |
 
 详细说明见 [数据清洗](data-cleaning.md)、[配置格式](configuration.md)、
 [排课规则](scheduling-rules.md)、[手调与版本](manual-adjustments.md) 和

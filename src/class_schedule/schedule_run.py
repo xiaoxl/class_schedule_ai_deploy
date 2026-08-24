@@ -36,6 +36,7 @@ from .solver import (
     diff_schedules,
     solve_detailed,
 )
+from .term_builder import apply_cancellations, load_changes
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,7 @@ class RunBundle:
     manifest_path: Path
     overrides_path: Path
     applied_overrides_path: Path
+    applied_changes_path: Path
     best_attempt: Attempt
     attempts: tuple[Attempt, ...]
 
@@ -189,7 +191,9 @@ def install_version_override_template(
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         files = manifest.setdefault("files", {})
-        baseline_info = manifest.get("change_baseline", {})
+        baseline_info = manifest.get(
+            "initial_baseline", manifest.get("change_baseline", {})
+        )
         recorded_baseline = Path(str(baseline_info.get("path", "")))
         baseline_snapshot = version_dir / "baseline.csv"
         if recorded_baseline.is_file():
@@ -206,7 +210,7 @@ def install_version_override_template(
             files[baseline_snapshot.name] = _sha256(baseline_snapshot)
         files.pop("overrides.toml", None)
         files[applied.name] = _sha256(applied)
-        manifest["schema_version"] = max(3, int(manifest.get("schema_version", 1)))
+        manifest["schema_version"] = max(4, int(manifest.get("schema_version", 1)))
         manifest.pop("overrides_sha256", None)
         manifest["applied_overrides_sha256"] = _sha256(applied)
         manifest["override_workspace"] = {
@@ -266,6 +270,65 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _load_json(path: Path) -> dict[str, object]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Required provenance manifest does not exist: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _verified_initial(initial_path: Path) -> tuple[Path, dict[str, object]]:
+    """Verify an initial artifact and return its recorded changes source."""
+    manifest = _load_json(initial_path.parent / "manifest.json")
+    if manifest.get("role") != "initial":
+        raise ValueError(f"Not an initial artifact manifest: {initial_path.parent}")
+    initial_info = manifest.get("initial", {})
+    if not isinstance(initial_info, dict):
+        raise ValueError("Initial manifest has no initial artifact record")
+    if initial_info.get("path") != initial_path.name:
+        raise ValueError("Initial manifest points to a different schedule file")
+    if initial_info.get("sha256") != _sha256(initial_path):
+        raise ValueError(f"Initial schedule changed after publication: {initial_path}")
+    changes_info = manifest.get("changes", {})
+    if not isinstance(changes_info, dict) or not changes_info.get("path"):
+        raise ValueError("Initial manifest has no changes provenance")
+    recorded_changes = Path(str(changes_info["path"]))
+    if not recorded_changes.is_file():
+        raise FileNotFoundError(
+            f"Initial changes source does not exist: {recorded_changes}"
+        )
+    if changes_info.get("sha256") != _sha256(recorded_changes):
+        raise ValueError(
+            "changes.toml changed after initial was built; rebuild initial before solve"
+        )
+    return recorded_changes, manifest
+
+
+def _verified_parent_baseline(
+    term: str, parent: str, term_dir: Path,
+) -> tuple[Path, Path]:
+    """Return the immutable initial baseline and changes snapshot of a parent ver."""
+    parent_dir = term_dir / parent
+    manifest = _load_json(parent_dir / "manifest.json")
+    baseline_info = manifest.get("initial_baseline", {})
+    if not isinstance(baseline_info, dict) or baseline_info.get("role") != "initial":
+        raise ValueError(
+            f"{term} {parent} is a legacy/non-initial version chain; "
+            "start the next normal version from work/TERM/initial/initial.csv"
+        )
+    snapshot = parent_dir / str(baseline_info.get("snapshot", "baseline.csv"))
+    if not snapshot.is_file():
+        raise FileNotFoundError(f"Parent version has no initial baseline snapshot: {snapshot}")
+    files = manifest.get("files", {})
+    if not isinstance(files, dict) or files.get(snapshot.name) != _sha256(snapshot):
+        raise ValueError(f"Parent initial baseline snapshot failed hash verification: {snapshot}")
+    changes_snapshot = parent_dir / "applied_changes.toml"
+    if not changes_snapshot.is_file():
+        raise FileNotFoundError(
+            f"Parent version has no term changes snapshot: {changes_snapshot}"
+        )
+    return snapshot, changes_snapshot
+
+
 def _evaluate_attempt(number: int, result: SolveResult, config: SolverConfig) -> Attempt:
     evaluation = evaluate_schedule(
         result.schedule, config.preferences, config.persons, config.global_rules,
@@ -312,6 +375,7 @@ def _report(
     solver_input: Schedule,
     baseline_path: Path,
     baseline: Schedule,
+    changes_path: Path | None,
     config: SolverConfig,
     attempts: tuple[Attempt, ...],
     best: Attempt,
@@ -334,11 +398,19 @@ def _report(
     lines = [
         f"# {term} {version} solve report",
         "",
-        f"Solver input: `{input_path.as_posix()}` ({len(solver_input)} atomic classes, "
+        f"Validated solver input: `{input_path.as_posix()}` "
+        f"({len(solver_input)} atomic classes, "
         f"{len(solver_input.to_records())} rows)",
         "",
-        f"Change baseline: `{baseline_path.as_posix()}` ({len(baseline)} atomic classes, "
+        f"Initial baseline: `{baseline_path.as_posix()}` ({len(baseline)} atomic classes, "
         f"{len(baseline.to_records())} rows)",
+        "",
+        (
+            f"Term changes snapshot: `{changes_path.as_posix()}`; "
+            "cancelled-course validation passed"
+            if changes_path is not None
+            else "Term changes: none found; solve-time cancel guard was not applied"
+        ),
         "",
         f"Configuration version: `{config.version or 'unversioned'}`",
         "",
@@ -404,7 +476,7 @@ def _report(
             f"{right - left:+g} |"
         )
 
-    lines.extend(["", "## Simplified changes from baseline", ""])
+    lines.extend(["", "## Simplified changes from initial", ""])
     if changes:
         for change in changes:
             lines.append(
@@ -442,8 +514,11 @@ def run_term(
     attempts: int = 5,
     time_limit_seconds: float = 45.0,
     overrides_path: str | Path | None = None,
+    changes_path: str | Path | None = None,
+    initial_path: str | Path | None = None,
     parent: str | None = None,
     baseline_path: str | Path | None = None,
+    historical_backfill: bool = False,
     replace_destination: bool = False,
 ) -> RunBundle:
     if attempts < 1:
@@ -453,13 +528,10 @@ def run_term(
 
     output_root = Path(output_root)
     term_dir = output_root / term
-    input_path = Path(input_path) if input_path else term_dir / "starting.csv"
-    default_baseline = term_dir / "starting.csv"
-    baseline_path = (
-        Path(baseline_path) if baseline_path
-        else default_baseline if default_baseline.is_file()
-        else input_path
+    canonical_initial = Path(
+        initial_path or Path("work") / term / "initial" / "initial.csv"
     )
+    input_path = Path(input_path) if input_path else canonical_initial
     version = version or next_version(term_dir)
     parent = parent or infer_parent_version(input_path, term_dir)
     is_final = version == "final"
@@ -471,25 +543,91 @@ def run_term(
     if destination.exists() and not replace_destination:
         raise FileExistsError(f"Refusing to overwrite existing result: {destination}")
 
+    if historical_backfill:
+        baseline_path = Path(baseline_path) if baseline_path else input_path
+        if changes_path is None:
+            candidate = Path("inputs") / term / "changes.toml"
+            resolved_changes_path = candidate if candidate.is_file() else None
+        else:
+            resolved_changes_path = Path(changes_path)
+    elif is_final:
+        if parent is None:
+            raise ValueError("final requires an explicit source verN")
+        expected_input = version_schedule_path(term, parent, output_root=output_root)
+        if input_path.resolve() != expected_input.resolve():
+            raise ValueError(f"Parent {parent} does not match final input {input_path}")
+        inherited_baseline, inherited_changes = _verified_parent_baseline(
+            term, parent, term_dir
+        )
+        if baseline_path is not None and Path(baseline_path).resolve() != inherited_baseline.resolve():
+            raise ValueError("final baseline must be inherited from its source ver")
+        baseline_path = inherited_baseline
+        resolved_changes_path = Path(changes_path) if changes_path else inherited_changes
+        if _sha256(resolved_changes_path) != _sha256(inherited_changes):
+            raise ValueError("final must inherit the source ver's initial changes snapshot")
+    else:
+        if parent is not None:
+            raise ValueError(
+                "Every automatic ver must start from initial; a previous ver cannot "
+                "be used as solve input"
+            )
+        if baseline_path is not None:
+            raise ValueError(
+                "Automatic ver baseline is always initial; --baseline is only for "
+                "--historical-backfill"
+            )
+        if input_path.resolve() != canonical_initial.resolve():
+            raise ValueError(
+                "Every automatic ver must use the initial schedule as input; "
+                "use --historical-backfill only for explicit legacy reconstruction"
+            )
+        recorded_changes, _ = _verified_initial(canonical_initial)
+        baseline_path = canonical_initial
+        resolved_changes_path = Path(changes_path) if changes_path else recorded_changes
+        if _sha256(resolved_changes_path) != _sha256(recorded_changes):
+            raise ValueError("solve changes do not match the changes used to build initial")
+    assert baseline_path is not None
+    if not Path(baseline_path).is_file():
+        raise FileNotFoundError(f"Initial baseline does not exist: {baseline_path}")
+    baseline_path = Path(baseline_path)
+    if resolved_changes_path is not None and not resolved_changes_path.is_file():
+        raise FileNotFoundError(
+            f"Term changes file does not exist: {resolved_changes_path}"
+        )
+    if (
+        not historical_backfill and not is_final
+        and baseline_path.resolve() != input_path.resolve()
+    ):
+        raise ValueError("Automatic ver input and baseline must both be initial.csv")
+
     config = SolverConfig.load(config_dir, term=term)
     source_schedule = read_schedule(
         input_path, persons=config.persons,
     )
-    if baseline_path.resolve() == input_path.resolve():
-        baseline_schedule = source_schedule
-    else:
-        baseline_schedule = read_schedule(
-            baseline_path, persons=config.persons,
+    configured_cancels = ()
+    if resolved_changes_path is not None:
+        configured_cancels = load_changes(resolved_changes_path).cancel
+        _, cancelled_from_input, _ = apply_cancellations(
+            source_schedule, configured_cancels
         )
+        if cancelled_from_input:
+            raise ValueError(
+                "Solver input still contains cancelled courses "
+                f"({', '.join(cancelled_from_input)}); rebuild initial before solve"
+            )
+    baseline_schedule = (
+        source_schedule if baseline_path.resolve() == input_path.resolve()
+        else read_schedule(baseline_path, persons=config.persons)
+    )
     overrides = load_overrides(overrides_path) if overrides_path else OverrideFile()
     validate_override_context(overrides, term=term, source_version=parent)
-    starting = apply_overrides(source_schedule, overrides)
+    adjusted_input = apply_overrides(source_schedule, overrides)
 
     attempt_results: list[Attempt] = []
     for number in range(1, attempts + 1):
         try:
             result = solve_detailed(
-                starting, config, time_limit_seconds=time_limit_seconds,
+                adjusted_input, config, time_limit_seconds=time_limit_seconds,
                 locks=overrides.locks,
             )
             attempt_results.append(_evaluate_attempt(number, result, config))
@@ -520,11 +658,15 @@ def run_term(
         manifest_path = staging / "manifest.json"
         saved_overrides_path = staging / "overrides.toml"
         applied_overrides_path = staging / "applied_overrides.toml"
+        applied_changes_path = staging / "applied_changes.toml"
         best.result.schedule.to_dataframe().to_csv(schedule_path, index=False)
         best.result.schedule.to_instructor_excel(instructor_path)
         best.result.schedule.to_room_excel(room_path)
         pd.DataFrame(_attempt_rows(attempts_tuple)).to_csv(attempts_path, index=False)
-        baseline_schedule.to_dataframe().to_csv(baseline_snapshot_path, index=False)
+        # The baseline is already a verified Schedule artifact. Preserve its
+        # exact bytes so every descendant carries the identical initial CSV,
+        # not merely an equivalent reserialization.
+        shutil.copyfile(baseline_path, baseline_snapshot_path)
         changes = simplified_changes(baseline_schedule, best.result.schedule)
         pd.DataFrame(
             ({"Course ID": item.course_id, "Field": item.field,
@@ -536,6 +678,13 @@ def run_term(
         else:
             applied_overrides_path.write_text(
                 "# No manual edits or locks were applied to this version.\n",
+                encoding="utf-8",
+            )
+        if resolved_changes_path is not None:
+            applied_changes_path.write_bytes(resolved_changes_path.read_bytes())
+        else:
+            applied_changes_path.write_text(
+                "# No term changes file was found for this solve.\n",
                 encoding="utf-8",
             )
         if is_final:
@@ -550,7 +699,9 @@ def run_term(
         report_path.write_text(
             _report(
                 term, version, input_path, source_schedule,
-                baseline_path, baseline_schedule, config, attempts_tuple, best,
+                baseline_path, baseline_schedule,
+                resolved_changes_path,
+                config, attempts_tuple, best,
                 time_limit_seconds,
             ),
             encoding="utf-8",
@@ -564,20 +715,22 @@ def run_term(
             changes_path.name,
             baseline_snapshot_path.name,
             applied_overrides_path.name,
+            applied_changes_path.name,
         )
         if is_final:
             artifact_names += (saved_overrides_path.name,)
         manifest = {
-            "schema_version": 3,
+            "schema_version": 4,
             "term": term,
             "version": version,
             "parent": parent,
             "created_at": datetime.now(UTC).isoformat(),
             "input": {"path": str(input_path), "sha256": _sha256(input_path)},
-            "change_baseline": {
+            "initial_baseline": {
                 "path": str(baseline_path),
                 "sha256": _sha256(baseline_path),
                 "snapshot": baseline_snapshot_path.name,
+                "role": "initial",
             },
             "configuration": {
                 "version": config.version,
@@ -585,6 +738,24 @@ def run_term(
                     {"path": name, "sha256": _sha256(Path(name))}
                     for name in config.source_paths
                 ],
+            },
+            "term_changes": {
+                "path": str(resolved_changes_path) if resolved_changes_path else None,
+                "sha256": (
+                    _sha256(resolved_changes_path)
+                    if resolved_changes_path is not None else None
+                ),
+                "scope": "cancel_courses",
+                "configured_cancels": [
+                    {
+                        "subject": spec.subject,
+                        "number": spec.number,
+                        "section": spec.section,
+                    }
+                    for spec in configured_cancels
+                ],
+                "cancelled_course_validation": "passed",
+                "snapshot": applied_changes_path.name,
             },
             "applied_overrides_sha256": _sha256(applied_overrides_path),
             "override_workspace": {
@@ -645,6 +816,7 @@ def run_term(
         manifest_path=destination / "manifest.json",
         overrides_path=destination / "overrides.toml",
         applied_overrides_path=destination / "applied_overrides.toml",
+        applied_changes_path=destination / "applied_changes.toml",
         best_attempt=best,
         attempts=attempts_tuple,
     )

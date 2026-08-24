@@ -7,7 +7,7 @@ from class_schedule.schedule_model import Schedule
 from class_schedule.term_builder import (
     CancelSpec,
     TermChanges,
-    build_draft_schedule,
+    build_initial_schedule,
     load_changes,
 )
 
@@ -40,7 +40,7 @@ class CancelTests(unittest.TestCase):
         template = Schedule([keep, drop])
         changes = TermChanges(cancel=(CancelSpec("MATH", "0803", "003"),))
 
-        draft, report = build_draft_schedule(template, changes)
+        draft, report = build_initial_schedule(template, changes)
 
         self.assertEqual(draft.course_ids, ["MATH 0803-001"])
         self.assertEqual(report.cancelled, ("MATH 0803-003",))
@@ -58,7 +58,7 @@ class CancelTests(unittest.TestCase):
         template = Schedule([a, b])
         changes = TermChanges(cancel=(CancelSpec("MATH", "2243"),))
 
-        draft, report = build_draft_schedule(template, changes)
+        draft, report = build_initial_schedule(template, changes)
 
         self.assertEqual(draft.course_ids, [])
         self.assertEqual(set(report.cancelled), {"MATH 2243-001", "MATH 2243-002"})
@@ -67,7 +67,7 @@ class CancelTests(unittest.TestCase):
         template = Schedule.from_records([make_record()])
         changes = TermChanges(cancel=(CancelSpec("MATH", "9999"),))
 
-        draft, report = build_draft_schedule(template, changes)
+        draft, report = build_initial_schedule(template, changes)
 
         self.assertEqual(len(draft), 1)
         self.assertEqual(report.unmatched_cancels, (CancelSpec("MATH", "9999"),))
@@ -78,7 +78,7 @@ class DepartureReassignmentTests(unittest.TestCase):
         template = Schedule.from_records([make_record(Instructor="Bain, Leslie M.")])
         changes = TermChanges(departures=("Bain, Leslie M.",))
 
-        draft, report = build_draft_schedule(template, changes)
+        draft, report = build_initial_schedule(template, changes)
 
         self.assertEqual(draft.classes[0].sections[0].instructor, "Staff")
         self.assertEqual(report.reassigned, ("MATH 1113-001",))
@@ -93,7 +93,7 @@ class DepartureReassignmentTests(unittest.TestCase):
         self.assertIsInstance(template.classes[0], FourCreditClass)
         changes = TermChanges(departures=("Bain, Leslie M.",))
 
-        draft, report = build_draft_schedule(template, changes)
+        draft, report = build_initial_schedule(template, changes)
 
         item = draft.classes[0]
         self.assertTrue(all(s.instructor == "Staff" for s in item.sections))
@@ -102,7 +102,7 @@ class DepartureReassignmentTests(unittest.TestCase):
         template = Schedule.from_records([make_record(Instructor="Ballard, Kasey L.")])
         changes = TermChanges(departures=("Nobody, Real N.",))
 
-        draft, report = build_draft_schedule(template, changes)
+        draft, report = build_initial_schedule(template, changes)
 
         self.assertEqual(report.departures_not_found, ("Nobody, Real N.",))
         self.assertEqual(report.reassigned, ())
@@ -113,7 +113,7 @@ class NewCourseTests(unittest.TestCase):
         template = Schedule([])
         changes = TermChanges(new_sections=(make_record(Number="1013", Instructor=""),))
 
-        draft, report = build_draft_schedule(template, changes)
+        draft, report = build_initial_schedule(template, changes)
 
         self.assertEqual(draft.course_ids, ["MATH 1013-001"])
         self.assertEqual(draft.classes[0].sections[0].instructor, "Staff")
@@ -126,7 +126,7 @@ class NewCourseTests(unittest.TestCase):
             make_record(Subject="STAT", Number="2163", **{"Cross-List": "XL9"}, Instructor=""),
         ))
 
-        draft, report = build_draft_schedule(template, changes)
+        draft, report = build_initial_schedule(template, changes)
 
         self.assertEqual(len(draft), 1)
         self.assertIsInstance(draft.classes[0], CrossListingClass)

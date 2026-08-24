@@ -81,6 +81,9 @@ class DataCleaningTests(unittest.TestCase):
 
             result = initialize_input(source, root / "normalized")
 
+            self.assertEqual(result.draft_path, root / "draft" / "draft.csv")
+            self.assertTrue(result.draft_path.is_file())
+
             instructor_path = root / "Course Schedule Report_instructor.xlsx"
             room_path = root / "Course Schedule Report_room.xlsx"
             self.assertEqual(result.instructor_path, instructor_path)
@@ -111,6 +114,7 @@ class DataCleaningTests(unittest.TestCase):
 
             self.assertIsNone(result.instructor_path)
             self.assertIsNone(result.room_path)
+            self.assertIsNone(result.draft_path)
             self.assertFalse((root / "raw_instructor.xlsx").exists())
             self.assertFalse((root / "raw_room.xlsx").exists())
 

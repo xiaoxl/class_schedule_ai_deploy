@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import json
+import hashlib
 from pathlib import Path
 
 import pandas as pd
@@ -55,6 +56,10 @@ class VersionTests(unittest.TestCase):
 
 class RunTermTests(unittest.TestCase):
     @staticmethod
+    def _sha256(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    @staticmethod
     def _write_source(
         path: Path,
         *,
@@ -73,24 +78,46 @@ class RunTermTests(unittest.TestCase):
             "Building": "Corley",
         }]).to_csv(path, index=False)
 
+    def _write_initial_artifact(self, path: Path) -> Path:
+        self._write_source(path)
+        changes = path.parent / "changes.toml"
+        changes.write_text("# no term changes\n", encoding="utf-8")
+        (path.parent / "manifest.json").write_text(
+            json.dumps({
+                "schema_version": 1,
+                "role": "initial",
+                "changes": {"path": str(changes), "sha256": self._sha256(changes)},
+                "initial": {"path": path.name, "sha256": self._sha256(path)},
+            }),
+            encoding="utf-8",
+        )
+        return changes
+
+    def _write_version_provenance(self, version_dir: Path) -> None:
+        baseline = version_dir / "baseline.csv"
+        changes = version_dir / "applied_changes.toml"
+        changes.write_text("# initial changes snapshot\n", encoding="utf-8")
+        (version_dir / "manifest.json").write_text(
+            json.dumps({
+                "initial_baseline": {
+                    "role": "initial", "snapshot": baseline.name,
+                    "path": str(baseline), "sha256": self._sha256(baseline),
+                },
+                "files": {baseline.name: self._sha256(baseline)},
+            }),
+            encoding="utf-8",
+        )
+
     def test_writes_atomic_csv_report_and_attempt_summary(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            input_path = root / "starting.csv"
-            pd.DataFrame([{
-                "Subject": "MATH",
-                "Number": "1113",
-                "Section": "001",
-                "Instructor": "Bain",
-                "Time Slot": "MWF 9:00am",
-                "Duration": 50,
-                "Room": "101",
-                "Building": "Corley",
-            }]).to_csv(input_path, index=False)
+            input_path = root / "work" / "TEST" / "initial" / "initial.csv"
+            self._write_initial_artifact(input_path)
 
             bundle = run_term(
                 "TEST",
                 input_path=input_path,
+                initial_path=input_path,
                 output_root=root / "out",
                 config_dir="config",
                 attempts=1,
@@ -105,17 +132,20 @@ class RunTermTests(unittest.TestCase):
             self.assertTrue(bundle.attempts_path.exists())
             self.assertTrue(bundle.changes_path.exists())
             self.assertTrue(bundle.baseline_path.exists())
+            self.assertEqual(bundle.baseline_path.read_bytes(), input_path.read_bytes())
             self.assertTrue(bundle.manifest_path.exists())
             self.assertTrue(bundle.overrides_path.exists())
             self.assertTrue(bundle.applied_overrides_path.exists())
+            self.assertTrue(bundle.applied_changes_path.exists())
             manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(manifest["schema_version"], 3)
-            self.assertEqual(manifest["change_baseline"]["path"], str(input_path))
-            self.assertEqual(manifest["change_baseline"]["snapshot"], "baseline.csv")
+            self.assertEqual(manifest["schema_version"], 4)
+            self.assertEqual(manifest["initial_baseline"]["path"], str(input_path))
+            self.assertEqual(manifest["initial_baseline"]["snapshot"], "baseline.csv")
             self.assertIn("baseline.csv", manifest["files"])
             self.assertIn("TEST_ver1_instructor.xlsx", manifest["files"])
             self.assertIn("TEST_ver1_room.xlsx", manifest["files"])
             self.assertIn("applied_overrides.toml", manifest["files"])
+            self.assertIn("applied_changes.toml", manifest["files"])
             self.assertNotIn("overrides.toml", manifest["files"])
             self.assertTrue(manifest["override_workspace"]["mutable"])
             self.assertIn("source_version = \"ver1\"", bundle.overrides_path.read_text())
@@ -137,6 +167,59 @@ class RunTermTests(unittest.TestCase):
             self.assertIn("## Attempt comparison", report)
             self.assertIn("## Remaining soft findings", report)
             self.assertNotEqual(written.loc[0, "Instructor"], "Bain")
+
+            second = run_term(
+                "TEST", input_path=input_path, initial_path=input_path,
+                output_root=root / "out", config_dir="config",
+                attempts=1, time_limit_seconds=5,
+            )
+            second_manifest = json.loads(
+                second.manifest_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(second.version, "ver2")
+            self.assertIsNone(second_manifest["parent"])
+            self.assertEqual(second_manifest["input"]["path"], str(input_path))
+            self.assertEqual(second_manifest["initial_baseline"]["role"], "initial")
+            self.assertEqual(
+                second.baseline_path.read_bytes(), input_path.read_bytes()
+            )
+
+            with self.assertRaisesRegex(ValueError, "must start from initial"):
+                run_term(
+                    "TEST", input_path=bundle.schedule_path, parent="ver1",
+                    output_root=root / "out", config_dir="config",
+                    attempts=1, time_limit_seconds=5,
+                )
+
+    def test_solve_rejects_cancelled_course_instead_of_mutating_initial(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            input_path = root / "previous_version.csv"
+            pd.DataFrame([
+                {
+                    "Subject": "MATH", "Number": "1113", "Section": "001",
+                    "Instructor": "Bain, Leslie M.", "Time Slot": "MWF 9:00am",
+                    "Duration": 50, "Room": "101", "Building": "Corley",
+                },
+                {
+                    "Subject": "MATH", "Number": "4993", "Section": "001",
+                    "Instructor": "Limperis, Thomas G.", "Time Slot": "",
+                    "Duration": "", "Room": "", "Building": "",
+                },
+            ]).to_csv(input_path, index=False)
+            changes_path = root / "changes.toml"
+            changes_path.write_text(
+                '[[cancel_courses]]\nsubject = "MATH"\nnumber = "4993"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "rebuild initial"):
+                run_term(
+                    "TEST", input_path=input_path, baseline_path=input_path,
+                    changes_path=changes_path, output_root=root / "out",
+                    config_dir="config", attempts=1, time_limit_seconds=5,
+                    historical_backfill=True,
+                )
 
     def test_refuses_to_overwrite_an_existing_version(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -173,8 +256,8 @@ class RunTermTests(unittest.TestCase):
             output_root = root / "out"
             source = output_root / "TEST" / "ver3" / "TEST_ver3.csv"
             self._write_source(source, time_slot="MWF 10:00am")
-            self._write_source(output_root / "TEST" / "starting.csv")
             self._write_source(source.parent / "baseline.csv")
+            self._write_version_provenance(source.parent)
             overrides = source.parent / "overrides.toml"
             overrides.write_text(
                 'term = "TEST"\nsource_version = "ver3"\n\n'

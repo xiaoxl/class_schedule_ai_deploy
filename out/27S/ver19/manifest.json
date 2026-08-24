@@ -1,0 +1,67 @@
+{
+  "schema_version": 3,
+  "term": "27S",
+  "version": "ver19",
+  "parent": "ver18",
+  "created_at": "2026-08-24T02:59:10.485278+00:00",
+  "input": {
+    "path": "out\\27S\\ver18\\27S_ver18.csv",
+    "sha256": "b226daa4ae582a1a5b2c0bbdd4843fb89dc35e5ba042b5455d2f4c9ac2a4ebf4"
+  },
+  "change_baseline": {
+    "path": "work\\27S\\runs\\ver17\\draft\\starting.csv",
+    "sha256": "d753116b590f036a83be0285d0db107d546d2cca65c57024deb26176218cf232",
+    "snapshot": "baseline.csv"
+  },
+  "configuration": {
+    "version": "5854751b2bb5",
+    "files": [
+      {
+        "path": "config\\persons.toml",
+        "sha256": "59a528d34dce009fbc052e182d0d07d73c1683773849940f94b601f46ea98286"
+      },
+      {
+        "path": "config\\preferences.toml",
+        "sha256": "c35b19ffe564ac1c78426a2d20fb5d0c95a6c3c45d380ebe89e5b80cdd0d7812"
+      },
+      {
+        "path": "config\\timeslot.toml",
+        "sha256": "e725563121ba6731eff314a2976125006baab8642eedaad6a24338ae9bac4d96"
+      },
+      {
+        "path": "config\\locations.toml",
+        "sha256": "a7793c98d7dce6425530886a73d9ac47e5f5909570b413c76378c22c6bd26f34"
+      }
+    ]
+  },
+  "applied_overrides_sha256": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c",
+  "override_workspace": {
+    "path": "overrides.toml",
+    "mutable": true,
+    "source_version": "ver19"
+  },
+  "selected_attempt": 1,
+  "solver": {
+    "status": "feasible",
+    "objective": -1155.0,
+    "best_bound": -1625.0,
+    "random_seed": 302012982,
+    "time_limit_seconds": 20.0,
+    "attempts": 3
+  },
+  "validation": {
+    "hard_violations": 0,
+    "soft_penalty": 50.0,
+    "worst_overload": 2.0
+  },
+  "files": {
+    "27S_ver19.csv": "e44ac5a3ededf7b7167a7647adc72706f99d4b54feece58047e865e6b1322ae2",
+    "27S_ver19_instructor.xlsx": "769fbab189e23f770b9f6490bc496ae892954565aa6cf7b985ee255b263398ab",
+    "27S_ver19_room.xlsx": "6d81fbd37e9765c9bf07553c05e1f9444d6f3aa9d12dd325f2cb82e71b6f243f",
+    "report.md": "5d54583be30f984880ec37d3d7cccf064d46a08cc1923d84c349fe5ad7888387",
+    "attempts.csv": "afdb78ee6385a1c2e46e43df4a1066d6a015a747565506ebefd95bba20ef768c",
+    "changes.csv": "19b20085585781e4f898d23eb47c7c154621b8767dc29b0632b6d94ec54bfa58",
+    "baseline.csv": "8d30fa25f2e081b444bf6185f89d20741cd7fc0328e49b79fec4bbacdb5eabb5",
+    "applied_overrides.toml": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c"
+  }
+}

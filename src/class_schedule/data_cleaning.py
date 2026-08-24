@@ -42,9 +42,10 @@ class CleanResult:
 
 @dataclass(frozen=True)
 class InitializeResult:
-    """Cleaning result plus pre-change views derived from the source input."""
+    """Cleaning result, canonical draft, and pre-change source views."""
 
     cleaning: CleanResult
+    draft_path: Path | None
     instructor_path: Path | None
     room_path: Path | None
 
@@ -194,18 +195,18 @@ def clean_file(
     return result
 
 
-def _initial_view_paths(input_path: Path) -> tuple[Path, Path]:
+def _pre_change_view_paths(input_path: Path) -> tuple[Path, Path]:
     return (
         input_path.with_name(f"{input_path.stem}_instructor.xlsx"),
         input_path.with_name(f"{input_path.stem}_room.xlsx"),
     )
 
 
-def _publish_initial_views(
+def _publish_pre_change_views(
     schedule: Schedule, input_path: Path,
 ) -> tuple[Path, Path]:
     """Atomically replace both pre-change workbooks beside ``input_path``."""
-    instructor_path, room_path = _initial_view_paths(input_path)
+    instructor_path, room_path = _pre_change_view_paths(input_path)
     token = uuid.uuid4().hex
     staged = {
         instructor_path: instructor_path.with_name(
@@ -245,22 +246,50 @@ def _publish_initial_views(
     return instructor_path, room_path
 
 
+def publish_draft(schedule: Schedule, output_path: str | Path) -> Path:
+    """Publish the canonical, grouped, pre-change schedule as ``draft.csv``."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        raise FileExistsError(f"Refusing to overwrite draft: {output_path}")
+    staging = output_path.with_name(
+        f".{output_path.stem}-staging-{uuid.uuid4().hex}{output_path.suffix}"
+    )
+    try:
+        schedule.to_dataframe().to_csv(staging, index=False)
+        staging.replace(output_path)
+    finally:
+        staging.unlink(missing_ok=True)
+    return output_path
+
+
 def initialize_input(
     input_path: str | Path,
     output_dir: str | Path,
     *,
     persons: dict[str, PersonRecord] | None = None,
+    draft_path: str | Path | None = None,
 ) -> InitializeResult:
-    """Clean a source export and publish its pre-change weekly views.
+    """Clean a source export and publish its canonical draft and source views.
 
     The workbooks are built from the normalized, atomically grouped source
     schedule. No term changes, new-hire placement, overrides, preferences, or
     solver transformations are accepted by this API.
     """
     input_path = Path(input_path)
+    draft_destination = Path(
+        draft_path or Path(output_dir).parent / "draft" / "draft.csv"
+    )
+    if draft_destination.exists():
+        raise FileExistsError(f"Refusing to overwrite draft: {draft_destination}")
     cleaning = clean_file(input_path, output_dir, persons=persons)
     if len(cleaning.rejected) or cleaning.warnings:
-        return InitializeResult(cleaning, None, None)
+        return InitializeResult(cleaning, None, None, None)
     schedule = Schedule.from_dataframe(cleaning.normalized, persons=persons)
-    instructor_path, room_path = _publish_initial_views(schedule, input_path)
-    return InitializeResult(cleaning, instructor_path, room_path)
+    published_draft = publish_draft(
+        schedule, draft_destination
+    )
+    instructor_path, room_path = _publish_pre_change_views(schedule, input_path)
+    return InitializeResult(
+        cleaning, published_draft, instructor_path, room_path
+    )

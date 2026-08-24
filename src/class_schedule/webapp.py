@@ -49,7 +49,7 @@ LOG_PATH = Path("output/logs/webapp.log")
 # (under_load, always weighted 90, a strict instructor's overload (flat
 # 100), a permissive one past OVERLOAD_FAR_THRESHOLD (10+50=60), and a
 # strongly weighted "dislike" PreferenceRule, land here); below it is
-# yellow (back_to_back/disliked_*, weighted 5-10, a permissive
+# yellow (back_to_back and mildly weighted preferences, a permissive
 # instructor's ordinary overload (10), and a mildly weighted
 # PreferenceRule). Every penalty in this system shares one 0-100 scale --
 # see the comment above schedule_model.OVERLOAD_TOLERANCE.

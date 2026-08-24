@@ -1,16 +1,15 @@
-"""Turn last term's schedule plus a small per-term change list into next
-term's starting draft.
+"""Apply a term change list to a cleaned draft and produce the initial schedule.
 
-Two inputs feed ``build_draft_schedule``:
+Two inputs feed ``build_initial_schedule``:
 
-  - a template ``Schedule`` -- last term's parsed schedule, normally loaded
+  - a draft ``Schedule`` -- the cleaned, grouped, pre-change schedule loaded
     through ``schedule_io.read_schedule``;
   - a ``TermChanges`` -- this term's departures, new hires, additions, and
     cancellations, loaded from a small TOML file via
     ``load_changes``. See ``inputs/TEMPLATE/changes.toml`` for the file format
     and a full walkthrough.
 
-The result is a draft ``Schedule`` ready for the CLI or Python solve stage:
+The result is an initial ``Schedule`` ready for the solve stage:
 cancelled courses are dropped, every
 section a departed instructor was teaching is reassigned to a
 placeholder instructor (so the solver treats it as open rather than
@@ -39,7 +38,7 @@ DEFAULT_PLACEHOLDER_INSTRUCTOR = "Staff"
 
 @dataclass(frozen=True)
 class CancelSpec:
-    """One course to drop from the template. ``section`` omitted cancels
+    """One course to drop from the draft. ``section`` omitted cancels
     every section of that course number."""
 
     subject: str
@@ -52,11 +51,11 @@ class TermChanges:
     """This term's edits, as loaded from a change-list TOML file.
 
     ``new_hires`` is separate from ``departures``/``cancel``/``new_sections``
-    -- it doesn't affect ``build_draft_schedule`` at all (no schedule row
+    -- it doesn't affect ``build_initial_schedule`` directly (no schedule row
     is added, removed, or reassigned because of it). It's read by
-    ``starting_template.place_new_hires`` instead, to know which
+    ``initial_builder.place_new_hires`` instead, to know which
     persons.toml entries are new-for-this-term people to actually place
-    into the draft, as opposed to someone added to persons.toml for
+    into the initial schedule, as opposed to someone added to persons.toml for
     later planning who isn't confirmed hired yet.
     """
 
@@ -67,8 +66,8 @@ class TermChanges:
 
 
 @dataclass(frozen=True)
-class DraftReport:
-    """What ``build_draft_schedule`` actually did.
+class InitialReport:
+    """What ``build_initial_schedule`` actually did.
 
     Exists so a typo in the change list -- a cancelled course number that
     doesn't exist in the template, a departure name spelled differently
@@ -129,13 +128,45 @@ def _with_placeholder(
     return result
 
 
-def build_draft_schedule(
-    template: Schedule,
+def apply_cancellations(
+    schedule: Schedule,
+    specs: Iterable[CancelSpec],
+) -> tuple[Schedule, tuple[str, ...], tuple[CancelSpec, ...]]:
+    """Drop configured courses from an already grouped schedule.
+
+    This operation is intentionally idempotent: a cancel spec that was
+    applied by an earlier initial build is reported as unmatched, not treated
+    as an error. The solve boundary uses the same matcher only to validate that
+    initial already contains no cancelled course.
+    """
+    cancel_specs = tuple(specs)
+    matched_specs: set[int] = set()
+    kept: list[Class] = []
+    cancelled: list[str] = []
+    for item in schedule.classes:
+        hits = [
+            index for index, spec in enumerate(cancel_specs)
+            if _cancels(item, spec)
+        ]
+        if hits:
+            matched_specs.update(hits)
+            cancelled.append(item.course_ids[0])
+        else:
+            kept.append(item)
+    unmatched = tuple(
+        spec for index, spec in enumerate(cancel_specs)
+        if index not in matched_specs
+    )
+    return Schedule(kept), tuple(cancelled), unmatched
+
+
+def build_initial_schedule(
+    draft: Schedule,
     changes: TermChanges,
     *,
     placeholder_instructor: str = DEFAULT_PLACEHOLDER_INSTRUCTOR,
-) -> tuple[Schedule, DraftReport]:
-    """Apply ``changes`` on top of ``template``; return the draft plus a
+) -> tuple[Schedule, InitialReport]:
+    """Apply ``changes`` on top of ``draft``; return the initial Schedule and a
     report of what actually happened.
 
     - cancelled courses are dropped outright;
@@ -150,44 +181,32 @@ def build_draft_schedule(
       (four-credit, hybrid, coreq, cross-listed) is recognized
       automatically from its own rows.
     """
-    matched_specs: set[int] = set()
-    kept: list[Class] = []
-    cancelled: list[str] = []
-    for item in template.classes:
-        hits = [i for i, spec in enumerate(changes.cancel) if _cancels(item, spec)]
-        if hits:
-            matched_specs.update(hits)
-            cancelled.append(item.course_ids[0])
-        else:
-            kept.append(item)
-    unmatched_cancels = tuple(
-        spec for i, spec in enumerate(changes.cancel) if i not in matched_specs
+    initial, cancelled, unmatched_cancels = apply_cancellations(
+        draft, changes.cancel
     )
-
-    draft = Schedule(kept)
 
     departed = set(changes.departures)
     seen_instructors = {
-        section.instructor for item in template.classes for section in item.sections
+        section.instructor for item in draft.classes for section in item.sections
     }
     departures_not_found = tuple(
         name for name in changes.departures if name not in seen_instructors
     )
 
     reassigned: list[str] = []
-    for item in list(draft.classes):
+    for item in list(initial.classes):
         matches = [i for i, s in enumerate(item.sections) if s.instructor in departed]
         if not matches:
             continue
         course_id = item.course_ids[0]
         for index in matches:
             try:
-                draft.change_instructor(course_id, placeholder_instructor, record=index)
+                initial.change_instructor(course_id, placeholder_instructor, record=index)
             except ValueError:
                 # Paired kind requires both rows to share one instructor
                 # (FourCreditClass, CoreqClass) -- replacing only one row
                 # would leave the pair invalid, so replace both.
-                draft.change_instructor(course_id, placeholder_instructor)
+                initial.change_instructor(course_id, placeholder_instructor)
                 break
         reassigned.append(course_id)
 
@@ -195,14 +214,14 @@ def build_draft_schedule(
     if changes.new_sections:
         rows = _with_placeholder(changes.new_sections, placeholder_instructor)
         for item in Schedule.from_records(rows).classes:
-            draft.add(item)
+            initial.add(item)
             added.append(item.course_ids[0])
 
-    report = DraftReport(
-        cancelled=tuple(cancelled),
+    report = InitialReport(
+        cancelled=cancelled,
         unmatched_cancels=unmatched_cancels,
         reassigned=tuple(reassigned),
         departures_not_found=departures_not_found,
         added=tuple(added),
     )
-    return draft, report
+    return initial, report
