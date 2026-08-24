@@ -9,9 +9,6 @@ from class_schedule.schedule_model import (
     PreferenceRule,
     Schedule,
     TimeWindow,
-    WeightedCoursePreference,
-    WeightedLocationPreference,
-    WeightedTimePreference,
     check_soft_preferences,
     load_global_rules,
     load_preferences,
@@ -100,17 +97,17 @@ class PreferenceRuleMatchesTests(unittest.TestCase):
 
 
 class LoadPreferencesRulesTests(unittest.TestCase):
-    def test_parses_instructor_scoped_rules(self):
+    def test_parses_flat_named_prefer_rule(self):
         path = write_toml("""
 [[instructors]]
 name = "Xiao, Xinli"
 allow_overload = false
 
-  [[instructors.rules]]
-  course = "MATH 2934"
-  room = "Corley 269"
-  direction = "prefer"
-  weight = 100
+[[rules]]
+name = "Xiao, Xinli"
+preferred_course = "MATH 2934"
+preferred_room = "Corley 269"
+weight = 100
 """)
         self.addCleanup(path.unlink)
         preferences = load_preferences(path)
@@ -126,10 +123,10 @@ allow_overload = false
 [[instructors]]
 name = "Limperis, Thomas G."
 
-  [[instructors.rules]]
-  section_prefix = "TC"
-  direction = "dislike"
-  weight = 10
+[[rules]]
+name = "Limperis, Thomas G."
+disliked_section_prefix = "TC"
+weight = 10
 """)
         self.addCleanup(path.unlink)
         rule = load_preferences(path)["Limperis, Thomas G."].rules[0]
@@ -146,44 +143,76 @@ allow_overload = false
         preferences = load_preferences(path)
         self.assertEqual(preferences["Xiao, Xinli"].rules, ())
 
-    def test_single_selector_instructor_rule_must_use_weighted_list(self):
+    def test_single_selector_is_a_valid_flat_rule(self):
         path = write_toml("""
 [[instructors]]
 name = "Xiao, Xinli"
 
-  [[instructors.rules]]
-  course = "MATH 2934"
-  direction = "dislike"
-  weight = 50
+[[rules]]
+name = "Xiao, Xinli"
+disliked_course = "MATH 2934"
+weight = 50
 """)
         self.addCleanup(path.unlink)
-        with self.assertRaises(ValueError):
-            load_preferences(path)
+        rule = load_preferences(path)["Xiao, Xinli"].rules[0]
+        self.assertEqual(rule.course, "MATH 2934")
+        self.assertEqual(rule.signed_weight, 50)
 
     def test_section_without_course_raises(self):
         path = write_toml("""
 [[instructors]]
 name = "Xiao, Xinli"
 
-  [[instructors.rules]]
-  section = "F01"
-  room = "Corley 269"
-  direction = "prefer"
-  weight = 100
+[[rules]]
+name = "Xiao, Xinli"
+preferred_section = "F01"
+preferred_room = "Corley 269"
+weight = 100
 """)
         self.addCleanup(path.unlink)
         with self.assertRaises(ValueError):
             load_preferences(path)
 
-    def test_invalid_direction_raises(self):
+    def test_setting_both_directions_raises(self):
         path = write_toml("""
 [[instructors]]
 name = "Xiao, Xinli"
 
-  [[instructors.rules]]
-  room = "Corley 269"
-  direction = "sideways"
-  weight = 100
+[[rules]]
+name = "Xiao, Xinli"
+preferred_room = "Corley 269"
+disliked_room = "Rothwell"
+weight = 100
+""")
+        self.addCleanup(path.unlink)
+        with self.assertRaises(ValueError):
+            load_preferences(path)
+
+    def test_rule_name_not_a_comment_controls_scope(self):
+        path = write_toml("""
+# This deliberately says Alice, but comments have no semantic effect.
+[[instructors]]
+name = "Alice"
+
+[[instructors]]
+name = "Bob"
+
+[[rules]]
+name = "Bob"
+preferred_room = "Corley 101"
+weight = 25
+""")
+        self.addCleanup(path.unlink)
+        preferences = load_preferences(path)
+        self.assertEqual(preferences["Alice"].rules, ())
+        self.assertEqual(preferences["Bob"].rules[0].room, "Corley 101")
+
+    def test_named_rule_requires_a_matching_profile(self):
+        path = write_toml("""
+[[rules]]
+name = "Nobody"
+preferred_room = "Corley 101"
+weight = 25
 """)
         self.addCleanup(path.unlink)
         with self.assertRaises(ValueError):
@@ -203,27 +232,82 @@ max_back_to_back = 2
         self.assertEqual(preference.preferred_online_weight, 25)
         self.assertEqual(preference.max_back_to_back, 2)
 
-    def test_parses_weighted_named_preferences(self):
+    def test_parses_weighted_flat_preferences(self):
         path = write_toml("""
 [[instructors]]
 name = "Xiao, Xinli"
-preferred_times = [
-  { days = ["M", "W"], between = ["09:00", "11:00"], weight = 7 },
-]
-disliked_locations = [{ location = "Rothwell", weight = 11 }]
-preferred_courses = [{ course = "MATH 2934", weight = 13 }]
+
+[[rules]]
+name = "Xiao, Xinli"
+preferred_time = { days = ["M", "W"], between = ["09:00", "11:00"] }
+weight = 7
+
+[[rules]]
+name = "Xiao, Xinli"
+disliked_room = "Rothwell"
+weight = 11
+
+[[rules]]
+name = "Xiao, Xinli"
+preferred_course = "MATH 2934"
+weight = 13
 """)
         self.addCleanup(path.unlink)
         preference = load_preferences(path)["Xiao, Xinli"]
-        self.assertEqual(preference.preferred_times[0].weight, 7)
-        self.assertEqual(preference.disliked_locations[0].weight, 11)
-        self.assertEqual(preference.preferred_courses[0].weight, 13)
+        self.assertEqual([rule.weight for rule in preference.rules], [7, 11, 13])
+        self.assertEqual(
+            [rule.direction for rule in preference.rules],
+            ["prefer", "dislike", "prefer"],
+        )
 
-    def test_nonempty_named_preference_requires_weight(self):
+    def test_parses_all_weekday_time_shorthand(self):
         path = write_toml("""
 [[instructors]]
 name = "Xiao, Xinli"
-disliked_courses = [{ course = "MATH 2934" }]
+
+[[rules]]
+name = "Xiao, Xinli"
+preferred_time = "8-12"
+weight = 50
+""")
+        self.addCleanup(path.unlink)
+        rule = load_preferences(path)["Xiao, Xinli"].rules[0]
+        self.assertEqual(rule.time.days, frozenset("MTWRF"))
+        self.assertEqual(rule.time.start, datetime.time(8, 0))
+        self.assertEqual(rule.time.end, datetime.time(12, 0))
+
+    def test_rejects_invalid_time_shorthand(self):
+        path = write_toml("""
+[[instructors]]
+name = "Xiao, Xinli"
+
+[[rules]]
+name = "Xiao, Xinli"
+preferred_time = "morning"
+weight = 50
+""")
+        self.addCleanup(path.unlink)
+        with self.assertRaises(ValueError):
+            load_preferences(path)
+
+    def test_flat_rule_requires_weight(self):
+        path = write_toml("""
+[[instructors]]
+name = "Xiao, Xinli"
+
+[[rules]]
+name = "Xiao, Xinli"
+disliked_course = "MATH 2934"
+""")
+        self.addCleanup(path.unlink)
+        with self.assertRaises(ValueError):
+            load_preferences(path)
+
+    def test_legacy_named_lists_are_rejected(self):
+        path = write_toml("""
+[[instructors]]
+name = "Xiao, Xinli"
+disliked_courses = [{ course = "MATH 2934", weight = 50 }]
 """)
         self.addCleanup(path.unlink)
         with self.assertRaises(ValueError):
@@ -325,10 +409,9 @@ class LoadGlobalRulesTests(unittest.TestCase):
     def test_parses_top_level_rules_regardless_of_instructor(self):
         path = write_toml("""
 [[rules]]
-course = "MATH 1113"
-section = "F01"
-room = "Corley 269"
-direction = "prefer"
+preferred_course = "MATH 1113"
+preferred_section = "F01"
+preferred_room = "Corley 269"
 weight = 100
 
 [[instructors]]
@@ -355,19 +438,18 @@ class CheckSoftPreferencesRuleFindingsTests(unittest.TestCase):
         schedule = Schedule([NormalClass((section,))])
         preferences = {"Alice": PreferenceRecord(
             name="Alice",
-            disliked_times=(WeightedTimePreference(
-                TimeWindow(frozenset("MWF"), datetime.time(8), datetime.time(10)),
-                7,
-            ),),
-            disliked_locations=(WeightedLocationPreference("Corley", 11),),
-            disliked_courses=(WeightedCoursePreference("MATH 1113", 13),),
+            rules=(
+                PreferenceRule(time=TimeWindow(
+                    frozenset("MWF"), datetime.time(8), datetime.time(10),
+                ), direction="dislike", weight=7),
+                PreferenceRule(room="Corley", direction="dislike", weight=11),
+                PreferenceRule(course="MATH 1113", direction="dislike", weight=13),
+            ),
         )}
         total, findings = check_soft_preferences(schedule, preferences, {})
         self.assertEqual(total, 31)
-        self.assertEqual(
-            {finding.rule: finding.penalty for finding in findings},
-            {"disliked_time": 7, "disliked_location": 11, "disliked_course": 13},
-        )
+        self.assertEqual([finding.rule for finding in findings], ["custom_rule"] * 3)
+        self.assertEqual(sorted(finding.penalty for finding in findings), [7, 11, 13])
 
     def test_matching_dislike_rule_produces_a_finding(self):
         section = make_section(instructor="Alice", room="101", building="Corley")

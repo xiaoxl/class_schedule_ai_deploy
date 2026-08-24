@@ -12,7 +12,6 @@ from ..schedule_model import (
     PersonRecord,
     PreferenceRecord,
     PreferenceRule,
-    location_matches,
 )
 from .config import SolverConfig
 from .types import MeetingPattern, RoomRecord, SectionCandidate
@@ -74,34 +73,6 @@ def preference_cost(
             cost += rule.signed_weight
     if preference is None:
         return cost
-    cost -= sum(
-        item.weight
-        for item in preference.preferred_times
-        if item.window.overlaps(days, start, end)
-    )
-    cost += sum(
-        item.weight
-        for item in preference.disliked_times
-        if item.window.overlaps(days, start, end)
-    )
-    cost -= sum(
-        item.weight
-        for item in preference.preferred_locations
-        if location_matches(building, room, (item.location,))
-    )
-    cost += sum(
-        item.weight
-        for item in preference.disliked_locations
-        if location_matches(building, room, (item.location,))
-    )
-    cost -= sum(
-        item.weight for item in preference.preferred_courses
-        if item.course == course
-    )
-    cost += sum(
-        item.weight for item in preference.disliked_courses
-        if item.course == course
-    )
     if preference.preferred_online_weight is not None and days is not None:
         cost += preference.preferred_online_weight
     return cost
@@ -131,9 +102,13 @@ def section_candidates(
             config.preferences, config.global_rules,
         ),
     )
-    instructors = candidate_instructors(
-        section, config.persons, placeholder_instructors
-    ) or [section.instructor]
+    required_instructor = config.required_instructor(course, section.section)
+    instructors = (
+        [required_instructor]
+        if required_instructor is not None
+        else candidate_instructors(section, config.persons, placeholder_instructors)
+        or [section.instructor]
+    )
     if section.is_online:
         result = sorted((
             SectionCandidate(
@@ -219,7 +194,14 @@ def section_candidates(
     result = []
     for bucket in by_instructor.values():
         result.extend(sorted(bucket.values(), key=lambda candidate: candidate.cost)[:max_candidates])
-    if current_is_allowed and current not in result:
+    if (
+        current_is_allowed
+        and current not in result
+        and (
+            required_instructor is None
+            or current.instructor == required_instructor
+        )
+    ):
         result.append(current)
     return [candidate for candidate in result if _matches_locks(section, candidate, locked_fields)]
 

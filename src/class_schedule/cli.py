@@ -136,7 +136,7 @@ def _validate(args: argparse.Namespace) -> int:
         raise FileNotFoundError(f"Term changes file does not exist: {changes_path}")
     evaluation = evaluate_schedule(
         schedule, config.preferences, config.persons, config.global_rules,
-        config.blackouts, config.meeting_patterns,
+        config.blackouts, config.meeting_patterns, config.required_instructors,
     )
     print(
         f"Atomic classes: {evaluation.atomic_classes}; "

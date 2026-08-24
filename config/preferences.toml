@@ -1,352 +1,267 @@
-# Per-term instructor preferences. Never set or override the contractual
-# max_load here -- that belongs in persons.toml.
-# name must exactly match persons.toml -- no abbreviations, no reordering.
-# Locations/rooms use the CSV's own full spelling, e.g. Corley, Rothwell,
-# Ross Pendergraft Library, and Corley 101, Rothwell 221.
-# Every preferred/disliked time, location, and course entry has its own
-# weight on the common 0-100 soft-cost scale. Course entries use persons.toml's
-# "SUBJECT NUMBER" convention, not a full course id with section.
+# Per-term soft preferences. Every matching rule is a standalone dictionary.
+# A named rule is scoped by its own `name`; nearby `# Name` comments only make
+# the file easier to scan and have no effect on parsing.
 #
-# allow_overload: true means this instructor is fine with going over
-# max_load, false means avoid it (penalty 100, this system's practical
-# ceiling). Either way it's always soft -- not a hard block -- and it
-# never applies within +2 credit hours of max_load; that's the
-# definition of overload, not something this knob can loosen or tighten.
+# `preferred_*` fields reward matching candidates and `disliked_*` fields
+# penalize them. Each rule must use exactly one direction and set weight from
+# 0 through 100. Fields within one rule are ANDed. Rules without `name` are
+# global.
 #
-# max_back_to_back: caps how many same-day meetings in a row this
-# instructor tolerates before it's scored (penalty 10 per meeting past
-# the cap, same tier as a plain back-to-back). Leave unset (the default)
-# for "allow_back_to_back alone decides" -- true means no opinion, false
-# means every back-to-back pair is scored. Only meaningful when
-# allow_back_to_back is true: it can't
-# loosen a `false`, since "no back-to-back at all" is already stricter
-# than any cap could be.
-#   max_back_to_back = 2   # a 3rd meeting in a row is scored, a 4th too, etc.
-#
-# prefers_online = { weight = 5 } is a blanket weighted affinity for records
-# without a physical meeting. It's not course-scoped; use an instructors.rules
-# compound selector when only one course should be online.
-#
-# instructors.rules -- compound or prefix soft rules that cannot be expressed
-# by one weighted time/location/course entry (any filled selectors are ANDed).
-# Each rule
-# needs `direction` ("prefer" or "dislike") and `weight` (how strongly).
-# `weight` is on the same 0-100 scale as the other soft costs. A weight of
-# 100 is stronger than the 90-point under_load cost, but is still soft:
-#   10  -- a little
-#   50  -- a lot
-#   100 -- as strong as this system's soft rules go -- still not a hard
-#          guarantee, but as close as this mechanism gets
-#
-#   [[instructors.rules]]
-#   course = "MATH 1113"
-#   time = { days = ["T", "R"], between = ["08:00", "09:30"] }
-#   direction = "dislike"
-#   weight = 10
-#
-# A rule with no instructor at all applies no matter who ends up teaching
-# the match, e.g. favoring a room for a specific course-section regardless
-# of instructor. Put it in a top-level [[rules]] list instead
-# of under any one [[instructors]] block:
-#
-#   [[rules]]
-#   course = "MATH 1113"
-#   section = "F01"
-#   room = "Corley 269"
-#   direction = "prefer"
-#   weight = 100
+# Instructor profiles contain only non-selector policy settings. max_load and
+# qualifications remain in persons.toml. allow_overload changes the flat soft
+# penalty only; overload begins above max_load + 2 and is never a hard block.
 
-# 27S: MATH 1113-F01 stays in Corley 269 regardless of who ends up
-# teaching it -- weighted at this system's practical ceiling since it's
-# meant as close to a hard requirement as the soft-preference mechanism
-# gets. Preferences cannot express a hard room constraint; use a final
-# override room/building lock when the room must be guaranteed.
+# Global
+# MATH 1113-F01 should use Corley 269 regardless of instructor.
 [[rules]]
-course = "MATH 1113"
-section = "F01"
-room = "Corley 269"
-direction = "prefer"
+preferred_course = "MATH 1113"
+preferred_section = "F01"
+preferred_room = "Corley 269"
 weight = 100
 
+# Bain, Leslie M.
 [[instructors]]
 name = "Bain, Leslie M."
 allow_overload = true
 allow_back_to_back = true
 max_back_to_back = 4
-preferred_times = []
-disliked_times = []
-preferred_locations = []
-disliked_locations = []
-preferred_courses = []
-disliked_courses = []
 
-  # STAT 2163 specifically needs one of these rooms (26S/26F docs) --
-  # course-scoped, so it belongs here rather than in the blanket
-  # preferred_locations list above.
-  [[instructors.rules]]
-  course = "STAT 2163"
-  room = "Corley 103"
-  direction = "prefer"
-  weight = 10
+[[rules]]
+name = "Bain, Leslie M."
+preferred_course = "STAT 2163"
+preferred_room = "Corley 103"
+weight = 10
 
-  [[instructors.rules]]
-  course = "STAT 2163"
-  room = "Corley 104"
-  direction = "prefer"
-  weight = 10
+[[rules]]
+name = "Bain, Leslie M."
+preferred_course = "STAT 2163"
+preferred_room = "Corley 104"
+weight = 10
 
-  [[instructors.rules]]
-  course = "STAT 2163"
-  room = "Rothwell 221"
-  direction = "prefer"
-  weight = 10
+[[rules]]
+name = "Bain, Leslie M."
+preferred_course = "STAT 2163"
+preferred_room = "Rothwell 221"
+weight = 10
 
+# Ballard, Kasey L.
 [[instructors]]
 name = "Ballard, Kasey L."
 allow_overload = false
 allow_back_to_back = true
 max_back_to_back = 4
-preferred_times = []
-disliked_times = []
-preferred_locations = []
-disliked_locations = []
-preferred_courses = []
-disliked_courses = []
 
+# Cox, Allie M.
 [[instructors]]
 name = "Cox, Allie M."
 allow_overload = false
 allow_back_to_back = true
 max_back_to_back = 4
-preferred_times = []
-disliked_times = [
-  { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "Prefers no early classes", weight = 5 },
-]
-preferred_locations = []
-disliked_locations = []
-preferred_courses = []
-disliked_courses = []
 
-  # QBA (MATH 2223) needs a computer lab -- 26F names Corley 103/104
-  # specifically, course-scoped.
-  [[instructors.rules]]
-  course = "MATH 2223"
-  room = "Corley 103"
-  direction = "prefer"
-  weight = 10
+[[rules]]
+name = "Cox, Allie M."
+disliked_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "Prefers no early classes" }
+weight = 50
 
-  [[instructors.rules]]
-  course = "MATH 2223"
-  room = "Corley 104"
-  direction = "prefer"
-  weight = 10
+[[rules]]
+name = "Cox, Allie M."
+preferred_course = "MATH 2223"
+preferred_room = "Corley 103"
+weight = 10
 
+[[rules]]
+name = "Cox, Allie M."
+preferred_course = "MATH 2223"
+preferred_room = "Corley 104"
+weight = 10
+
+# Growns, Landon C.
 [[instructors]]
 name = "Growns, Landon C."
 allow_overload = true
 allow_back_to_back = true
 max_back_to_back = 4
-preferred_times = []
-disliked_times = []
-preferred_locations = []
-disliked_locations = []
-preferred_courses = []
-disliked_courses = []
 
+# Jordan, Scott M.
 [[instructors]]
 name = "Jordan, Scott M."
 allow_overload = false
 allow_back_to_back = false
 max_back_to_back = 0
-preferred_times = []
-disliked_times = [
-  { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes", weight = 5 },
-]
-preferred_locations = []
-disliked_locations = []
-preferred_courses = []
-disliked_courses = []
 
+[[rules]]
+name = "Jordan, Scott M."
+disliked_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = 5
+
+# Jordan, Susan M.
 [[instructors]]
 name = "Jordan, Susan M."
 allow_overload = false
 allow_back_to_back = true
 max_back_to_back = 2
-preferred_times = []
-disliked_times = [
-  { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes", weight = 5 },
-]
-preferred_locations = [
-  { location = "Corley 101", weight = 100 },
-]
-disliked_locations = []
-preferred_courses = []
-disliked_courses = []
 
+[[rules]]
+name = "Jordan, Susan M."
+disliked_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = 5
+
+[[rules]]
+name = "Jordan, Susan M."
+preferred_room = "Corley 101"
+weight = 100
+
+# King, Jamie L.
 [[instructors]]
 name = "King, Jamie L."
 allow_overload = false
 allow_back_to_back = true
 max_back_to_back = 4
-preferred_times = []
-disliked_times = [
-  { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes", weight = 5 },
-]
-preferred_locations = []
-disliked_locations = []
-preferred_courses = []
-# 26S: "do not want 0903/1113 in the spring" -- 27S is a spring term.
-# Preferences here are expected to be revisited every term, so this gets
-# updated (or removed) again whenever her actual wishes change.
-disliked_courses = [
-  { course = "MATH 0903", weight = 5 },
-  { course = "MATH 1113", weight = 5 },
-]
 
-  # Coreq classes and STAT -- 26S/26F: "Corley or RTH221". Corley is a
-  # building-level preference (any Corley room); Rothwell 221 is the one
-  # specific Rothwell room. Course-scoped across every course she's
-  # qualified for that this applies to.
-  [[instructors.rules]]
-  course = "STAT 2163"
-  room = "Corley"
-  direction = "prefer"
-  weight = 10
+[[rules]]
+name = "King, Jamie L."
+disliked_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = 5
 
-  [[instructors.rules]]
-  course = "STAT 2163"
-  room = "Rothwell 221"
-  direction = "prefer"
-  weight = 10
+[[rules]]
+name = "King, Jamie L."
+disliked_course = "MATH 0903"
+weight = 5
 
-  [[instructors.rules]]
-  course = "MATH 0903"
-  room = "Corley"
-  direction = "prefer"
-  weight = 10
+[[rules]]
+name = "King, Jamie L."
+disliked_course = "MATH 1113"
+weight = 5
 
-  [[instructors.rules]]
-  course = "MATH 0903"
-  room = "Rothwell 221"
-  direction = "prefer"
-  weight = 10
+[[rules]]
+name = "King, Jamie L."
+preferred_course = "STAT 2163"
+preferred_room = "Corley"
+weight = 10
 
-  [[instructors.rules]]
-  course = "MATH 1113"
-  room = "Corley"
-  direction = "prefer"
-  weight = 10
+[[rules]]
+name = "King, Jamie L."
+preferred_course = "STAT 2163"
+preferred_room = "Rothwell 221"
+weight = 10
 
-  [[instructors.rules]]
-  course = "MATH 1113"
-  room = "Rothwell 221"
-  direction = "prefer"
-  weight = 10
+[[rules]]
+name = "King, Jamie L."
+preferred_course = "MATH 0903"
+preferred_room = "Corley"
+weight = 10
 
+[[rules]]
+name = "King, Jamie L."
+preferred_course = "MATH 0903"
+preferred_room = "Rothwell 221"
+weight = 10
+
+[[rules]]
+name = "King, Jamie L."
+preferred_course = "MATH 1113"
+preferred_room = "Corley"
+weight = 10
+
+[[rules]]
+name = "King, Jamie L."
+preferred_course = "MATH 1113"
+preferred_room = "Rothwell 221"
+weight = 10
+
+# Limperis, Thomas G.
 [[instructors]]
 name = "Limperis, Thomas G."
 allow_overload = false
 allow_back_to_back = true
 max_back_to_back = 2
-preferred_times = []
-disliked_times = [
-  { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes", weight = 100 },
-]
-preferred_locations = []
-disliked_locations = []
-preferred_courses = [
-  { course = "MATH 4123", weight = 100 },
-]
-disliked_courses = []
 
-  # Avoid concurrent/TC sections regardless of course.
-  [[instructors.rules]]
-  section_prefix = "TC"
-  direction = "dislike"
-  weight = 100
+[[rules]]
+name = "Limperis, Thomas G."
+disliked_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = 100
 
+[[rules]]
+name = "Limperis, Thomas G."
+preferred_room = "Rothwell"
+weight = 50
+
+[[rules]]
+name = "Limperis, Thomas G."
+disliked_section_prefix = "TC"
+weight = 100
+
+# Overduin, Matthew D.
 [[instructors]]
 name = "Overduin, Matthew D."
 allow_overload = false
 allow_back_to_back = true
 max_back_to_back = 4
-preferred_times = []
-disliked_times = []
-preferred_locations = []
-disliked_locations = []
-preferred_courses = []
-disliked_courses = []
 
+# Taylor, Teresa L.
 [[instructors]]
 name = "Taylor, Teresa L."
 allow_overload = true
 allow_back_to_back = true
 max_back_to_back = 4
-preferred_times = []
-disliked_times = [
-  { days = ["M", "W", "F"], between = ["08:00", "8:51"], reason = "No 8am classes on MWF", weight = 5 },
-]
-preferred_locations = [
-  { location = "Corley 102", weight = 10 },
-]
-disliked_locations = []
-preferred_courses = []
-disliked_courses = []
 
+[[rules]]
+name = "Taylor, Teresa L."
+disliked_time = { days = ["M", "W", "F"], between = ["08:00", "8:51"], reason = "No 8am classes on MWF" }
+weight = 5
+
+[[rules]]
+name = "Taylor, Teresa L."
+preferred_room = "Corley 102"
+weight = 10
+
+# Winn, Janet L.
 [[instructors]]
 name = "Winn, Janet L."
 allow_overload = false
 allow_back_to_back = true
 max_back_to_back = 4
-preferred_times = []
-# "MWF classes only" in both docs -- genuinely hard to satisfy department-
-# wide, so this is deliberately a plain (mild) disliked_times entry, not
-# a heavily-weighted rule: a soft nudge away from T/R, not close to a
-# hard requirement.
-disliked_times = [
-  { days = ["T", "R"], between = ["00:00", "23:59"], reason = "Prefers MWF only", weight = 5 },
-  { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes", weight = 5 },
-]
-preferred_locations = []
-disliked_locations = []
-preferred_courses = []
-disliked_courses = []
 
+[[rules]]
+name = "Winn, Janet L."
+disliked_time = { days = ["T", "R"], between = ["00:00", "23:59"], reason = "Prefers MWF only" }
+weight = 5
+
+[[rules]]
+name = "Winn, Janet L."
+disliked_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = 5
+
+[[rules]]
+name = "Winn, Janet L."
+disliked_section_prefix = "TC"
+weight = 100
+
+# Xiao, Xinli
 [[instructors]]
 name = "Xiao, Xinli"
 allow_overload = false
 allow_back_to_back = true
 max_back_to_back = 4
-preferred_times = []
-disliked_times = []
-preferred_locations = []
-disliked_locations = []
-preferred_courses = []
-disliked_courses = [
-  { course = "MATH 2934", weight = 50 },
-]
 
+[[rules]]
+name = "Xiao, Xinli"
+preferred_time = "09:00-13:00"
+weight = 50
+
+[[rules]]
+name = "Xiao, Xinli"
+disliked_course = "MATH 2934"
+weight = 50
+
+# Yousuf, Marium
 [[instructors]]
 name = "Yousuf, Marium"
-# New hire for 27S -- allow_overload has no stated preference yet, left
-# at this system's default (true) until she says otherwise.
 allow_overload = true
 allow_back_to_back = true
 max_back_to_back = 4
-preferred_times = []
-disliked_times = []
-preferred_locations = []
-disliked_locations = []
-preferred_courses = []
-disliked_courses = []
 
-# Time preference example:
-# preferred_times = [
-#   { days = ["M", "W", "F"], between = ["09:00", "14:00"], reason = "Prefers daytime", weight = 10 },
-# ]
-# disliked_times = [
-#   { days = ["T", "R"], between = ["08:00", "10:00"], reason = "Prefers no early classes", weight = 10 },
-# ]
-# Course preference example:
-# preferred_courses = [{ course = "MATH 1913", weight = 10 }]
-# disliked_courses = [{ course = "MATH 0803", weight = 10 }]
+[[rules]]
+name = "Yousuf, Marium"
+disliked_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "Prefers no early classes" }
+weight = 50

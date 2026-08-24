@@ -102,20 +102,19 @@ CLI validate、求解尝试评估、版本报告和 Web API 都使用这组领�
 | 更换教师 | 10 |
 | 更换时间 | 5 |
 | 更换 building/room 组合 | 5 |
-| preferred time/location/course 匹配 | 每项 `-weight` |
-| disliked time/location/course 匹配 | 每项 `+weight` |
+| `preferred_*` rule 匹配 | 每项 `-weight` |
+| `disliked_*` rule 匹配 | 每项 `+weight` |
 | prefers online 但安排物理课 | `+weight` |
 | 不允许 back-to-back，或超过连续课上限 | 每处 10 |
 | 低于 `max_load` | 每位教师 90 |
 | 超过 `max_load + 2` 且 `allow_overload=true` | 10 |
 | 超过 `max_load + 2` 且 `allow_overload=false` | 100 |
 | allow overload 且超过 `max_load + 4` | 额外 50 |
-| 自定义 dislike rule | `+weight` |
-| 自定义 prefer rule | `-weight` |
-
-所有命名偏好条目都在 `preferences.toml` 中显式携带 `weight`，范围为 `0-100`；
-同一候选匹配多个条目时逐项相加。单条件课程、地点和时间偏好不再通过
-`instructors.rules` 绕行，只有复合 AND 和 section 前缀规则保留在那里。
+所有偏好都写成扁平 `[[rules]]` 字典并显式携带 `weight`，范围为 `0-100`；
+同一候选匹配多个条目时逐项相加。每条规则自己的 `name` 决定教师作用域，
+省略 `name` 才是全局规则；`# Name` 注释只用于排版。每条规则必须且只能使用
+`preferred_*` 或 `disliked_*` 一种方向，单条件、复合 AND 和 section 前缀都使用
+同一格式。
 
 `max_load` 是目标：不足和过量都是软目标；只有上节所述 `+6` 是模型硬上界。
 偏好报告只列“违反项”，因此已满足的 prefer 奖励不会出现在 reported soft

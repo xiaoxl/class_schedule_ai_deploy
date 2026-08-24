@@ -213,7 +213,7 @@ manifest schema v4 的关键字段：
 | `input.path/sha256` | 本次求解实际读取的 ver/start CSV |
 | `initial_baseline.path/sha256/role` | initial 基线来源、哈希以及固定的 `role = initial` |
 | `initial_baseline.snapshot` | 当前目录内固定为 `baseline.csv` 的快照名 |
-| `configuration.version/files` | 四个实际配置文件的聚合版本、路径与哈希 |
+| `configuration.version/files` | 所有实际读取配置文件的聚合版本、路径与哈希 |
 | `applied_overrides_sha256` | 本次实际应用配置的哈希 |
 | `override_workspace` | override 路径、是否 mutable、绑定的 source version |
 | `selected_attempt`, `solver`, `validation` | 选优结果、求解预算和最终检查指标 |

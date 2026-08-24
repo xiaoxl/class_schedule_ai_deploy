@@ -8,10 +8,8 @@ from class_schedule.schedule_model import (
     PreferenceRule,
     Schedule,
     TimeWindow,
-    WeightedCoursePreference,
-    WeightedLocationPreference,
-    WeightedTimePreference,
     check_conflicts,
+    evaluate_schedule,
     teaching_loads,
 )
 from class_schedule.solver import NoFeasibleSchedule, MeetingPattern, RoomRecord, SolverConfig, solve
@@ -43,12 +41,13 @@ class NamedPreferenceCostTests(unittest.TestCase):
     def test_matching_preferred_fields_reward_the_candidate(self):
         preference = PreferenceRecord(
             name="Alice",
-            preferred_times=(WeightedTimePreference(
-                TimeWindow(frozenset("MWF"), datetime.time(8), datetime.time(10)),
-                7,
-            ),),
-            preferred_locations=(WeightedLocationPreference("Corley", 11),),
-            preferred_courses=(WeightedCoursePreference("MATH 1113", 13),),
+            rules=(
+                PreferenceRule(time=TimeWindow(
+                    frozenset("MWF"), datetime.time(8), datetime.time(10),
+                ), direction="prefer", weight=7),
+                PreferenceRule(room="Corley", direction="prefer", weight=11),
+                PreferenceRule(course="MATH 1113", direction="prefer", weight=13),
+            ),
         )
         cost = preference_cost(
             "Alice", "MWF", datetime.time(9), datetime.time(9, 50),
@@ -59,12 +58,13 @@ class NamedPreferenceCostTests(unittest.TestCase):
     def test_nonmatching_preferred_fields_do_not_change_cost(self):
         preference = PreferenceRecord(
             name="Alice",
-            preferred_times=(WeightedTimePreference(
-                TimeWindow(frozenset("TR"), datetime.time(13), datetime.time(15)),
-                7,
-            ),),
-            preferred_locations=(WeightedLocationPreference("Rothwell", 11),),
-            preferred_courses=(WeightedCoursePreference("MATH 2934", 13),),
+            rules=(
+                PreferenceRule(time=TimeWindow(
+                    frozenset("TR"), datetime.time(13), datetime.time(15),
+                ), direction="prefer", weight=7),
+                PreferenceRule(room="Rothwell", direction="prefer", weight=11),
+                PreferenceRule(course="MATH 2934", direction="prefer", weight=13),
+            ),
         )
         cost = preference_cost(
             "Alice", "MWF", datetime.time(9), datetime.time(9, 50),
@@ -92,6 +92,49 @@ class SolveResolvesConflictsTests(unittest.TestCase):
         )
         solved = solve(schedule, config, time_limit_seconds=10.0)
         self.assertEqual(check_conflicts(solved), [])
+
+
+class RequiredInstructorTests(unittest.TestCase):
+    def test_required_instructor_is_the_only_solver_candidate(self):
+        section = make_section(
+            number="4123", instructor="Staff", room="101",
+        )
+        config = empty_config(
+            persons={
+                "Alice": PersonRecord(
+                    name="Alice", max_load=15, courses=("MATH 4123",),
+                ),
+                "Tom": PersonRecord(
+                    name="Tom", max_load=15, courses=("MATH 4123",),
+                ),
+            },
+            required_instructors={("MATH 4123", None): "Tom"},
+        )
+
+        solved = solve(
+            Schedule([NormalClass((section,))]), config,
+            time_limit_seconds=10.0,
+        )
+
+        self.assertEqual(
+            solved.get("MATH 4123-001").sections[0].instructor, "Tom"
+        )
+
+    def test_required_instructor_is_a_hard_validation_rule(self):
+        schedule = Schedule([NormalClass((make_section(
+            number="4123", instructor="Alice",
+        ),))])
+
+        evaluation = evaluate_schedule(
+            schedule, {}, {}, required_instructors={
+                ("MATH 4123", None): "Tom",
+            },
+        )
+
+        self.assertEqual(len(evaluation.hard_violations), 1)
+        self.assertEqual(
+            evaluation.hard_violations[0].rule, "required_instructor"
+        )
 
 
 class SolveAdjustsPlaceholderCountTests(unittest.TestCase):

@@ -28,7 +28,12 @@ from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from . import record_utils
-from .config_schema import PersonsFileSchema, PreferencesFileSchema
+from .config_schema import (
+    FlatPreferenceRuleSchema,
+    PersonsFileSchema,
+    PreferencesFileSchema,
+    TimeWindowSchema,
+)
 from .class_model import (
     Class,
     CoreqClass,
@@ -543,9 +548,13 @@ class PersonRecord:
 
 @dataclass(frozen=True)
 class PreferenceRule:
-    """One `[[rules]]` entry (top-level, applies regardless of
-    instructor) or `instructors.rules` entry (nested under one
-    `[[instructors]]` block, scoped to that instructor).
+    """One normalized flat ``[[rules]]`` selector.
+
+    The TOML loader uses a rule's explicit ``name`` to attach it to one
+    ``PreferenceRecord``; rules without a name remain global. Comments and
+    physical ordering in the file never determine scope. TOML-facing
+    ``preferred_*``/``disliked_*`` fields are normalized into selectors and
+    ``direction`` here.
 
     ``course`` ("SUBJECT NUMBER", matching persons.toml's own
     convention), ``section``, ``section_prefix``, ``room``, and ``time`` are all optional
@@ -604,24 +613,6 @@ class PreferenceRule:
 
 
 @dataclass(frozen=True)
-class WeightedTimePreference:
-    window: TimeWindow
-    weight: float
-
-
-@dataclass(frozen=True)
-class WeightedLocationPreference:
-    location: str
-    weight: float
-
-
-@dataclass(frozen=True)
-class WeightedCoursePreference:
-    course: str
-    weight: float
-
-
-@dataclass(frozen=True)
 class PreferenceRecord:
     """One preferences.toml entry for the current term.
 
@@ -632,10 +623,9 @@ class PreferenceRecord:
     is ``True``, 100 (this system's practical ceiling) when it's
     ``False``.
 
-    Every named preferred/disliked time, location, and course carries its
-    own weight. ``preferred_online_weight`` is the equivalent blanket
-    affinity for records without a physical meeting. Someone who only wants
-    one specific course online still needs a compound ``rules`` entry.
+    Flat named rules carry every selector-based preference and its weight.
+    ``preferred_online_weight`` is the separate blanket affinity for records
+    without a physical meeting.
 
     ``max_back_to_back`` caps how many consecutive same-day meetings this
     instructor tolerates before it's scored -- ``None`` means no cap
@@ -654,12 +644,6 @@ class PreferenceRecord:
     allow_back_to_back: bool = True
     max_back_to_back: int | None = None
     preferred_online_weight: float | None = None
-    preferred_times: tuple[WeightedTimePreference, ...] = ()
-    disliked_times: tuple[WeightedTimePreference, ...] = ()
-    preferred_locations: tuple[WeightedLocationPreference, ...] = ()
-    disliked_locations: tuple[WeightedLocationPreference, ...] = ()
-    preferred_courses: tuple[WeightedCoursePreference, ...] = ()
-    disliked_courses: tuple[WeightedCoursePreference, ...] = ()
     rules: tuple[PreferenceRule, ...] = ()
 
     @property
@@ -708,6 +692,10 @@ def load_preferences(path: str | Path) -> dict[str, PreferenceRecord]:
     """Parse ``preferences.toml`` into ``{name: PreferenceRecord}``."""
     with open(path, "rb") as handle:
         raw = PreferencesFileSchema.model_validate(tomllib.load(handle))
+    named_rules: dict[str, list[PreferenceRule]] = {}
+    for rule in raw.rules:
+        if rule.name is not None:
+            named_rules.setdefault(rule.name, []).append(_parse_flat_rule(rule))
     return {
         entry.name: PreferenceRecord(
             name=entry.name,
@@ -717,50 +705,25 @@ def load_preferences(path: str | Path) -> dict[str, PreferenceRecord]:
             preferred_online_weight=(
                 entry.prefers_online.weight if entry.prefers_online else None
             ),
-            preferred_times=tuple(
-                WeightedTimePreference(
-                    TimeWindow.from_config(w.model_dump(exclude={"weight"})),
-                    w.weight,
-                )
-                for w in entry.preferred_times
-            ),
-            disliked_times=tuple(
-                WeightedTimePreference(
-                    TimeWindow.from_config(w.model_dump(exclude={"weight"})),
-                    w.weight,
-                )
-                for w in entry.disliked_times
-            ),
-            preferred_locations=tuple(
-                WeightedLocationPreference(item.location, item.weight)
-                for item in entry.preferred_locations
-            ),
-            disliked_locations=tuple(
-                WeightedLocationPreference(item.location, item.weight)
-                for item in entry.disliked_locations
-            ),
-            preferred_courses=tuple(
-                WeightedCoursePreference(item.course, item.weight)
-                for item in entry.preferred_courses
-            ),
-            disliked_courses=tuple(
-                WeightedCoursePreference(item.course, item.weight)
-                for item in entry.disliked_courses
-            ),
-            rules=tuple(_parse_rule(r.model_dump(exclude_none=True)) for r in entry.rules),
+            rules=tuple(named_rules.get(entry.name, ())),
         )
         for entry in raw.instructors
     }
 
 
 def load_global_rules(path: str | Path) -> tuple[PreferenceRule, ...]:
-    """Parse preferences.toml's top-level ``[[rules]]`` -- rules that
-    apply no matter which instructor ends up teaching the match (see
-    ``PreferenceRecord.rules`` for the per-instructor equivalent, nested
-    under ``instructors.rules``)."""
+    """Parse flat rules without ``name``; these apply to every instructor."""
     with open(path, "rb") as handle:
         raw = PreferencesFileSchema.model_validate(tomllib.load(handle))
-    return tuple(_parse_rule(r.model_dump(exclude_none=True)) for r in raw.rules)
+    return tuple(_parse_flat_rule(rule) for rule in raw.rules if rule.name is None)
+
+
+def _parse_flat_rule(raw: FlatPreferenceRuleSchema) -> PreferenceRule:
+    preferred = raw.selector_values("preferred")
+    values = preferred or raw.selector_values("disliked")
+    values["direction"] = "prefer" if preferred else "dislike"
+    values["weight"] = raw.weight
+    return _parse_rule(values)
 
 
 def _parse_rule(raw: Mapping[str, object]) -> PreferenceRule:
@@ -780,10 +743,24 @@ def _parse_rule(raw: Mapping[str, object]) -> PreferenceRule:
             str(section_prefix).strip() if section_prefix is not None else None
         ),
         room=str(raw["room"]) if "room" in raw else None,
-        time=TimeWindow.from_config(raw["time"]) if "time" in raw else None,
+        time=_parse_rule_time(raw["time"]) if "time" in raw else None,
         direction=direction,
         weight=float(raw.get("weight", 0.0)),
     )
+
+
+def _parse_rule_time(raw: object) -> TimeWindow:
+    if isinstance(raw, str):
+        start, end = (part.strip() for part in raw.split("-", maxsplit=1))
+        normalized = [part if ":" in part else f"{part}:00" for part in (start, end)]
+        return TimeWindow.from_config(
+            {"days": tuple("MTWRF"), "between": normalized}
+        )
+    if isinstance(raw, TimeWindowSchema):
+        raw = raw.model_dump()
+    if isinstance(raw, Mapping):
+        return TimeWindow.from_config(raw)
+    raise TypeError(f"Rule time must be a range string or table, got {type(raw).__name__}")
 
 
 @dataclass(frozen=True)
@@ -979,6 +956,29 @@ def check_conflicts(schedule: "Schedule") -> list[HardViolation]:
     return violations
 
 
+def check_required_instructors(
+    schedule: "Schedule",
+    required: Mapping[tuple[str, str | None], str],
+) -> list[HardViolation]:
+    """Validate term-level hard instructor assignments against grouped data."""
+    violations: list[HardViolation] = []
+    for item in schedule:
+        for section in item.sections:
+            course = f"{section.subject} {section.number}"
+            instructor = required.get(
+                (course, section.section), required.get((course, None))
+            )
+            if instructor is None or section.instructor == instructor:
+                continue
+            violations.append(HardViolation(
+                "required_instructor",
+                section.course_id,
+                f"{section.course_id}: must be assigned to {instructor}, "
+                f"not {section.instructor or '(blank)'}",
+            ))
+    return violations
+
+
 def check_blackouts(
     schedule: "Schedule", blackouts: Iterable[TimeWindow]
 ) -> list[HardViolation]:
@@ -1040,12 +1040,9 @@ def check_soft_preferences(
     Returns ``(total_penalty, findings)`` -- 0 means every preference was
     honored, lower is always better. Every rule here is soft, including
     ``max_load`` -- see the module comment above ``OVERLOAD_TOLERANCE`` for
-    the full over/under contract. Being outside a
-    ``preferred_times``/``preferred_locations``/``preferred_courses``
-    match is not reported as a violation: matching candidates receive their
-    configured weighted reward in the solver, while absence of a match adds
-    no report finding. Disliked entries add their own configured weight to
-    both candidate cost and the final report.
+    the full over/under contract. Being outside a ``prefer`` rule is not
+    reported as a violation: matching candidates receive their configured
+    weighted reward in the solver, while absence of a match adds no finding.
 
     ``global_rules`` plus each matching instructor's own ``rules`` (see
     ``PreferenceRule``) are checked too, but only their ``"dislike"``
@@ -1104,22 +1101,6 @@ def check_soft_preferences(
                 ))
         if preference is None:
             continue
-        for item in preference.disliked_times:
-            if item.window.overlaps(section.days, section.start, section.end):
-                findings.append(SoftFinding(
-                    "disliked_time", section.instructor,
-                    f"{section.course_id}: falls in a disliked time "
-                    f"({item.window.reason or section.time_slot})",
-                    item.weight,
-                ))
-        for item in preference.disliked_courses:
-            if item.course == course:
-                findings.append(SoftFinding(
-                    "disliked_course", section.instructor,
-                    f"{section.course_id}: {section.instructor} dislikes "
-                    f"teaching {course}",
-                    item.weight,
-                ))
         if (
             preference.preferred_online_weight is not None
             and not section.is_online
@@ -1130,19 +1111,6 @@ def check_soft_preferences(
                 f"a non-physical section but this one meets in person",
                 preference.preferred_online_weight,
             ))
-        if section.is_online:
-            continue
-        for item in preference.disliked_locations:
-            if location_matches(
-                section.building, section.room, (item.location,)
-            ):
-                findings.append(SoftFinding(
-                    "disliked_location", section.instructor,
-                    f"{section.course_id}: room "
-                    f"{f'{section.building} {section.room}'.strip()!r} is a "
-                    f"disliked location",
-                    item.weight,
-                ))
 
     by_instructor: dict[str, list[Section]] = {}
     for section in sections:
@@ -1190,6 +1158,7 @@ def evaluate_schedule(
     global_rules: tuple[PreferenceRule, ...] = (),
     blackouts: Iterable[TimeWindow] = (),
     meeting_patterns: Iterable[MeetingPatternLike] = (),
+    required_instructors: Mapping[tuple[str, str | None], str] | None = None,
 ) -> ScheduleEvaluation:
     """Evaluate only domain objects; raw CSV rows are not accepted here."""
     soft_penalty, soft_findings = check_soft_preferences(
@@ -1203,6 +1172,7 @@ def evaluate_schedule(
             check_conflicts(schedule)
             + check_blackouts(schedule, blackouts)
             + check_meeting_patterns(schedule, meeting_patterns)
+            + check_required_instructors(schedule, required_instructors or {})
         ),
         soft_penalty=soft_penalty,
         soft_findings=tuple(soft_findings),

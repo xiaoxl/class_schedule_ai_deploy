@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import record_utils
-from ..config_schema import LocationsFileSchema, TimeslotFileSchema
+from ..config_schema import ConstraintsFileSchema, LocationsFileSchema, TimeslotFileSchema
 from ..schedule_model import (
     PersonRecord,
     PreferenceRecord,
@@ -21,7 +21,11 @@ from ..schedule_model import (
 from .types import MeetingPattern, RoomRecord
 
 
-_CONFIG_FILES = ("persons.toml", "preferences.toml", "timeslot.toml", "locations.toml")
+_REQUIRED_CONFIG_FILES = (
+    "persons.toml", "preferences.toml", "timeslot.toml", "locations.toml",
+)
+_OPTIONAL_CONFIG_FILES = ("constraints.toml",)
+_CONFIG_FILES = _REQUIRED_CONFIG_FILES + _OPTIONAL_CONFIG_FILES
 
 
 def resolve_config_paths(
@@ -40,11 +44,20 @@ def resolve_config_paths(
             *((root / "terms" / term / "timeslot.toml",) if term else ()),
             root / "timeslot.toml",
         ),
+        "constraints.toml": (
+            *((root / "terms" / term / "constraints.toml",) if term else ()),
+            root / "constraints.toml",
+        ),
     }
     resolved: dict[str, Path] = {}
     for name in _CONFIG_FILES:
-        resolved[name] = next((path for path in candidates[name] if path.is_file()), candidates[name][0])
-    missing = [str(path) for path in resolved.values() if not path.is_file()]
+        path = next((path for path in candidates[name] if path.is_file()), None)
+        if path is not None:
+            resolved[name] = path
+    missing = [
+        str(candidates[name][0]) for name in _REQUIRED_CONFIG_FILES
+        if name not in resolved
+    ]
     if missing:
         raise FileNotFoundError("Missing configuration file(s): " + ", ".join(missing))
     return resolved
@@ -93,6 +106,17 @@ def load_rooms(path: str | Path) -> list[RoomRecord]:
     return rooms
 
 
+def load_required_instructors(
+    path: str | Path,
+) -> dict[tuple[str, str | None], str]:
+    with open(path, "rb") as handle:
+        raw = ConstraintsFileSchema.model_validate(tomllib.load(handle))
+    return {
+        (entry.course, entry.section): entry.instructor
+        for entry in raw.required_instructors
+    }
+
+
 @dataclass(frozen=True)
 class SolverConfig:
     persons: dict[str, PersonRecord]
@@ -101,20 +125,25 @@ class SolverConfig:
     rooms: list[RoomRecord]
     blackouts: list[TimeWindow]
     global_rules: tuple[PreferenceRule, ...] = ()
+    required_instructors: dict[tuple[str, str | None], str] = field(default_factory=dict)
     version: str = ""
     source_paths: tuple[str, ...] = ()
 
     @classmethod
     def load(cls, config_dir: str | Path, term: str | None = None) -> "SolverConfig":
         resolved = resolve_config_paths(config_dir, term)
-        paths = tuple(resolved[name] for name in _CONFIG_FILES)
+        paths = tuple(resolved[name] for name in _CONFIG_FILES if name in resolved)
         config = cls(
-            persons=load_persons(paths[0]),
-            preferences=load_preferences(paths[1]),
-            meeting_patterns=load_meeting_patterns(paths[2]),
-            rooms=load_rooms(paths[3]),
-            blackouts=load_blackouts(paths[2]),
-            global_rules=load_global_rules(paths[1]),
+            persons=load_persons(resolved["persons.toml"]),
+            preferences=load_preferences(resolved["preferences.toml"]),
+            meeting_patterns=load_meeting_patterns(resolved["timeslot.toml"]),
+            rooms=load_rooms(resolved["locations.toml"]),
+            blackouts=load_blackouts(resolved["timeslot.toml"]),
+            global_rules=load_global_rules(resolved["preferences.toml"]),
+            required_instructors=(
+                load_required_instructors(resolved["constraints.toml"])
+                if "constraints.toml" in resolved else {}
+            ),
             version=hashlib.sha256(
                 b"\0".join(path.read_bytes() for path in paths)
             ).hexdigest()[:12],
@@ -134,12 +163,24 @@ class SolverConfig:
         referenced = {
             location
             for preference in self.preferences.values()
-            for location in (
-                *(item.location for item in preference.preferred_locations),
-                *(item.location for item in preference.disliked_locations),
-                *(rule.room for rule in preference.rules if rule.room),
-            )
+            for location in (rule.room for rule in preference.rules if rule.room)
         } | {rule.room for rule in self.global_rules if rule.room}
         invalid = sorted(referenced - known_locations)
         if invalid:
             raise ValueError(f"Preferences reference unknown rooms: {invalid}")
+        for (course, section), instructor in self.required_instructors.items():
+            person = self.persons.get(instructor)
+            selector = f"{course}-{section}" if section else course
+            if person is None:
+                raise ValueError(
+                    f"Required instructor for {selector} is unknown: {instructor}"
+                )
+            if course not in person.courses:
+                raise ValueError(
+                    f"Required instructor {instructor} is not qualified for {selector}"
+                )
+
+    def required_instructor(self, course: str, section: str) -> str | None:
+        return self.required_instructors.get(
+            (course, section), self.required_instructors.get((course, None))
+        )

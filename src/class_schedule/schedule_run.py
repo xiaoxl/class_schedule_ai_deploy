@@ -332,7 +332,7 @@ def _verified_parent_baseline(
 def _evaluate_attempt(number: int, result: SolveResult, config: SolverConfig) -> Attempt:
     evaluation = evaluate_schedule(
         result.schedule, config.preferences, config.persons, config.global_rules,
-        config.blackouts, config.meeting_patterns,
+        config.blackouts, config.meeting_patterns, config.required_instructors,
     )
     return Attempt(
         number=number,
@@ -385,7 +385,7 @@ def _report(
     after = best.result.schedule
     baseline_evaluation = evaluate_schedule(
         baseline, config.preferences, config.persons, config.global_rules,
-        config.blackouts, config.meeting_patterns,
+        config.blackouts, config.meeting_patterns, config.required_instructors,
     )
     before_loads = baseline_evaluation.loads
     after_loads = teaching_loads(after)

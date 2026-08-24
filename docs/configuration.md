@@ -1,6 +1,6 @@
 # 配置格式
 
-所有主配置都使用 TOML。四个求解配置由 Pydantic 严格校验：未知键、重复
+所有主配置都使用 TOML。四个必需配置和可选的硬约束配置都由 Pydantic 严格校验：未知键、重复
 人员、重复房间、非法课程号、非法星期、越界权重都会直接报错。
 
 ## 文件定位和优先级
@@ -16,6 +16,7 @@ config/
     27S/
       preferences.toml
       timeslot.toml
+      constraints.toml
 inputs/
   27S/
     changes.toml
@@ -28,8 +29,10 @@ out/
 
 为兼容现有项目，缺少推荐路径时逐文件回退到
 `config/persons.toml`、`preferences.toml`、`timeslot.toml`、
-`locations.toml`。新学期应优先建立 `config/terms/<term>/`，避免覆盖旧学期
-偏好。求解清单会记录实际读取的四个路径及哈希。
+`locations.toml`。`constraints.toml` 是可选文件；优先读取
+`config/terms/<term>/constraints.toml`，再回退到 `config/constraints.toml`。
+新学期应优先建立 `config/terms/<term>/`，避免覆盖旧学期设置。求解清单会记录
+实际读取的全部配置路径及哈希。
 
 ## persons.toml
 
@@ -118,60 +121,89 @@ blackout 与候选相交时该候选不生成。
 这是学期数据，不是人员合同事实。
 
 ```toml
+# Xiao, Xinli
 [[instructors]]
 name = "Xiao, Xinli"
 allow_overload = false
 allow_back_to_back = true
 max_back_to_back = 3
 prefers_online = { weight = 20 }
-preferred_times = []
-disliked_times = [
-  { days = ["M", "W", "F"], between = ["08:00", "09:00"], reason = "no early MWF", weight = 50 },
-]
-preferred_locations = []
-disliked_locations = [{ location = "Rothwell", weight = 25 }]
-preferred_courses = []
-disliked_courses = [{ course = "MATH 2934", weight = 50 }]
-
-  [[instructors.rules]]
-  course = "STAT 3113"
-  room = "Corley 101"
-  direction = "prefer"
-  weight = 50
-
-  [[instructors.rules]]
-  section_prefix = "TC"
-  direction = "dislike"
-  weight = 10
 
 [[rules]]
-course = "MATH 1113"
-section = "F01"
-room = "Corley 269"
-direction = "prefer"
+name = "Xiao, Xinli"
+preferred_time = "09:00-13:00"
+weight = 50
+
+[[rules]]
+name = "Xiao, Xinli"
+disliked_course = "MATH 2934"
+weight = 50
+
+[[rules]]
+name = "Xiao, Xinli"
+preferred_course = "STAT 3113"
+preferred_room = "Corley 101"
+weight = 50
+
+[[rules]]
+name = "Xiao, Xinli"
+disliked_section_prefix = "TC"
+weight = 10
+
+# Global: no name means the rule applies regardless of instructor.
+[[rules]]
+preferred_course = "MATH 1113"
+preferred_section = "F01"
+preferred_room = "Corley 269"
 weight = 100
 ```
 
-- `name` 必须存在于 persons。
+- `[[instructors]]` 是人员 profile，只存 `allow_overload`、连排参数和
+  `prefers_online`；`name` 必须存在于 persons。
 - `allow_overload` 只改变超载软惩罚，不解除求解器绝对负载上界。
 - `allow_back_to_back = false` 对每个相邻连续课惩罚；为 true 且设置
   `max_back_to_back = N` 时，从同日连续第 `N+1` 门开始逐门惩罚。
 - `prefers_online = { weight = N }` 会对其每个物理课候选增加 `N` 分成本；省略表示
   没有在线偏好。
-- `preferred_times`、`preferred_locations`、`preferred_courses` 的每个条目都必须写
-  `weight`，匹配候选时减去该权重；未匹配不会作为违规写入报告。
-- `disliked_times`、`disliked_locations`、`disliked_courses` 的每个条目也必须写
-  `weight`，匹配候选时增加该权重，并按相同权重写入报告。
-- 同一候选匹配多个条目时权重相加；所有偏好权重范围都是 `0-100`。
-- rule 的 `course`、`section`、`section_prefix`、`room`、`time` 都是可选匹配条件；条件之间
-  是 AND。`section` 必须与 `course` 同时出现。
+- 每条 `[[rules]]` 都是独立字典。`name` 决定教师作用域；同一人的规则可以连续放在
+  `# Name` 注释下便于阅读，但注释没有任何配置意义。
+- 每条规则必须选择一个方向：全部使用 `preferred_*` 字段，或全部使用 `disliked_*`
+  字段，不可混用。`weight` 必填且范围为 `0-100`。匹配 preferred 规则时从候选成本
+  减去 `weight`，匹配 disliked 规则时增加 `weight`；同一候选命中多条规则时累加。
+- prefer 未命中不是违规；dislike 命中会写入软问题报告。
+- selector 内的 `course`、`section`、`section_prefix`、`room`、`time` 是可选匹配条件，
+  同一字典内按 AND 组合。selector 至少需要一个条件，`section` 必须与 `course` 同时出现。
+- `preferred_time = "8-12"`（或 `disliked_time`）是所有工作日的简写，等价于
+  `preferred_time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "12:00"] }`。
+  需要限定 MWF/TR 或记录 `reason` 时使用完整字典。
 - `section_prefix` 是不绑定课程的大小写无关前缀匹配，例如 `"TC"` 匹配
   `TC1`、`TC2`；不可与精确的 `section` 同时出现。
-- 单独的课程、地点或时间偏好应写入上述加权列表。顶层 `[[rules]]` 对所有教师
-  生效；嵌套 `[[instructors.rules]]` 只保留多条件 AND 或 `section_prefix` 等列表
-  无法表达的规则。教师下只有一个 course/room/time selector 的 rule 会被严格拒绝。
-- `direction` 只能是 `prefer` 或 `dislike`，`weight` 范围 0 到 100。
-- prefer 以负成本奖励匹配候选；dislike 以正成本惩罚匹配候选。
+- 省略 `name` 的规则是全局规则。填写 `name` 时必须存在同名 `[[instructors]]` profile；
+  不能依靠附近注释推断姓名。
+
+## constraints.toml
+
+这是学期级硬约束，不是偏好。需要保证某门课必须由指定教师承担时写：
+
+```toml
+[[required_instructors]]
+course = "MATH 4123"
+instructor = "Limperis, Thomas G."
+
+[[required_instructors]]
+course = "MATH 1113"
+section = "006"
+instructor = "Taylor, Teresa L."
+```
+
+- `course` 使用严格的 `SUBJECT NUMBER` 格式；省略 `section` 时匹配该课程的
+  全部 section，填写时只匹配该 section。
+- `instructor` 必须存在于 `persons.toml`，且其 `courses` 必须包含该课程。
+- 同一个 `(course, section)` 不得重复。
+- 求解器只为匹配课程生成该教师的候选；`validate` 和最终报告也会把不匹配结果
+  报告为 `required_instructor` 硬违规。
+- `weight = 100` 仍然只是软偏好。凡是“必须”或“禁止”的教师分配，不应写成
+  `preferences.toml` 的 preferred/disliked rule。
 
 ## changes.toml
 

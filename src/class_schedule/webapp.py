@@ -293,6 +293,7 @@ def _evaluate_schedule(schedule: Schedule) -> dict:
     evaluation = evaluate_schedule(
         schedule, PREFERENCES, PERSONS, GLOBAL_RULES,
         SOLVER_CONFIG.blackouts, SOLVER_CONFIG.meeting_patterns,
+        SOLVER_CONFIG.required_instructors,
     )
     return {
         "hard": [_serialize_hard(v) for v in evaluation.hard_violations],
