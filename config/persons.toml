@@ -79,7 +79,7 @@ aliases = ["Overduin"]
 # confirmed 2026-08-20, see examples/oldsrc/low-frequency-courses.md.
 courses = [
   "MATH 2243", "MATH 2703", "MATH 2914", "MATH 2924", "MATH 2934",
-  "MATH 3203", "MATH 3243", "MATH 4003", "MATH 4033", "MATH 4273",
+  "MATH 3203", "MATH 3243", "MATH 4273",
 ]
 
 [[persons]]
@@ -110,4 +110,4 @@ aliases = ["Yousuf"]
 # New hire for 27S -- "various 1113" read as the course number itself
 # (all its coreq/hybrid/standalone forms are the same qualification,
 # not separate entries).
-courses = ["MATH 1113", "MATH 2914", "MATH 2924", "MATH 2934", "MATH 2703"]
+courses = ["MATH 1113", "MATH 2914", "MATH 2924", "MATH 2934", "MATH 2703", "STAT 2163"]

@@ -96,6 +96,13 @@ def is_placeholder_instructor(
     return suffix.isdigit() and int(suffix) >= 2
 
 
+def _placeholder_rank(
+    instructor: str, placeholder: str = DEFAULT_PLACEHOLDER_INSTRUCTOR
+) -> int:
+    """Numeric order used by the solver's contiguous placeholder constraint."""
+    return 1 if instructor == placeholder else int(instructor.rsplit(" ", 1)[1])
+
+
 def _qualifies(item: Class, person: PersonRecord) -> bool:
     courses = {f"{s.subject} {s.number}" for s in item.sections}
     return courses.issubset(person.courses)
@@ -221,7 +228,12 @@ def recolor_placeholder(
         recolored.change_instructor(course_id, name)
         assignments.setdefault(name, []).append(course_id)
 
-    return recolored, {name: tuple(ids) for name, ids in assignments.items()}
+    ordered_names = sorted(
+        assignments, key=lambda name: _placeholder_rank(name, placeholder)
+    )
+    return recolored, {
+        name: tuple(assignments[name]) for name in ordered_names
+    }
 
 
 def build_initial_schedules(

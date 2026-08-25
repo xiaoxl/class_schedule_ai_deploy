@@ -5,6 +5,9 @@
 #     Cost for every distinct Staff/Staff N identity used in the whole
 #     schedule. A larger value favors changing times to use fewer Staff
 #     identities. Hard conflicts may still require additional Staff.
+#   staff_credit_weight = 0..100
+#     Cost for every credit hour left with Staff/Staff N. A larger value
+#     favors assigning qualified named instructors instead of placeholders.
 #
 # Instructor profile (policy only, one per person):
 #   [[instructors]]
@@ -38,7 +41,8 @@
 # allow_overload only changes a soft penalty; overload begins above
 # max_load + 2 and is never a hard block.
 
-staff_count_weight = 100
+staff_count_weight = 10
+staff_credit_weight = 5
 
 # Bain, Leslie M.
 [[instructors]]
@@ -183,6 +187,12 @@ allow_overload = false
 allow_back_to_back = true
 max_back_to_back = 4
 
+[[rules]]
+name = "Overduin, Matthew D."
+course = "MATH 2934"
+section = "002"
+weight = 100
+
 # Taylor, Teresa L.
 [[instructors]]
 name = "Taylor, Teresa L."
@@ -215,12 +225,17 @@ weight = -5
 [[rules]]
 name = "Winn, Janet L."
 time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
-weight = -5
+weight = -20
 
 [[rules]]
 name = "Winn, Janet L."
 section_prefix = "TC"
 weight = -100
+
+[[rules]]
+name = "Winn, Janet L."
+course = "MATH 1914"
+weight = -50
 
 # Xiao, Xinli
 [[instructors]]
@@ -231,13 +246,29 @@ max_back_to_back = 4
 
 [[rules]]
 name = "Xiao, Xinli"
-time = "09:00-13:00"
-weight = 50
+time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = -10
+
+[[rules]]
+name = "Xiao, Xinli"
+course = "MATH 3243"
+section = "001"
+weight = 100
 
 [[rules]]
 name = "Xiao, Xinli"
 course = "MATH 2934"
-weight = -50
+weight = -40
+
+[[rules]]
+name = "Xiao, Xinli"
+course = "MATH 2924"
+weight = -30
+
+[[rules]]
+name = "Xiao, Xinli"
+course = "MATH 2914"
+weight = -30
 
 # Yousuf, Marium
 [[instructors]]
@@ -245,8 +276,3 @@ name = "Yousuf, Marium"
 allow_overload = true
 allow_back_to_back = true
 max_back_to_back = 4
-
-[[rules]]
-name = "Yousuf, Marium"
-time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "Prefers no early classes" }
-weight = -50

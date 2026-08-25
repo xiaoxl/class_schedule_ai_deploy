@@ -95,6 +95,7 @@ def _solve(args: argparse.Namespace) -> int:
         changes_path=args.changes, initial_path=args.initial,
         parent=args.parent, baseline_path=args.baseline,
         historical_backfill=args.historical_backfill,
+        search_workers=args.workers,
     ))
 
 
@@ -104,6 +105,7 @@ def _final(args: argparse.Namespace) -> int:
             args.term, args.from_version,
             output_root=args.output_root, config_dir=args.config,
             attempts=args.attempts, time_limit_seconds=args.seconds,
+            search_workers=args.workers,
         )
     except (FileNotFoundError, IndexError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
@@ -220,6 +222,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     solve.add_argument("--attempts", type=int, default=5)
     solve.add_argument("--seconds", type=float, default=45.0)
+    solve.add_argument(
+        "--workers", type=int, default=8,
+        help="parallel CP-SAT search workers; use 1 for deterministic search",
+    )
     solve.add_argument("--overrides")
     solve.add_argument(
         "--changes",
@@ -252,6 +258,10 @@ def build_parser() -> argparse.ArgumentParser:
     final.add_argument("--output-root", default="out")
     final.add_argument("--attempts", type=int, default=5)
     final.add_argument("--seconds", type=float, default=45.0)
+    final.add_argument(
+        "--workers", type=int, default=8,
+        help="parallel CP-SAT search workers; use 1 for deterministic search",
+    )
     final.set_defaults(handler=_final)
 
     template = commands.add_parser(

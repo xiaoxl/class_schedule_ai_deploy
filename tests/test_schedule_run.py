@@ -16,11 +16,28 @@ from class_schedule.schedule_run import (
     publish_final,
     run_term,
     version_schedule_path,
+    worst_overload,
 )
 from class_schedule.schedule_io import read_schedule
+from class_schedule.schedule_model import PersonRecord, Schedule
+from class_schedule.solver import SolverConfig
 
 
 class VersionTests(unittest.TestCase):
+    def test_worst_overload_excludes_the_configured_tolerance(self):
+        schedule = Schedule.from_records([{
+            "Subject": "MATH", "Number": "1113", "Section": "001",
+            "Instructor": "Alice", "Time Slot": "MWF 9:00am",
+            "Duration": 50, "Room": "101", "Building": "Corley",
+            "Credits": 13,
+        }])
+        config = SolverConfig(
+            persons={"Alice": PersonRecord(name="Alice", max_load=12)},
+            preferences={}, meeting_patterns=[], rooms=[],
+        )
+
+        self.assertEqual(worst_overload(schedule, config), 0)
+
     def test_next_version_ignores_unrelated_entries(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -120,7 +137,7 @@ class RunTermTests(unittest.TestCase):
                 initial_path=input_path,
                 output_root=root / "out",
                 config_dir="config",
-                attempts=1,
+                attempts=3,
                 time_limit_seconds=5,
             )
 
@@ -139,6 +156,10 @@ class RunTermTests(unittest.TestCase):
             self.assertTrue(bundle.applied_changes_path.exists())
             manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["schema_version"], 4)
+            self.assertEqual(manifest["solver"]["search_workers"], 8)
+            self.assertEqual(manifest["solver"]["attempts_requested"], 3)
+            self.assertEqual(manifest["solver"]["attempts_run"], 1)
+            self.assertEqual(len(bundle.attempts), 1)
             self.assertEqual(manifest["initial_baseline"]["path"], str(input_path))
             self.assertEqual(manifest["initial_baseline"]["snapshot"], "baseline.csv")
             self.assertIn("baseline.csv", manifest["files"])

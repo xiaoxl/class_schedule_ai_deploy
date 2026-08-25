@@ -1,0 +1,2 @@
+Attempt,Status,Objective,BestBound,SolveSeconds,CandidateCount,SearchWorkers,SoftPenalty,SoftFindings,HardViolations,WorstOverload,Error
+1,optimal,-1465.0,-1465.0,2.0288443000000003,5496,8,10.0,2,0,0.0,

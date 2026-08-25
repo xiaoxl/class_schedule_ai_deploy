@@ -15,6 +15,7 @@ import pandas as pd
 
 from .schedule_model import (
     HardViolation,
+    OVERLOAD_TOLERANCE,
     Schedule,
     SoftFinding,
     evaluate_schedule,
@@ -29,8 +30,10 @@ from .overrides import (
     validate_override_context,
 )
 from .solver import (
+    DEFAULT_SEARCH_WORKERS,
     InfeasibleSchedule,
     SolveResult,
+    SolveStatus,
     SolveTimeout,
     SolverConfig,
     diff_schedules,
@@ -83,7 +86,10 @@ class RunBundle:
 def worst_overload(schedule: Schedule, config: SolverConfig) -> float:
     loads = teaching_loads(schedule)
     return max(
-        (max(0.0, loads.get(name, 0.0) - person.max_load)
+        (max(
+            0.0,
+            loads.get(name, 0.0) - person.max_load - OVERLOAD_TOLERANCE,
+        )
          for name, person in config.persons.items()),
         default=0.0,
     )
@@ -233,6 +239,7 @@ def publish_final(
     config_dir: str | Path = "config",
     attempts: int = 5,
     time_limit_seconds: float = 45.0,
+    search_workers: int = DEFAULT_SEARCH_WORKERS,
 ) -> RunBundle:
     """Apply a version's embedded overrides and atomically refresh ``final``."""
     source_path = version_schedule_path(term, from_version, output_root=output_root)
@@ -259,6 +266,7 @@ def publish_final(
         version="final",
         attempts=attempts,
         time_limit_seconds=time_limit_seconds,
+        search_workers=search_workers,
         overrides_path=overrides_path,
         parent=from_version,
         baseline_path=baseline_path,
@@ -355,6 +363,7 @@ def _attempt_rows(attempts: tuple[Attempt, ...]) -> list[dict[str, object]]:
             "BestBound": result.best_bound if result else None,
             "SolveSeconds": result.solve_seconds if result else None,
             "CandidateCount": result.candidate_count if result else None,
+            "SearchWorkers": result.search_workers if result else None,
             "SoftPenalty": attempt.soft_penalty,
             "SoftFindings": len(attempt.soft_findings),
             "HardViolations": len(attempt.hard_violations),
@@ -415,7 +424,9 @@ def _report(
         f"Configuration version: `{config.version or 'unversioned'}`",
         "",
         f"Ran {len(attempts)} independent attempt(s), each with a "
-        f"{per_attempt_seconds:g}s CP-SAT budget. Selected attempt {best.number} "
+        f"{per_attempt_seconds:g}s CP-SAT budget and "
+        f"{best.result.search_workers} search worker(s). "
+        f"Selected attempt {best.number} "
         "by lowest worst instructor overload, then lowest solver objective, "
         "then lowest reported soft penalty.",
         "",
@@ -426,6 +437,7 @@ def _report(
         f"- Best objective bound: {_fmt(best.result.best_bound)}",
         f"- Solve time: {_fmt(best.result.solve_seconds)} seconds",
         f"- Candidate assignments: {best.result.candidate_count}",
+        f"- CP-SAT search workers: {best.result.search_workers}",
         f"- Hard violations: {len(best.hard_violations)}",
         f"- Soft penalty: {_fmt(best.soft_penalty)} ({len(best.soft_findings)} findings)",
         f"- Worst instructor overload: {_fmt(best.worst_overload)} credit hours",
@@ -513,6 +525,7 @@ def run_term(
     version: str | None = None,
     attempts: int = 5,
     time_limit_seconds: float = 45.0,
+    search_workers: int = DEFAULT_SEARCH_WORKERS,
     overrides_path: str | Path | None = None,
     changes_path: str | Path | None = None,
     initial_path: str | Path | None = None,
@@ -525,6 +538,8 @@ def run_term(
         raise ValueError("attempts must be at least 1")
     if time_limit_seconds <= 0:
         raise ValueError("time_limit_seconds must be positive")
+    if search_workers < 1:
+        raise ValueError("search_workers must be at least 1")
 
     output_root = Path(output_root)
     term_dir = output_root / term
@@ -629,15 +644,32 @@ def run_term(
             result = solve_detailed(
                 adjusted_input, config, time_limit_seconds=time_limit_seconds,
                 locks=overrides.locks,
+                search_workers=search_workers,
             )
-            attempt_results.append(_evaluate_attempt(number, result, config))
+            attempt = _evaluate_attempt(number, result, config)
+            attempt_results.append(attempt)
+            if result.status is SolveStatus.OPTIMAL and not attempt.hard_violations:
+                break
         except SolveTimeout as error:
             attempt_results.append(Attempt(number, None, None, error=str(error)))
         except InfeasibleSchedule:
             raise
 
-    successful = [attempt for attempt in attempt_results if attempt.result is not None]
+    successful = [
+        attempt for attempt in attempt_results
+        if attempt.result is not None and not attempt.hard_violations
+    ]
     if not successful:
+        hard_messages = [
+            violation.message
+            for attempt in attempt_results
+            for violation in attempt.hard_violations
+        ]
+        if hard_messages:
+            raise InfeasibleSchedule(
+                "Every solve attempt returned an invalid schedule: "
+                + "; ".join(dict.fromkeys(hard_messages))
+            )
         raise SolveTimeout("Every solve attempt expired before finding a feasible schedule")
     best = min(successful, key=lambda attempt: attempt.ranking)
     attempts_tuple = tuple(attempt_results)
@@ -770,7 +802,10 @@ def run_term(
                 "best_bound": best.result.best_bound,
                 "random_seed": best.result.random_seed,
                 "time_limit_seconds": time_limit_seconds,
-                "attempts": attempts,
+                "search_workers": best.result.search_workers,
+                "attempts": len(attempts_tuple),
+                "attempts_requested": attempts,
+                "attempts_run": len(attempts_tuple),
             },
             "validation": {
                 "hard_violations": len(best.hard_violations),

@@ -36,6 +36,7 @@ class SolveResult:
     candidate_count: int
     config_version: str
     random_seed: int = 0
+    search_workers: int = 1
 
 
 @dataclass(frozen=True)

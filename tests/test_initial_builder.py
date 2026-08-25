@@ -179,6 +179,7 @@ class RecolorPlaceholderTests(unittest.TestCase):
         schedule = Schedule([a, b, c])
         recolored, assignments = recolor_placeholder(schedule, seed=1)
         self.assertEqual(len(assignments), 3)
+        self.assertEqual(list(assignments), ["Staff", "Staff 2", "Staff 3"])
         self.assertEqual(check_conflicts(recolored), [])
 
     def test_a_real_instructors_class_is_left_untouched(self):

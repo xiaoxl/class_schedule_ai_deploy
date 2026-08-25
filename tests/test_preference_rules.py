@@ -13,7 +13,10 @@ from class_schedule.schedule_model import (
     load_global_rules,
     load_preferences,
 )
-from class_schedule.solver.config import load_staff_count_weight
+from class_schedule.solver.config import (
+    load_staff_count_weight,
+    load_staff_credit_weight,
+)
 
 
 def make_section(**overrides) -> Section:
@@ -264,10 +267,20 @@ class LoadPreferencesNewFieldsTests(unittest.TestCase):
         self.addCleanup(path.unlink)
         self.assertEqual(load_staff_count_weight(path), 75)
 
-    def test_staff_count_weight_defaults_to_100(self):
+    def test_staff_count_weight_defaults_to_10(self):
         path = write_toml("")
         self.addCleanup(path.unlink)
-        self.assertEqual(load_staff_count_weight(path), 100)
+        self.assertEqual(load_staff_count_weight(path), 10)
+
+    def test_parses_global_staff_credit_weight(self):
+        path = write_toml("staff_credit_weight = 25\n")
+        self.addCleanup(path.unlink)
+        self.assertEqual(load_staff_credit_weight(path), 25)
+
+    def test_staff_credit_weight_defaults_to_5(self):
+        path = write_toml("")
+        self.addCleanup(path.unlink)
+        self.assertEqual(load_staff_credit_weight(path), 5)
 
     def test_parses_tc_web_rule_and_max_back_to_back(self):
         path = write_toml("""

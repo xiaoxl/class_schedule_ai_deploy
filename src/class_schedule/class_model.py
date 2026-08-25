@@ -16,7 +16,7 @@ from __future__ import annotations
 import datetime
 from enum import StrEnum
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import ClassVar
 
 from . import record_utils
@@ -309,6 +309,20 @@ class SpecialClass(NormalClass):
 class FourCreditClass(SpecialClass):
     """Two same-course rows: one MWF, one T or R, same instructor."""
 
+    MAX_START_DIFFERENCE_MINUTES: ClassVar[int] = 90
+    schedule_issues: tuple[str, ...] = field(init=False, default=())
+
+    def __post_init__(self) -> None:
+        super(FourCreditClass, self).__post_init__()
+        difference = self.start_difference_minutes(*self.sections)
+        self.schedule_issues = (
+            (
+                f"{self.course_ids[0]} four-credit meetings start "
+                f"{difference} minutes apart; maximum is "
+                f"{self.MAX_START_DIFFERENCE_MINUTES} minutes"
+            ),
+        ) if difference > self.MAX_START_DIFFERENCE_MINUTES else ()
+
     def validate(self) -> None:
         super(FourCreditClass, self).validate()
         left, right = self.sections
@@ -331,6 +345,24 @@ class FourCreditClass(SpecialClass):
         if left.instructor != right.instructor:
             return False
         return {left.days, right.days} in ({"MWF", "T"}, {"MWF", "R"})
+
+    @staticmethod
+    def start_difference_minutes(left: Section, right: Section) -> int:
+        """Absolute difference between the two physical start times."""
+        if left.start is None or right.start is None:
+            return 0
+        left_minutes = left.start.hour * 60 + left.start.minute
+        right_minutes = right.start.hour * 60 + right.start.minute
+        return abs(left_minutes - right_minutes)
+
+    @classmethod
+    def is_valid_schedule(cls, left: Section, right: Section) -> bool:
+        """Strict pairing rule used when generating an adjusted schedule."""
+        return (
+            cls.is_four_credit(left, right)
+            and cls.start_difference_minutes(left, right)
+            <= cls.MAX_START_DIFFERENCE_MINUTES
+        )
 
     def change_time(
         self, time_slot: str, *, record: int | None = None

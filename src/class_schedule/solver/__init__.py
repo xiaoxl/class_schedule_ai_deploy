@@ -13,7 +13,7 @@ from .config import (
     load_rooms,
 )
 from .constraints import HARD_LOAD_CAP_TOLERANCE
-from .engine import solve, solve_detailed
+from .engine import DEFAULT_SEARCH_WORKERS, solve, solve_detailed
 from .result import diff_schedules
 from .types import (
     InfeasibleSchedule,
@@ -29,6 +29,7 @@ from .types import (
 
 __all__ = [
     "HARD_LOAD_CAP_TOLERANCE",
+    "DEFAULT_SEARCH_WORKERS",
     "INSTRUCTOR_CHANGE_COST",
     "InfeasibleSchedule",
     "MAX_CANDIDATES_PAIRED_SECTION",

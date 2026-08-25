@@ -20,6 +20,7 @@ from .constraints import (
     add_load_terms,
     add_pairwise_validity_constraints,
     add_placeholder_count_terms,
+    add_placeholder_load_terms,
     add_scheduling_constraints,
     build_slots,
 )
@@ -33,6 +34,9 @@ from .types import (
 )
 
 
+DEFAULT_SEARCH_WORKERS = 8
+
+
 def solve_detailed(
     schedule: Schedule,
     config: SolverConfig,
@@ -41,7 +45,10 @@ def solve_detailed(
     previous: Schedule | None = None,
     locks: LockMap | None = None,
     random_seed: int | None = None,
+    search_workers: int = DEFAULT_SEARCH_WORKERS,
 ) -> SolveResult:
+    if search_workers < 1:
+        raise ValueError("search_workers must be at least 1")
     placeholder_lock = False
     for (course_id, record), fields in (locks or {}).items():
         if "instructor" not in fields:
@@ -123,6 +130,10 @@ def solve_detailed(
         config.staff_count_weight, model,
         enforce_contiguous=not placeholder_lock,
     )
+    placeholder_terms.extend(add_placeholder_load_terms(
+        class_list, sections_by_class, candidates, chosen,
+        placeholder_instructors, config.staff_credit_weight,
+    ))
     candidate_terms = [
         candidate.cost * chosen[section_index][candidate_index]
         for section_index, values in enumerate(candidates)
@@ -162,7 +173,7 @@ def solve_detailed(
 
     cp_solver = cp_model.CpSolver()
     cp_solver.parameters.max_time_in_seconds = time_limit_seconds
-    cp_solver.parameters.num_search_workers = 1
+    cp_solver.parameters.num_search_workers = search_workers
     seed = random_seed or random.SystemRandom().randrange(1, 2**31 - 1)
     cp_solver.parameters.random_seed = seed
     status = cp_solver.solve(model)
@@ -190,6 +201,7 @@ def solve_detailed(
         candidate_count=sum(len(values) for values in candidates),
         config_version=config.version,
         random_seed=seed,
+        search_workers=search_workers,
     )
 
 
@@ -201,6 +213,7 @@ def solve(
     previous: Schedule | None = None,
     locks: LockMap | None = None,
     random_seed: int | None = None,
+    search_workers: int = DEFAULT_SEARCH_WORKERS,
 ) -> Schedule:
     return solve_detailed(
         schedule,
@@ -209,4 +222,5 @@ def solve(
         previous=previous,
         locks=locks,
         random_seed=random_seed,
+        search_workers=search_workers,
     ).schedule

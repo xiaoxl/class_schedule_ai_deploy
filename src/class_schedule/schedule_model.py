@@ -463,24 +463,23 @@ def _take_coreqs(
 # The reported/scored rules are:
 #   - within OVERLOAD_TOLERANCE credit hours over max_load: fine, not
 #     overload at all.
-#   - above that: one flat ``preference.overload_penalty``. For permissive
-#     instructors only, excess above OVERLOAD_FAR_THRESHOLD adds the second
-#     flat OVERLOAD_FAR_PENALTY.
+#   - above that: ``preference.overload_penalty`` for every credit hour past
+#     the tolerance. For permissive instructors only, excess above
+#     OVERLOAD_FAR_THRESHOLD adds the second flat OVERLOAD_FAR_PENALTY.
 #     An instructor with no preferences.toml entry defaults to a penalty
 #     of 0 (no opinion on record).
-#   - under max_load by any amount: one UNDER_LOAD_PENALTY soft finding.
+#   - under max_load: UNDER_LOAD_PENALTY_PER_CREDIT for each missing credit.
 OVERLOAD_TOLERANCE = 2.0
 # Same convention as OVERLOAD_TOLERANCE: the last credit-hour-over-max_load
 # value that does NOT trigger the extra penalty -- 4 is fine, 5 triggers
 # it (a strict "more than" comparison, exactly like OVERLOAD_TOLERANCE).
-# Stacked on the 10-point permissive overload cost, this makes a
-# permissive instructor above the far threshold cost 60 points.
+# This is stacked on the per-credit permissive overload cost.
 OVERLOAD_FAR_THRESHOLD = 4
 OVERLOAD_FAR_PENALTY = 50.0
 
 # Every penalty in this system shares one 0-100 scale. Named preferences
 # carry their own weights; these constants cover separate scheduling policies.
-UNDER_LOAD_PENALTY = 90.0
+UNDER_LOAD_PENALTY_PER_CREDIT = 30.0
 BACK_TO_BACK_PENALTY = 10.0
 
 
@@ -702,10 +701,9 @@ class PreferenceRecord:
 
     ``allow_overload`` is this instructor's overload tolerance: ``True``
     means fine with it, ``False`` means avoid it (still soft -- see the
-    module comment above OVERLOAD_TOLERANCE). ``overload_penalty`` derives
-    the actual flat scoring penalty from it -- 10 when ``allow_overload``
-    is ``True``, 100 (this system's practical ceiling) when it's
-    ``False``.
+    module comment above OVERLOAD_TOLERANCE). ``overload_penalty`` is the
+    per-credit cost past the tolerance -- 10 when ``allow_overload`` is
+    ``True``, 100 when it's ``False``.
 
     Flat named rules carry every selector-based preference and its weight.
 
@@ -961,8 +959,8 @@ def _overload_statuses(
     included at all -- it doesn't count as overload, so it's never
     reported by ``check_soft_preferences``. Everything this returns *is*
     overload, always soft -- ``penalty`` is ``preference.overload_penalty``
-    (``0.0`` when there's no preferences.toml entry for that instructor),
-    plus ``OVERLOAD_FAR_PENALTY`` on top when they're *also* more than
+    per credit past the tolerance (``0.0`` when there is no preference
+    profile), plus ``OVERLOAD_FAR_PENALTY`` on top when they're *also* more than
     ``OVERLOAD_FAR_THRESHOLD`` credit hours over their own max_load *and*
     ``allow_overload`` -- see the module comment above
     ``OVERLOAD_TOLERANCE``. Mirrors ``solver/constraints.py``'s load model
@@ -978,7 +976,10 @@ def _overload_statuses(
         if excess <= OVERLOAD_TOLERANCE:
             continue
         preference = preferences.get(instructor)
-        penalty = preference.overload_penalty if preference else 0.0
+        penalty = (
+            preference.overload_penalty * (excess - OVERLOAD_TOLERANCE)
+            if preference else 0.0
+        )
         if preference is not None and preference.allow_overload and excess > OVERLOAD_FAR_THRESHOLD:
             penalty += OVERLOAD_FAR_PENALTY
         statuses.append(_OverloadStatus(
@@ -1035,6 +1036,19 @@ def check_conflicts(schedule: "Schedule") -> list[HardViolation]:
                     f"{a.instructor} at an overlapping time "
                     f"({a.time_slot} / {b.time_slot})",
                 ))
+    return violations
+
+
+def check_atomic_class_rules(schedule: "Schedule") -> list[HardViolation]:
+    """Report nonfatal construction issues that adjustment must repair."""
+    violations: list[HardViolation] = []
+    for item in schedule:
+        if not isinstance(item, FourCreditClass):
+            continue
+        violations.extend(
+            HardViolation("four_credit_time_gap", item.course_ids[0], message)
+            for message in item.schedule_issues
+        )
     return violations
 
 
@@ -1141,12 +1155,13 @@ def check_soft_preferences(
     loads = teaching_loads(schedule)
     for instructor, person in sorted(persons.items()):
         load = loads.get(instructor, 0.0)
-        if load < person.max_load:
+        deficit = person.max_load - load
+        if deficit > 0:
             findings.append(SoftFinding(
                 "under_load", instructor,
                 f"{instructor}: {load:g} credit hours is under max_load "
                 f"{person.max_load:g}",
-                UNDER_LOAD_PENALTY,
+                deficit * UNDER_LOAD_PENALTY_PER_CREDIT,
             ))
 
     sections = [
@@ -1234,7 +1249,8 @@ def evaluate_schedule(
         row_count=len(schedule.to_records()),
         loads=teaching_loads(schedule),
         hard_violations=tuple(
-            check_conflicts(schedule)
+            check_atomic_class_rules(schedule)
+            + check_conflicts(schedule)
             + check_meeting_patterns(schedule, meeting_patterns)
             + check_constraint_rules(schedule, constraint_rules)
         ),

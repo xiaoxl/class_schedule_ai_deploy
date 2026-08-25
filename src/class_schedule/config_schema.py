@@ -160,7 +160,8 @@ class InstructorPreferenceSchema(StrictModel):
 
 
 class PreferencesFileSchema(StrictModel):
-    staff_count_weight: float = Field(default=100, ge=0, le=100)
+    staff_count_weight: float = Field(default=10, ge=0, le=100)
+    staff_credit_weight: float = Field(default=5, ge=0, le=100)
     instructors: list[InstructorPreferenceSchema] = Field(default_factory=list)
     rules: list[FlatPreferenceRuleSchema] = Field(default_factory=list)
 

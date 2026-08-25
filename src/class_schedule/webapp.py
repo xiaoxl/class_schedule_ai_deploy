@@ -46,8 +46,8 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 LOG_PATH = Path("output/logs/webapp.log")
 
 # A soft finding's penalty at or above this is rendered orange in the UI
-# (under_load, always weighted 90, a strict instructor's overload (flat
-# 100), a permissive one past OVERLOAD_FAR_THRESHOLD (10+50=60), and a
+# (an under_load of at least one credit, a strict instructor's first credit
+# past tolerance (100), a permissive one past OVERLOAD_FAR_THRESHOLD, and a
 # strongly weighted "dislike" PreferenceRule, land here); below it is
 # yellow (back_to_back and mildly weighted preferences, a permissive
 # instructor's ordinary overload (10), and a mildly weighted

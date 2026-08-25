@@ -1,0 +1,92 @@
+{
+  "schema_version": 4,
+  "term": "27S",
+  "version": "ver12",
+  "parent": null,
+  "created_at": "2026-08-25T04:41:56.475668+00:00",
+  "input": {
+    "path": "work\\27S\\initial\\initial.csv",
+    "sha256": "4ba0fe1017d0f01f658321a40b6cf9abd4796429963e0ce3d32d3bfcc0bb798c"
+  },
+  "initial_baseline": {
+    "path": "work\\27S\\initial\\initial.csv",
+    "sha256": "4ba0fe1017d0f01f658321a40b6cf9abd4796429963e0ce3d32d3bfcc0bb798c",
+    "snapshot": "baseline.csv",
+    "role": "initial"
+  },
+  "configuration": {
+    "version": "7ad1debafa9f",
+    "files": [
+      {
+        "path": "config\\persons.toml",
+        "sha256": "1f4dc9ca76de01c0c23bd9adb8a481e9e3e84dca2eb4e294c190a3b09e2ff6d0"
+      },
+      {
+        "path": "config\\preferences.toml",
+        "sha256": "26fd036e4f335dcce85159e5200159e43b142a9b35c74f74051361840391218d"
+      },
+      {
+        "path": "config\\timeslot.toml",
+        "sha256": "82da472fd28503e5d7024fc534b9da881828334f0c1a7443afd609e1f33897ce"
+      },
+      {
+        "path": "config\\locations.toml",
+        "sha256": "a7793c98d7dce6425530886a73d9ac47e5f5909570b413c76378c22c6bd26f34"
+      },
+      {
+        "path": "config\\terms\\27S\\constraints.toml",
+        "sha256": "3ff1bbe63151233c1a8e4c46363de3e833306d3d00d9516557b14a086ca47036"
+      }
+    ]
+  },
+  "term_changes": {
+    "path": "inputs\\27S\\changes.toml",
+    "sha256": "a8141ee9088bd14920af2cc07b324a68f7b4118c0382a52b83dba6d4217e31bc",
+    "scope": "cancel_courses",
+    "configured_cancels": [
+      {
+        "subject": "MATH",
+        "number": "3203",
+        "section": null
+      },
+      {
+        "subject": "MATH",
+        "number": "4993",
+        "section": null
+      }
+    ],
+    "cancelled_course_validation": "passed",
+    "snapshot": "applied_changes.toml"
+  },
+  "applied_overrides_sha256": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c",
+  "override_workspace": {
+    "path": "overrides.toml",
+    "mutable": true,
+    "source_version": "ver12"
+  },
+  "selected_attempt": 5,
+  "solver": {
+    "status": "feasible",
+    "objective": -600.0,
+    "best_bound": -1665.0,
+    "random_seed": 548158840,
+    "time_limit_seconds": 45.0,
+    "attempts": 5
+  },
+  "validation": {
+    "hard_violations": 0,
+    "soft_penalty": 100.0,
+    "worst_overload": 2.0
+  },
+  "files": {
+    "27S_ver12.csv": "1229b487fe6f46da6a0cfa014abcbb4ee9942bb7cf4a9a37b1e97c2bc6597648",
+    "27S_ver12_instructor.xlsx": "a3a1e38f6852e8a9c2d502bd5e0e03de4108b073dda32117565e0c7934545fdb",
+    "27S_ver12_room.xlsx": "2f867c91f34077b66915d93af020d20b5f22a85fc1004a48aaadb438c3de91a5",
+    "report.md": "9af1e5932cf69b06866078a710cebcc0f7745c4cbb0d77ad3d14343768d07f00",
+    "attempts.csv": "ea0ac226ec9a0249c0ce527dc9e4d9708179090a7d18df998a843e218f18d50a",
+    "changes.csv": "2c6de9af7460d0908f38d53eee31b5d7c9ae045e5a775a3862fa4efabf5a516b",
+    "baseline.csv": "4ba0fe1017d0f01f658321a40b6cf9abd4796429963e0ce3d32d3bfcc0bb798c",
+    "applied_overrides.toml": "ed90e47f4f672b3c3f80936282c75c16a559f6adf0eed180ab8ae61145e5816c",
+    "applied_changes.toml": "a8141ee9088bd14920af2cc07b324a68f7b4118c0382a52b83dba6d4217e31bc"
+  }
+}

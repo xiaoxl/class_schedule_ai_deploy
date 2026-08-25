@@ -88,6 +88,26 @@ class FourCreditClassTests(unittest.TestCase):
         right = make_section(time_slot="T 9:00am", duration=75)
         self.assertFalse(FourCreditClass.is_four_credit(left, right))
 
+    def test_large_time_gap_constructs_with_a_schedule_issue(self):
+        left = make_section(time_slot="MWF 8:00am")
+        right = make_section(time_slot="T 1:00pm", duration=80)
+
+        item = FourCreditClass((left, right))
+
+        self.assertTrue(FourCreditClass.is_four_credit(left, right))
+        self.assertFalse(FourCreditClass.is_valid_schedule(left, right))
+        self.assertEqual(len(item.schedule_issues), 1)
+        self.assertIn("300 minutes apart", item.schedule_issues[0])
+
+    def test_ninety_minute_time_gap_is_valid(self):
+        left = make_section(time_slot="MWF 8:00am")
+        right = make_section(time_slot="R 9:30am", duration=80)
+
+        item = FourCreditClass((left, right))
+
+        self.assertTrue(FourCreditClass.is_valid_schedule(left, right))
+        self.assertEqual(item.schedule_issues, ())
+
 
 class HybridClassTests(unittest.TestCase):
     def test_m_prefixed_physical_and_tba_pair_is_hybrid(self):

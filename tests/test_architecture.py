@@ -124,6 +124,18 @@ class SolverArchitectureTests(unittest.TestCase):
         self.assertIn(result.status, (SolveStatus.OPTIMAL, SolveStatus.FEASIBLE))
         self.assertGreater(result.candidate_count, 0)
         self.assertEqual(result.config_version, "test-config")
+        self.assertEqual(result.search_workers, 8)
+
+    def test_solver_rejects_nonpositive_worker_count(self):
+        section = Section(
+            "MATH", "1113", "001", "MWF 9:00am", 50, "101", "Alice",
+            building="Corley",
+        )
+        with self.assertRaisesRegex(ValueError, "search_workers"):
+            solve_detailed(
+                Schedule([NormalClass((section,))]), self._config(),
+                search_workers=0,
+            )
 
 
 if __name__ == "__main__":

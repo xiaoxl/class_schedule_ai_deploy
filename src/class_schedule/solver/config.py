@@ -134,6 +134,12 @@ def load_staff_count_weight(path: str | Path) -> float:
     return raw.staff_count_weight
 
 
+def load_staff_credit_weight(path: str | Path) -> float:
+    with open(path, "rb") as handle:
+        raw = PreferencesFileSchema.model_validate(tomllib.load(handle))
+    return raw.staff_credit_weight
+
+
 @dataclass(frozen=True)
 class SolverConfig:
     persons: dict[str, PersonRecord]
@@ -141,7 +147,8 @@ class SolverConfig:
     meeting_patterns: list[MeetingPattern]
     rooms: list[RoomRecord]
     global_rules: tuple[PreferenceRule, ...] = ()
-    staff_count_weight: float = 100.0
+    staff_count_weight: float = 10.0
+    staff_credit_weight: float = 5.0
     constraint_rules: tuple[ConstraintRule, ...] = ()
     version: str = ""
     source_paths: tuple[str, ...] = ()
@@ -161,6 +168,9 @@ class SolverConfig:
             rooms=load_rooms(resolved["locations.toml"]),
             global_rules=load_global_rules(resolved["preferences.toml"]),
             staff_count_weight=load_staff_count_weight(
+                resolved["preferences.toml"]
+            ),
+            staff_credit_weight=load_staff_credit_weight(
                 resolved["preferences.toml"]
             ),
             constraint_rules=constraint_rules,

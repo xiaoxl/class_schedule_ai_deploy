@@ -130,7 +130,8 @@ TR 网格；显式课程 pattern 的优先级避免错误生成通用 MWF/TR 候
 这是学期数据，不是人员合同事实。
 
 ```toml
-staff_count_weight = 100
+staff_count_weight = 10
+staff_credit_weight = 5
 
 # Xiao, Xinli
 [[instructors]]
@@ -164,6 +165,10 @@ weight = 20
 
 - `staff_count_weight` 是每个实际使用的 `Staff`/`Staff N` 身份的全局成本，范围
   `0-100`。值越高，求解器越愿意调整时间来合并 Staff；硬冲突仍可迫使它增加身份。
+- `staff_credit_weight` 是留给 `Staff`/`Staff N` 的每学分成本，范围 `0-100`。
+  它控制占位池的总教学量；默认 5 表示一门 3 学分课成本 15。欠载每缺一学分
+  成本 30，因此系统优先补足有资格教师；超过容忍负载后，超载成本会逐学分增加，
+  从而在继续超载与保留 Staff 之间取得平衡。
 - `[[instructors]]` 是人员 profile，只存 `allow_overload` 和连排参数；`name`
   必须存在于 persons。
 - `allow_overload` 只改变超载软惩罚，不解除求解器绝对负载上界。

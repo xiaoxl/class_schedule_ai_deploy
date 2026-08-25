@@ -20,7 +20,7 @@ from ..schedule_model import (
     OVERLOAD_FAR_PENALTY,
     OVERLOAD_FAR_THRESHOLD,
     OVERLOAD_TOLERANCE,
-    UNDER_LOAD_PENALTY,
+    UNDER_LOAD_PENALTY_PER_CREDIT,
     PersonRecord,
     PreferenceRecord,
 )
@@ -64,9 +64,28 @@ def add_placeholder_count_terms(
     return objective_terms
 
 
+def add_placeholder_load_terms(
+    class_list: list[Class],
+    sections_by_class: dict[int, list[int]],
+    candidates: list[list[SectionCandidate]],
+    chosen: list[list[cp_model.IntVar]],
+    placeholder_instructors: tuple[str, ...],
+    weight: float,
+) -> list[cp_model.LinearExpr]:
+    """Penalize each credit hour assigned to the placeholder pool."""
+    placeholders = set(placeholder_instructors)
+    return [
+        item.credit_hours * weight * chosen[primary][candidate_index]
+        for class_index, item in enumerate(class_list)
+        for primary in (sections_by_class[class_index][0],)
+        for candidate_index, candidate in enumerate(candidates[primary])
+        if candidate.instructor in placeholders and item.credit_hours
+    ]
+
+
 def predicate_for(item: Class):
     if isinstance(item, FourCreditClass):
-        return FourCreditClass.is_four_credit
+        return FourCreditClass.is_valid_schedule
     if isinstance(item, HybridClass):
         return HybridClass.is_hybrid
     if isinstance(item, CoreqClass):
@@ -171,6 +190,7 @@ def add_scheduling_constraints(
     by_room_day: dict[tuple[str, str], list[int]] = {}
     by_instructor_day: dict[tuple[str, str], list[int]] = {}
     intervals: list = [None] * len(slots)
+    forbidden_pairs: set[tuple[tuple[int, int], tuple[int, int]]] = set()
     for index, slot in enumerate(slots):
         start = slot.start.hour * 60 + slot.start.minute
         end = slot.end.hour * 60 + slot.end.minute
@@ -204,6 +224,12 @@ def add_scheduling_constraints(
                 if right_index == left_index or right.class_index == left.class_index:
                     continue
                 if left.start < right.end and right.start < left.end:
+                    left_key = (left.section, left.candidate)
+                    right_key = (right.section, right.candidate)
+                    pair = tuple(sorted((left_key, right_key)))
+                    if pair in forbidden_pairs:
+                        continue
+                    forbidden_pairs.add(pair)
                     model.add_bool_or([
                         chosen[left.section][left.candidate].Not(),
                         chosen[right.section][right.candidate].Not(),
@@ -307,10 +333,11 @@ def add_load_terms(
         preference = preferences.get(instructor)
         penalty = preference.overload_penalty if preference else 0.0
         if penalty:
-            overloaded = model.new_bool_var(f"overload_{instructor}")
-            model.add(total > limit).only_enforce_if(overloaded)
-            model.add(total <= limit).only_enforce_if(overloaded.Not())
-            objective_terms.append(penalty * overloaded)
+            excess = model.new_int_var(
+                0, hard_cap - limit, f"overload_{instructor}"
+            )
+            model.add(excess >= total - limit)
+            objective_terms.append((penalty / scale) * excess)
             if preference.allow_overload:
                 far_limit = int(round(
                     (person.max_load + OVERLOAD_FAR_THRESHOLD) * scale
@@ -319,8 +346,9 @@ def add_load_terms(
                 model.add(total > far_limit).only_enforce_if(far_over)
                 model.add(total <= far_limit).only_enforce_if(far_over.Not())
                 objective_terms.append(OVERLOAD_FAR_PENALTY * far_over)
-        under = model.new_bool_var(f"under_load_{instructor}")
-        model.add(total < target).only_enforce_if(under)
-        model.add(total >= target).only_enforce_if(under.Not())
-        objective_terms.append(UNDER_LOAD_PENALTY * under)
+        deficit = model.new_int_var(0, target, f"under_load_{instructor}")
+        model.add(deficit >= target - total)
+        objective_terms.append(
+            (UNDER_LOAD_PENALTY_PER_CREDIT / scale) * deficit
+        )
     return objective_terms

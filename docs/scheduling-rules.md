@@ -7,7 +7,10 @@
 double-booking。
 
 1. `FourCreditClass`：同一课程/section 的两行，一行 `MWF`、一行 `T` 或
-   `R`，同一教师。
+   `R`，同一教师。构造允许两个开始时间相差超过 90 分钟，以便旧输入仍能进入调整；
+   此时对象的 `schedule_issues` 会记录 `four_credit_time_gap` 信息。求解候选配对使用
+   `is_valid_schedule()`，只允许开始时间差不超过 90 分钟，最终评估把未修复的信息报告
+   为硬违规。
 2. `HybridClass`：section 以 `M` 或 `F` 开头，并有一条实际时间和 room 完整的
    物理会议。导入可以只有这条物理行，也可以同时带有旧的无物理会议 companion；
    构造原子课时统一以物理行为权威，自动生成或重建 ONLINE companion。只有 room
@@ -120,12 +123,13 @@ CLI validate、求解尝试评估、版本报告和 Web API 都使用这组领�
 | 更换时间 | 5 |
 | 更换 building/room 组合 | 5 |
 | 每个实际启用的 `Staff`/`Staff N` 身份 | `+staff_count_weight` |
+| 留给 `Staff`/`Staff N` 的每学分 | `+staff_credit_weight` |
 | 正权重 rule 匹配 | `-weight` |
 | 负权重 rule 匹配 | `+abs(weight)` |
 | 不允许 back-to-back，或超过连续课上限 | 每处 10 |
-| 低于 `max_load` | 每位教师 90 |
-| 超过 `max_load + 2` 且 `allow_overload=true` | 10 |
-| 超过 `max_load + 2` 且 `allow_overload=false` | 100 |
+| 低于 `max_load` | 每缺少 1 学分 30 |
+| 超过 `max_load + 2` 且 `allow_overload=true` | 每超出 1 学分 10 |
+| 超过 `max_load + 2` 且 `allow_overload=false` | 每超出 1 学分 100 |
 | allow overload 且超过 `max_load + 4` | 额外 50 |
 所有偏好都写成扁平 `[[rules]]` 字典并显式携带 `weight`，范围为 `-100` 到 `100`
 且不可为 0；
@@ -145,6 +149,10 @@ penalty 中，但会出现在 solver objective 中。
 同一学期多次独立求解按以下顺序选优：最低 worst overload、最低 solver
 objective、最低 reported soft penalty。每次使用独立随机种子，种子写入
 manifest，时间预算按每次 attempt 单独计算。
+
+CP-SAT 默认使用 8 个并行 search workers；CLI 可用 `--workers N` 调整。需要严格复现
+单线程搜索路径时使用 `--workers 1`。某次 attempt 已返回 `optimal` 且通过硬规则复核后，
+后续 attempt 不再运行；`manifest.json` 同时记录请求次数与实际运行次数。
 
 ## 求解状态
 

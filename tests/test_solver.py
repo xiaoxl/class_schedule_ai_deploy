@@ -3,7 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from class_schedule.class_model import CrossListingClass, NormalClass, Section
+from class_schedule.class_model import (
+    CrossListingClass,
+    FourCreditClass,
+    NormalClass,
+    Section,
+)
 from class_schedule.schedule_model import (
     ConstraintRule,
     PersonRecord,
@@ -96,6 +101,42 @@ class SolveResolvesConflictsTests(unittest.TestCase):
         )
         solved = solve(schedule, config, time_limit_seconds=10.0)
         self.assertEqual(check_conflicts(solved), [])
+
+    def test_four_credit_candidates_repair_a_large_start_difference(self):
+        item = FourCreditClass((
+            make_section(
+                number="1914", section="001", time_slot="MWF 8:00am",
+                duration=50,
+            ),
+            make_section(
+                number="1914", section="001", time_slot="T 2:30pm",
+                duration=80,
+            ),
+        ))
+        config = empty_config(
+            meeting_patterns=[
+                MeetingPattern(
+                    days="MWF", duration_minutes=50,
+                    starts=(datetime.time(8),),
+                    roles=frozenset({"four_credit_primary"}),
+                ),
+                MeetingPattern(
+                    days="T", duration_minutes=80,
+                    starts=(datetime.time(8), datetime.time(14, 30)),
+                    roles=frozenset({"four_credit_partial"}),
+                ),
+            ],
+            rooms=[RoomRecord(building="Corley", room="101")],
+        )
+
+        solved = solve(Schedule([item]), config, time_limit_seconds=10.0)
+        result = solved.classes[0]
+
+        self.assertIsInstance(result, FourCreditClass)
+        self.assertEqual(result.schedule_issues, ())
+        self.assertLessEqual(
+            FourCreditClass.start_difference_minutes(*result.sections), 90
+        )
 
 
 class ConstraintRuleTests(unittest.TestCase):
@@ -274,6 +315,57 @@ class ConstraintRuleTests(unittest.TestCase):
 
 
 class SolveAdjustsPlaceholderCountTests(unittest.TestCase):
+    def test_staff_credit_cost_assigns_a_qualified_named_instructor(self):
+        item = NormalClass((make_section(
+            number="1113", instructor="Staff",
+        ),))
+        config = empty_config(
+            persons={
+                "Bob": PersonRecord(
+                    name="Bob", max_load=0, courses=("MATH 1113",),
+                ),
+            },
+            staff_count_weight=0,
+            staff_credit_weight=30,
+        )
+
+        solved = solve(Schedule([item]), config, time_limit_seconds=10.0)
+
+        self.assertEqual(
+            solved.get("MATH 1113-001").sections[0].instructor, "Bob"
+        )
+
+    def test_keeps_staff_when_assignment_would_exceed_load_tolerance(self):
+        fixed = NormalClass((make_section(
+            number="1005", section="001", instructor="Bob", credits=5,
+        ),))
+        open_class = NormalClass((make_section(
+            number="1113", section="002", instructor="Staff", credits=3,
+            time_slot="MWF 10:00am", room="102",
+        ),))
+        config = empty_config(
+            persons={
+                "Bob": PersonRecord(
+                    name="Bob", max_load=3,
+                    courses=("MATH 1005", "MATH 1113"),
+                ),
+            },
+            preferences={
+                "Bob": PreferenceRecord(name="Bob", allow_overload=True),
+            },
+            staff_count_weight=10,
+            staff_credit_weight=5,
+        )
+
+        solved = solve(
+            Schedule([fixed, open_class]), time_limit_seconds=10.0,
+            config=config,
+        )
+
+        self.assertEqual(
+            solved.get("MATH 1113-002").sections[0].instructor, "Staff"
+        )
+
     def test_collapses_numbered_staff_when_times_do_not_conflict(self):
         a = NormalClass((make_section(
             number="1113", section="001", instructor="Staff",
