@@ -1,41 +1,9 @@
-# 开课需求分析
+# Demand Analysis
 
-`class_schedule.section_demand` 将 schedule export 和 Cube1 人数表按 CRN
-连接，判断下一学期是否值得增加 section。它是 draft 之前的辅助决策，不
-直接修改排课。
+Demand analysis combines the grouped schedule with section headcounts to estimate additional section needs.
 
-```powershell
-uv run python -m class_schedule.section_demand `
-  "inputs/27S/Course Schedule Report.csv" inputs/27S/Cube1.xlsx `
-  -o work/27S/demand.csv
-```
+Course numbers remain text. Demand is grouped by domain-aware class identity rather than raw rows, so hybrid companions, cross-listed pairs, honors pairs, and corequisite structures do not inflate enrollment or capacity.
 
-schedule 侧需要 `Subject`、`Number`、`Section`、`Instructor`、`CRN`、`Seats_Avail`，
-并需要足够的时间/时长字段让 `Schedule` 完成原子分组。清洗后的
-`sections.csv` 使用 `Seats Available`，原始报表通常使用 `Seats_Avail`；
-命令同时接受两种名称。
+Rows without usable headcounts are excluded from numeric recommendations and reported separately. Online sections use configured default capacity when no physical room capacity applies.
 
-`Seats_Avail` 原值为 `seats_available / max_enrolled / room_capacity`，算法
-使用第三项 room capacity。缺少或无法解析该值时按 30 计算；这通常对应
-ONLINE/TBA/空时间记录，但物理课容量缺失也会进入同一 fallback，并计入输出的
-`OnlineSections` 字段，因此应在采用建议前检查源数据。
-
-Cube1 XLSX 不是普通表：程序寻找首列恰为 `CRN` 的行作为表头，跳过下一行
-子表头，从后续纯数字 CRN 行读取 `Course Start Date Headcount` 和
-`Final Headcount`，遇到非 CRN 行停止。规划使用开学人数，不使用期末人数。
-
-原子分组与排课一致，但汇总桶有以下含义：coreq 独立成
-`MATH 0803 / MATH 1003`；hybrid 独立标记；honors cross-list 并入普通课程；
-同一 CRN 只计一次。`P`、`ET`、`A` 开头的 concurrent section 被忽略。
-
-推荐公式为：
-
-```text
-avg_capacity_per_section = total_capacity / section_count
-projected_avg_enrollment = total_enrollment / (section_count + 1)
-needs_new_section = projected_avg_enrollment > 0.5 * avg_capacity_per_section
-```
-
-缺少 Cube1 匹配的 CRN 不按零人数静默处理，而会从 enrollment total 排除并
-列在警告中。将确认的新 section 手工写入 `inputs/<term>/changes.toml`，再
-进入 initial 构建流程。
+The report includes sections, enrollment, available seats, applicable capacity, and recommendations. Verify missing headcounts, unusual cross-listing, and term-specific policy before adding or canceling sections.

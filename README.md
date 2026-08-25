@@ -1,70 +1,61 @@
 # Class Schedule
 
-面向学期排课的离线流水线：清洗 CSV/XLSX，构造原子课程，应用学期变更和
-教师偏好，使用 OR-Tools CP-SAT 求解，再输出不可覆盖、可审计、便于手调的
-`out/<term>/verN/` 不可变版本目录，以及可重复刷新的 `out/<term>/final/` 发布目录。
+An auditable class-scheduling system that cleans CSV/XLSX input, builds atomic classes, applies term changes and instructor preferences, solves with OR-Tools CP-SAT, and publishes immutable versions.
 
-## 快速开始
+## Start the web interface
 
 ```powershell
-uv sync
+cd "D:\Codes\Projects\Projects 26\class_schedule_ai_deploy"
+uv run uvicorn class_schedule.webapp:app --host 127.0.0.1 --port 8000
+```
 
-uv run class-schedule --config config initialize 27S `
-  "inputs/27S/Course Schedule Report.csv"
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Import a starting CSV/XLSX schedule, edit it in Instructor, Room, or Course view, enter the term, and select **Save New Version**. Output is published to `out/<term>/verN/`.
 
-uv run class-schedule --config config initial 27S `
-  work/27S/draft/draft.csv inputs/27S/changes.toml
+See [the documentation home](docs/index.md) for the complete UI workflow.
 
-uv run class-schedule --config config solve 27S `
-  --input work/27S/initial/initial.csv --attempts 5 --seconds 45 --workers 8
+## Command-line workflow
 
-# 编辑 out/27S/ver10/overrides.toml，启用 edit/lock 后刷新 final
+```powershell
+uv run class-schedule --config config initialize 27S inputs/27S/source.xlsx
+uv run class-schedule --config config initial 27S
+uv run class-schedule --config config solve 27S
 uv run class-schedule --config config final 27S ver10
 ```
 
-`initialize` 在清洗的同时生成 change 前的 `work/27S/draft/draft.csv`，并直接从
-尚未应用 `changes.toml` 的原输入排课生成
-`inputs/27S/Course Schedule Report_instructor.xlsx` 和
-`inputs/27S/Course Schedule Report_room.xlsx`。这两份表是同一份 draft Schedule 的
-教师/教室视图，不是 initial 或 solver 结果。`initial` 才应用完整 changes；
-每一个正常 ver 都独立从同一份 initial 重新求解，不读取上一版 ver。
+`initialize` cleans the source and creates pre-change instructor and room views. `initial` applies the complete term changes. Each `solve` independently starts from the same initial schedule and creates a new immutable `verN`. `final` applies manual overrides to a selected version and refreshes a publishable final directory.
 
-`verN` 是不覆盖的自动求解快照；`final` 是从指定 ver 应用人工调整后可反复
-刷新的发布目录。空 override 不会生成 final。final 的 `changes.csv` 始终直接
-比较父 ver 保存的 `baseline.csv` 与最终 Schedule，因此中间变动会自动抵消或
-合并，而不是把 ver 和手调的两张 changes 表直接拼接。
-
-输出示例：
+Typical version contents include:
 
 ```text
 out/27S/ver10/
-  27S_ver10.csv
-  27S_ver10_instructor.xlsx
-  27S_ver10_room.xlsx
+  schedule.csv
+  schedule.xlsx
+  schedule_instructor.xlsx
+  schedule_room.xlsx
+  changes.csv
+  baseline.csv
+  applied_changes.toml
+  overrides.toml
+  applied_overrides.toml
   report.md
   attempts.csv
-  changes.csv              # 从 initial 到当前结果的化简累计变动
-  baseline.csv             # 不可变 initial 快照
-  applied_changes.toml     # 生成 initial 时使用的 changes 快照
-  overrides.toml          # 可编辑，随后用于刷新 final
-  applied_overrides.toml  # 生成本 ver 时实际使用的配置
   manifest.json
 ```
 
-## 文档
+## Documentation
 
-- [架构和完整流程](docs/index.md)
-- [如何清洗数据及规范格式](docs/data-cleaning.md)
-- [所有配置文件格式](docs/configuration.md)
-- [原子分组、硬规则、软规则和计分](docs/scheduling-rules.md)
-- [人工编辑、字段锁定、版本输出和比较](docs/manual-adjustments.md)
-- [开课需求分析](docs/demand-analysis.md)
+- [Architecture, startup, and workflow](docs/index.md)
+- [Data cleaning](docs/data-cleaning.md)
+- [Configuration](docs/configuration.md)
+- [Scheduling rules](docs/scheduling-rules.md)
+- [Manual adjustments and versioning](docs/manual-adjustments.md)
+- [Demand analysis](docs/demand-analysis.md)
+- [Deployment](DEPLOY.md)
 
-## 测试
+## Tests
 
 ```powershell
-uv run python -m unittest discover -s tests
+uv run python -m unittest discover -s tests -v
 ```
 
-`class-schedule` CLI 是离线生产入口。Web 界面仍是可部署的辅助入口，并与 CLI
-共享同一套 `Schedule`、solver、校验和 Excel 导出实现。
+The CLI and web interface share the same schedule model, solver, validation, version publisher, and Excel export implementation.
