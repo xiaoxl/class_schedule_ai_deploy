@@ -509,6 +509,21 @@ class CrossListingClass(SpecialClass):
         {"MATH 5173", "STAT 4173"},
     ]
 
+    @classmethod
+    def from_configured_sections(
+        cls, sections: tuple[Section, Section],
+    ) -> "CrossListingClass":
+        """Build an explicitly configured pair without a course whitelist."""
+        item = cls.__new__(cls)
+        item.sections = sections
+        SpecialClass.validate(item)
+        left, right = sections
+        if left.identity == right.identity:
+            raise ValueError("Configured cross-listing requires different identities")
+        if not cls.is_shared_meeting(left, right):
+            raise ValueError("Configured cross-listing rows must share one meeting")
+        return item
+
     def validate(self) -> None:
         super(CrossListingClass, self).validate()
         left, right = self.sections
@@ -586,6 +601,23 @@ class CoreqClass(SpecialClass):
         {"MATH 1113", "MATH 0903"},
         {"MATH 1113", "MATH 1110"},
     ]
+
+    @classmethod
+    def from_configured_sections(
+        cls, sections: tuple[Section, Section],
+    ) -> "CoreqClass":
+        """Build an explicitly configured pair while retaining coreq behavior."""
+        item = cls.__new__(cls)
+        item.sections = sections
+        SpecialClass.validate(item)
+        left, right = sections
+        if left.identity == right.identity:
+            raise ValueError("Configured coreq requires two different courses")
+        if not cls.is_valid_schedule(left, right):
+            raise ValueError(
+                "Configured coreq does not satisfy the CoreqClass schedule rules"
+            )
+        return item
 
     def validate(self) -> None:
         super(CoreqClass, self).validate()

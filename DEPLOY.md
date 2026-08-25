@@ -42,6 +42,7 @@ The application is stateless. Uploaded files and generated workbooks are
 processed in memory or temporary directories. `output/logs/webapp.log`
 is created at runtime and does not need to be copied between deployments.
 
-The four files under `config/` are production configuration. Update them
-before deployment when instructor preferences, rooms, or legal time slots
-change.
+Each directory under `config/` is an independent seven-file configuration
+package. The included production package is `config/27S/`. Copy the complete
+directory to create another package, and set `CLASS_SCHEDULE_CONFIG_PACKAGE`
+to choose the package loaded when the Web application starts.

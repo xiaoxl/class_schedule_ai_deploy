@@ -141,6 +141,21 @@ def version_schedule_path(
     return path
 
 
+def _bound_version_package(version_dir: Path, requested: str | None) -> str | None:
+    """Use a published version's package and reject an explicit mismatch."""
+    manifest_path = version_dir / "manifest.json"
+    if not manifest_path.is_file():
+        return requested
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    recorded = manifest.get("configuration", {}).get("package_id")
+    if recorded and requested and recorded != requested:
+        raise ValueError(
+            f"Configuration package {requested!r} does not match the source "
+            f"version package {recorded!r}"
+        )
+    return requested or recorded
+
+
 def create_override_template(
     term: str,
     from_version: str,
@@ -148,11 +163,17 @@ def create_override_template(
     output_path: str | Path | None = None,
     output_root: str | Path = "out",
     config_dir: str | Path = "config",
+    package: str | None = None,
 ) -> Path:
     """Generate a no-op, version-bound manual-revision TOML template."""
     source_path = version_schedule_path(term, from_version, output_root=output_root)
-    config = SolverConfig.load(config_dir, term=term)
-    schedule = read_schedule(source_path, persons=config.persons)
+    package = _bound_version_package(source_path.parent, package)
+    config = SolverConfig.load(config_dir, package=package or "27S")
+    schedule = read_schedule(
+        source_path, persons=config.persons,
+        relationships=tuple(config.courses.relationships) if config.courses else (),
+        catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
+    )
     destination = Path(
         output_path
         or source_path.parent / "overrides.toml"
@@ -173,9 +194,11 @@ def install_version_override_template(
     *,
     output_root: str | Path = "out",
     config_dir: str | Path = "config",
+    package: str | None = None,
 ) -> Path:
     """Install the mutable override workspace and preserve prior audit input."""
     source_path = version_schedule_path(term, version, output_root=output_root)
+    package = _bound_version_package(source_path.parent, package)
     version_dir = source_path.parent
     workspace = version_dir / "overrides.toml"
     applied = version_dir / "applied_overrides.toml"
@@ -187,8 +210,12 @@ def install_version_override_template(
                 "# No applied override file was recorded for this imported version.\n",
                 encoding="utf-8",
             )
-    config = SolverConfig.load(config_dir, term=term)
-    schedule = read_schedule(source_path, persons=config.persons)
+    config = SolverConfig.load(config_dir, package=package or "27S")
+    schedule = read_schedule(
+        source_path, persons=config.persons,
+        relationships=tuple(config.courses.relationships) if config.courses else (),
+        catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
+    )
     workspace.write_text(
         render_override_template(schedule, term=term, source_version=version),
         encoding="utf-8",
@@ -210,7 +237,9 @@ def install_version_override_template(
                     f"{recorded_baseline}"
                 )
             read_schedule(
-                recorded_baseline, persons=config.persons
+                recorded_baseline, persons=config.persons,
+                relationships=tuple(config.courses.relationships) if config.courses else (),
+                catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
             ).to_dataframe().to_csv(baseline_snapshot, index=False)
             baseline_info["snapshot"] = baseline_snapshot.name
             files[baseline_snapshot.name] = _sha256(baseline_snapshot)
@@ -237,12 +266,14 @@ def publish_final(
     *,
     output_root: str | Path = "out",
     config_dir: str | Path = "config",
+    package: str | None = None,
     attempts: int = 5,
     time_limit_seconds: float = 45.0,
     search_workers: int = DEFAULT_SEARCH_WORKERS,
 ) -> RunBundle:
     """Apply a version's embedded overrides and atomically refresh ``final``."""
     source_path = version_schedule_path(term, from_version, output_root=output_root)
+    package = _bound_version_package(source_path.parent, package)
     overrides_path = source_path.parent / "overrides.toml"
     if not overrides_path.is_file():
         raise FileNotFoundError(
@@ -263,6 +294,7 @@ def publish_final(
         input_path=source_path,
         output_root=output_root,
         config_dir=config_dir,
+        package=package,
         version="final",
         attempts=attempts,
         time_limit_seconds=time_limit_seconds,
@@ -522,6 +554,7 @@ def run_term(
     input_path: str | Path | None = None,
     output_root: str | Path = "out",
     config_dir: str | Path = "config",
+    package: str | None = None,
     version: str | None = None,
     attempts: int = 5,
     time_limit_seconds: float = 45.0,
@@ -596,7 +629,15 @@ def run_term(
                 "Every automatic ver must use the initial schedule as input; "
                 "use --historical-backfill only for explicit legacy reconstruction"
             )
-        recorded_changes, _ = _verified_initial(canonical_initial)
+        recorded_changes, initial_manifest = _verified_initial(canonical_initial)
+        initial_package = initial_manifest.get("configuration", {}).get("package_id")
+        requested_package = package or initial_package or "27S"
+        if initial_package and initial_package != requested_package:
+            raise ValueError(
+                f"Configuration package {requested_package!r} does not match the "
+                f"initial schedule package {initial_package!r}"
+            )
+        package = requested_package
         baseline_path = canonical_initial
         resolved_changes_path = Path(changes_path) if changes_path else recorded_changes
         if _sha256(resolved_changes_path) != _sha256(recorded_changes):
@@ -615,9 +656,12 @@ def run_term(
     ):
         raise ValueError("Automatic ver input and baseline must both be initial.csv")
 
-    config = SolverConfig.load(config_dir, term=term)
+    config = SolverConfig.load(config_dir, package=package or "27S")
+    relationships = tuple(config.courses.relationships) if config.courses else ()
+    catalogs = tuple(config.catalogs.courses) if config.catalogs else ()
     source_schedule = read_schedule(
-        input_path, persons=config.persons,
+        input_path, persons=config.persons, relationships=relationships,
+        catalogs=catalogs,
     )
     configured_cancels = ()
     if resolved_changes_path is not None:
@@ -632,7 +676,10 @@ def run_term(
             )
     baseline_schedule = (
         source_schedule if baseline_path.resolve() == input_path.resolve()
-        else read_schedule(baseline_path, persons=config.persons)
+        else read_schedule(
+            baseline_path, persons=config.persons, relationships=relationships,
+            catalogs=catalogs,
+        )
     )
     overrides = load_overrides(overrides_path) if overrides_path else OverrideFile()
     validate_override_context(overrides, term=term, source_version=parent)
@@ -697,6 +744,7 @@ def run_term(
                 "role": "initial",
             },
             "configuration": {
+                "package_id": config.package_id,
                 "version": config.version,
                 "files": [
                     {"path": name, "sha256": _sha256(Path(name))}

@@ -1,3 +1,8 @@
+# Configuration package: 27S
+# Term: Spring 2027
+# Department: MAPS
+# Program: Mathematics
+
 # Same [[rules]] selector fields as preferences.toml:
 #   name, course, section, section_prefix, room, time
 # This file is hard and has no weight.  `direction = "+"` requires the whole

@@ -19,11 +19,19 @@ from .term_builder import apply_cancellations, load_changes
 
 
 def _read_schedule(path: str | Path, config: SolverConfig):
-    return read_schedule(path, persons=config.persons)
+    return read_schedule(
+        path, persons=config.persons,
+        relationships=tuple(config.courses.relationships) if config.courses else (),
+        catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
+    )
+
+
+def _load_config(args: argparse.Namespace) -> SolverConfig:
+    return SolverConfig.load(args.config, package=args.package)
 
 
 def _clean(args: argparse.Namespace) -> int:
-    config = SolverConfig.load(args.config, term=args.term)
+    config = _load_config(args)
     output = Path(args.output or Path("work") / args.term / "normalized")
     result = clean_file(
         args.input, output, persons=config.persons,
@@ -33,7 +41,7 @@ def _clean(args: argparse.Namespace) -> int:
 
 
 def _initialize(args: argparse.Namespace) -> int:
-    config = SolverConfig.load(args.config, term=args.term)
+    config = _load_config(args)
     output = Path(args.output or Path("work") / args.term / "normalized")
     result = initialize_input(
         args.input, output, persons=config.persons, draft_path=args.draft_output,
@@ -57,7 +65,7 @@ def _initialize(args: argparse.Namespace) -> int:
 
 
 def _draft(args: argparse.Namespace) -> int:
-    config = SolverConfig.load(args.config, term=args.term)
+    config = _load_config(args)
     schedule = _read_schedule(args.input, config)
     output = Path(args.output or Path("work") / args.term / "draft" / "draft.csv")
     publish_draft(schedule, output)
@@ -69,11 +77,17 @@ def _initial(args: argparse.Namespace) -> int:
     output = Path(args.output or Path("work") / args.term / "initial")
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite initial result: {output}")
-    config = SolverConfig.load(args.config, term=args.term)
-    persons_path = resolve_config_paths(args.config, args.term)["persons.toml"]
+    config = _load_config(args)
+    persons_path = resolve_config_paths(
+        args.config, args.package
+    )["persons.toml"]
     results = build_initial_schedules(
         args.input, args.changes, persons_path, output_dir=output, seed=args.seed,
         meeting_patterns=config.meeting_patterns,
+        configuration={
+            "package_id": config.package_id,
+            "version": config.version,
+        },
     )
     for label, result in results.items():
         print_initial_result(label, result)
@@ -96,6 +110,7 @@ def _solve(args: argparse.Namespace) -> int:
         parent=args.parent, baseline_path=args.baseline,
         historical_backfill=args.historical_backfill,
         search_workers=args.workers,
+        package=args.package,
     ))
 
 
@@ -106,6 +121,7 @@ def _final(args: argparse.Namespace) -> int:
             output_root=args.output_root, config_dir=args.config,
             attempts=args.attempts, time_limit_seconds=args.seconds,
             search_workers=args.workers,
+            package=args.package,
         )
     except (FileNotFoundError, IndexError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
@@ -117,13 +133,14 @@ def _override_template(args: argparse.Namespace) -> int:
     destination = create_override_template(
         args.term, args.from_version, output_path=args.output,
         output_root=args.output_root, config_dir=args.config,
+        package=args.package,
     )
     print(f"Wrote {destination}")
     return 0
 
 
 def _validate(args: argparse.Namespace) -> int:
-    config = SolverConfig.load(args.config, term=args.term)
+    config = _load_config(args)
     schedule = _read_schedule(args.input, config)
     changes_path = (
         Path(args.changes) if args.changes
@@ -160,7 +177,7 @@ def _validate(args: argparse.Namespace) -> int:
 
 
 def _diff(args: argparse.Namespace) -> int:
-    config = SolverConfig.load(args.config, term=args.term)
+    config = _load_config(args)
     before, after = _read_schedule(args.before, config), _read_schedule(args.after, config)
     changes = list(dict.fromkeys(diff_schedules(before, after)))
     if args.output:
@@ -177,6 +194,10 @@ def _diff(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="class-schedule")
     parser.add_argument("--config", default="config", help="configuration root")
+    parser.add_argument(
+        "--package", default="27S",
+        help="self-contained package under CONFIG (default: 27S)",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
     initialize = commands.add_parser(

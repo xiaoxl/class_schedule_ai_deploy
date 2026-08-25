@@ -156,6 +156,7 @@ class RunTermTests(unittest.TestCase):
             self.assertTrue(bundle.applied_changes_path.exists())
             manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["schema_version"], 4)
+            self.assertEqual(manifest["configuration"]["package_id"], "27S")
             self.assertEqual(manifest["solver"]["search_workers"], 8)
             self.assertEqual(manifest["solver"]["attempts_requested"], 3)
             self.assertEqual(manifest["solver"]["attempts_run"], 1)

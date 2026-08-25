@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
 from .. import record_utils
 from ..config_schema import (
+    CatalogsFileSchema,
     ConstraintsFileSchema,
+    CoursesFileSchema,
     LocationsFileSchema,
     PreferencesFileSchema,
     TimeslotFileSchema,
@@ -27,46 +30,69 @@ from ..schedule_model import (
 from .types import MeetingPattern, RoomRecord
 
 
-_REQUIRED_CONFIG_FILES = (
-    "persons.toml", "preferences.toml", "timeslot.toml", "locations.toml",
-)
-_OPTIONAL_CONFIG_FILES = ("constraints.toml",)
-_CONFIG_FILES = _REQUIRED_CONFIG_FILES + _OPTIONAL_CONFIG_FILES
+_CONFIG_PATHS = {
+    "catalogs.toml": Path("basicinfo/catalogs.toml"),
+    "locations.toml": Path("basicinfo/locations.toml"),
+    "timeslot.toml": Path("basicinfo/timeslot.toml"),
+    "persons.toml": Path("basicinfo/persons.toml"),
+    "courses.toml": Path("courses.toml"),
+    "preferences.toml": Path("preferences.toml"),
+    "constraints.toml": Path("constraints.toml"),
+}
+_CONFIG_FILES = tuple(_CONFIG_PATHS)
+_PACKAGE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+@dataclass(frozen=True)
+class ConfigPackage:
+    id: str
+    root: Path
+
+    @property
+    def display_name(self) -> str:
+        return self.id
+
+
+def list_config_packages(config_dir: str | Path) -> tuple[ConfigPackage, ...]:
+    """Discover self-contained seven-file packages directly below config_dir."""
+    root = Path(config_dir)
+    if not root.is_dir():
+        return ()
+    packages = []
+    for child in sorted(root.iterdir(), key=lambda path: path.name.lower()):
+        if not child.is_dir() or not _PACKAGE_ID.fullmatch(child.name):
+            continue
+        if all((child / relative).is_file() for relative in _CONFIG_PATHS.values()):
+            packages.append(ConfigPackage(child.name, child))
+    return tuple(packages)
+
+
+def resolve_config_package(config_dir: str | Path, package: str) -> ConfigPackage:
+    requested = package.strip()
+    if not _PACKAGE_ID.fullmatch(requested):
+        raise ValueError(f"Invalid configuration package name: {requested!r}")
+    packages = {item.id: item for item in list_config_packages(config_dir)}
+    if requested not in packages:
+        raise FileNotFoundError(f"Unknown or incomplete configuration package: {requested}")
+    return packages[requested]
 
 
 def resolve_config_paths(
-    config_dir: str | Path, term: str | None = None
+    config_dir: str | Path, package: str,
 ) -> dict[str, Path]:
-    """Resolve the recommended layered layout with flat-layout fallback."""
-    root = Path(config_dir)
-    candidates = {
-        "persons.toml": (root / "catalog" / "persons.toml", root / "persons.toml"),
-        "locations.toml": (root / "catalog" / "locations.toml", root / "locations.toml"),
-        "preferences.toml": (
-            *((root / "terms" / term / "preferences.toml",) if term else ()),
-            root / "preferences.toml",
-        ),
-        "timeslot.toml": (
-            *((root / "terms" / term / "timeslot.toml",) if term else ()),
-            root / "timeslot.toml",
-        ),
-        "constraints.toml": (
-            *((root / "terms" / term / "constraints.toml",) if term else ()),
-            root / "constraints.toml",
-        ),
-    }
-    resolved: dict[str, Path] = {}
-    for name in _CONFIG_FILES:
-        path = next((path for path in candidates[name] if path.is_file()), None)
-        if path is not None:
-            resolved[name] = path
-    missing = [
-        str(candidates[name][0]) for name in _REQUIRED_CONFIG_FILES
-        if name not in resolved
-    ]
-    if missing:
-        raise FileNotFoundError("Missing configuration file(s): " + ", ".join(missing))
-    return resolved
+    """Resolve the seven fixed paths inside one isolated package."""
+    root = resolve_config_package(config_dir, package).root
+    return {name: root / relative for name, relative in _CONFIG_PATHS.items()}
+
+
+def load_catalogs(path: str | Path) -> CatalogsFileSchema:
+    with open(path, "rb") as handle:
+        return CatalogsFileSchema.model_validate(tomllib.load(handle))
+
+
+def load_courses(path: str | Path) -> CoursesFileSchema:
+    with open(path, "rb") as handle:
+        return CoursesFileSchema.model_validate(tomllib.load(handle))
 
 
 def load_meeting_patterns(path: str | Path) -> list[MeetingPattern]:
@@ -152,15 +178,20 @@ class SolverConfig:
     constraint_rules: tuple[ConstraintRule, ...] = ()
     version: str = ""
     source_paths: tuple[str, ...] = ()
+    package_id: str = ""
+    package_root: str = ""
+    catalogs: CatalogsFileSchema | None = None
+    courses: CoursesFileSchema | None = None
 
     @classmethod
-    def load(cls, config_dir: str | Path, term: str | None = None) -> "SolverConfig":
-        resolved = resolve_config_paths(config_dir, term)
-        paths = tuple(resolved[name] for name in _CONFIG_FILES if name in resolved)
-        constraint_rules = (
-            load_constraint_rules(resolved["constraints.toml"])
-            if "constraints.toml" in resolved else ()
-        )
+    def load(
+        cls, config_dir: str | Path, package: str,
+    ) -> "SolverConfig":
+        package_info = resolve_config_package(config_dir, package)
+        resolved = resolve_config_paths(config_dir, package)
+        paths = tuple(resolved[name] for name in _CONFIG_FILES)
+        catalogs = load_catalogs(resolved["catalogs.toml"])
+        courses = load_courses(resolved["courses.toml"])
         config = cls(
             persons=load_persons(resolved["persons.toml"]),
             preferences=load_preferences(resolved["preferences.toml"]),
@@ -173,16 +204,26 @@ class SolverConfig:
             staff_credit_weight=load_staff_credit_weight(
                 resolved["preferences.toml"]
             ),
-            constraint_rules=constraint_rules,
+            constraint_rules=load_constraint_rules(resolved["constraints.toml"]),
             version=hashlib.sha256(
                 b"\0".join(path.read_bytes() for path in paths)
             ).hexdigest()[:12],
             source_paths=tuple(str(path) for path in paths),
+            package_id=package_info.id,
+            package_root=str(package_info.root),
+            catalogs=catalogs,
+            courses=courses,
         )
         config.validate_references()
         return config
 
     def validate_references(self) -> None:
+        assert self.catalogs is not None and self.courses is not None
+        catalog_ids = {(item.subject, item.number) for item in self.catalogs.courses}
+        offered_ids = {(item.subject, item.number) for item in self.courses.courses}
+        missing_catalog = sorted(offered_ids - catalog_ids)
+        if missing_catalog:
+            raise ValueError(f"Offered courses are missing from catalogs.toml: {missing_catalog}")
         unknown = sorted(set(self.preferences) - set(self.persons))
         if unknown:
             raise ValueError(f"Preferences reference unknown instructors: {unknown}")

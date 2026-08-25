@@ -172,7 +172,7 @@ class PreferencesFileSchema(StrictModel):
             raise ValueError("preference instructor names must be unique")
         unknown = sorted({rule.name for rule in self.rules if rule.name} - set(names))
         if unknown:
-            raise ValueError(f"rules reference instructors without profiles: {unknown}")
+            raise ValueError(f"rules reference instructors without preferences: {unknown}")
         return self
 
 
@@ -294,4 +294,137 @@ class LocationsFileSchema(StrictModel):
         names = [room.name for room in self.rooms]
         if len(names) != len(set(names)):
             raise ValueError("room names must be unique")
+        return self
+
+
+class CatalogCourseSchema(StrictModel):
+    subject: str
+    number: str
+    title: str
+    credits: float = Field(gt=0)
+
+    @field_validator("subject")
+    @classmethod
+    def normalize_subject(cls, value: str) -> str:
+        value = value.strip().upper()
+        if not value or not value.isalpha():
+            raise ValueError("subject must contain letters only")
+        return value
+
+    @field_validator("number")
+    @classmethod
+    def validate_number(cls, value: str) -> str:
+        value = value.strip().upper()
+        if not re.fullmatch(r"\d+[A-Z]?", value):
+            raise ValueError("number must be text such as '1113' or '1013L'")
+        return value
+
+    @field_validator("title")
+    @classmethod
+    def require_title(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("title must not be blank")
+        return value
+
+
+class CatalogsFileSchema(StrictModel):
+    courses: list[CatalogCourseSchema] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def unique_courses(self):
+        identities = [(item.subject, item.number) for item in self.courses]
+        if len(identities) != len(set(identities)):
+            raise ValueError("catalog course identities must be unique")
+        return self
+
+
+class OfferedCourseSchema(StrictModel):
+    subject: str
+    number: str
+    sections: list[str]
+
+    @field_validator("subject")
+    @classmethod
+    def normalize_subject(cls, value: str) -> str:
+        return CatalogCourseSchema.normalize_subject(value)
+
+    @field_validator("number")
+    @classmethod
+    def validate_number(cls, value: str) -> str:
+        return CatalogCourseSchema.validate_number(value)
+
+    @field_validator("sections")
+    @classmethod
+    def validate_sections(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip().upper() for value in values]
+        if not normalized or any(not value for value in normalized):
+            raise ValueError("sections must contain at least one nonblank section")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("sections must not contain duplicates")
+        return normalized
+
+
+class CourseRelationshipSchema(StrictModel):
+    id: str
+    kind: Literal["coreq", "cross_listing", "four_credit", "hybrid"]
+    members: list[str]
+
+    @field_validator("id")
+    @classmethod
+    def require_id(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("relationship id must not be blank")
+        return value
+
+    @field_validator("members")
+    @classmethod
+    def validate_members(cls, values: list[str]) -> list[str]:
+        normalized = [" ".join(value.strip().upper().split()) for value in values]
+        if len(normalized) not in (1, 2):
+            raise ValueError("relationship members must contain one or two sections")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("relationship members must be different")
+        if any(not re.fullmatch(r"[A-Z]+\s+\d+[A-Z]?\s+\S+", value) for value in normalized):
+            raise ValueError("relationship members must use 'SUBJECT NUMBER SECTION'")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_member_count(self):
+        expected = 1 if self.kind in {"four_credit", "hybrid"} else 2
+        if len(self.members) != expected:
+            raise ValueError(f"{self.kind} relationships require {expected} member(s)")
+        return self
+
+
+class CoursesFileSchema(StrictModel):
+    courses: list[OfferedCourseSchema] = Field(default_factory=list)
+    relationships: list[CourseRelationshipSchema] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_references(self):
+        course_keys = [(item.subject, item.number) for item in self.courses]
+        if len(course_keys) != len(set(course_keys)):
+            raise ValueError("offered course identities must be unique")
+        offered = {
+            f"{item.subject} {item.number} {section}"
+            for item in self.courses for section in item.sections
+        }
+        ids = [item.id for item in self.relationships]
+        if len(ids) != len(set(ids)):
+            raise ValueError("relationship ids must be unique")
+        used: set[str] = set()
+        for relationship in self.relationships:
+            unknown = sorted(set(relationship.members) - offered)
+            if unknown:
+                raise ValueError(
+                    f"relationship {relationship.id!r} references unknown sections: {unknown}"
+                )
+            repeated = sorted(set(relationship.members) & used)
+            if repeated:
+                raise ValueError(
+                    f"sections may belong to only one relationship: {repeated}"
+                )
+            used.update(relationship.members)
         return self

@@ -1,3 +1,8 @@
+# Configuration package: 27S
+# Term: Spring 2027
+# Department: MAPS
+# Program: Mathematics
+
 # Stable person records. courses are qualifications, max_load is contractual,
 # and aliases normalize imported names (optionally by subject).
 

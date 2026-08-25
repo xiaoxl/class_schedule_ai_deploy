@@ -29,6 +29,8 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from . import record_utils
 from .config_schema import (
+    CatalogCourseSchema,
+    CourseRelationshipSchema,
     FlatPreferenceRuleSchema,
     PersonsFileSchema,
     PreferencesFileSchema,
@@ -80,9 +82,13 @@ class Schedule:
         records: Iterable[Mapping[str, object]],
         *,
         persons: Mapping[str, "PersonRecord"] | None = None,
+        relationships: Iterable[CourseRelationshipSchema] = (),
+        catalogs: Iterable[CatalogCourseSchema] = (),
     ) -> "Schedule":
         """Group a complete table of CSV records into atomic classes."""
-        return cls(_group_records(records, persons=persons))
+        return cls(_group_records(
+            records, persons=persons, relationships=relationships, catalogs=catalogs,
+        ))
 
     @classmethod
     def from_dataframe(
@@ -90,10 +96,14 @@ class Schedule:
         dataframe: pd.DataFrame,
         *,
         persons: Mapping[str, "PersonRecord"] | None = None,
+        relationships: Iterable[CourseRelationshipSchema] = (),
+        catalogs: Iterable[CatalogCourseSchema] = (),
     ) -> "Schedule":
         """Group a complete DataFrame into atomic classes."""
         return cls.from_records(
             dataframe.to_dict(orient="records"), persons=persons,
+            relationships=relationships,
+            catalogs=catalogs,
         )
 
     # ---- export (Schedule -> CSV records/DataFrame) ----
@@ -215,6 +225,8 @@ def _group_records(
     records: Iterable[Mapping[str, object]],
     *,
     persons: Mapping[str, "PersonRecord"] | None = None,
+    relationships: Iterable[CourseRelationshipSchema] = (),
+    catalogs: Iterable[CatalogCourseSchema] = (),
 ) -> list[Class]:
     """Group raw CSV records into atomic classes.
 
@@ -234,16 +246,22 @@ def _group_records(
     ``_IGNORED_SECTION_PREFIXES``) are dropped up front and never appear
     in the resulting classes.
     """
+    catalog_by_id = {(item.subject, item.number): item for item in catalogs}
     remaining: list[Section] = []
     for row in records:
         normalized = record_utils.normalize_columns(row)
+        subject = record_utils.text(record_utils.value(normalized, "Subject")).upper()
+        number = record_utils.text(record_utils.value(normalized, "Number")).upper()
+        catalog = catalog_by_id.get((subject, number))
+        if catalog is not None:
+            normalized["Title"] = catalog.title
+            normalized["Credits"] = catalog.credits
         if record_utils.text(normalized.get("Cross-List")).startswith("configured:"):
             # Normalize the supported ``configured:`` compatibility marker;
             # known pairs are recognized directly by CrossListingClass.
             normalized["Cross-List"] = ""
         if persons:
             instructor = record_utils.text(record_utils.value(normalized, "Instructor"))
-            subject = record_utils.text(record_utils.value(normalized, "Subject")).upper()
             resolved = resolve_person_name(instructor, persons, subject=subject)
             if resolved is not None:
                 normalized["Instructor"] = resolved
@@ -257,7 +275,9 @@ def _group_records(
         except ValueError as error:
             raise GroupingError(str(error), [dict(normalized)]) from error
 
-    result: list[Class] = []
+    result, remaining = _take_configured_relationships(
+        remaining, tuple(relationships)
+    )
     same_course, remaining = _take_same_course(remaining)
     result.extend(same_course)
     cross_listed, remaining = _take_cross_listed(remaining)
@@ -271,6 +291,49 @@ def _group_records(
         for section in remaining
     )
     return result
+
+
+def _take_configured_relationships(
+    remaining: list[Section],
+    relationships: tuple[CourseRelationshipSchema, ...],
+) -> tuple[list[Class], list[Section]]:
+    """Apply explicit courses.toml relationships before legacy inference."""
+    found: list[Class] = []
+    consumed: set[int] = set()
+    for relationship in relationships:
+        groups = []
+        for member in relationship.members:
+            subject, number, section = member.split(maxsplit=2)
+            matches = [
+                item for item in remaining
+                if item.subject == subject and item.number == number
+                and item.section.upper() == section
+                and id(item) not in consumed
+            ]
+            if not matches:
+                continue  # courses.toml may include sections absent from an imported template
+            groups.append(matches)
+        if len(groups) != len(relationship.members):
+            continue
+        rows = tuple(item for group in groups for item in group)
+        try:
+            if relationship.kind == "hybrid":
+                item = HybridClass(rows)
+            elif relationship.kind == "four_credit":
+                item = FourCreditClass(rows)
+            elif relationship.kind == "cross_listing":
+                if len(rows) != 2:
+                    raise ValueError("configured cross-listing requires two source rows")
+                item = CrossListingClass.from_configured_sections(rows)
+            else:
+                if len(rows) != 2:
+                    raise ValueError("configured coreq requires two source rows")
+                item = CoreqClass.from_configured_sections(rows)
+        except ValueError as error:
+            raise GroupingError(str(error), [row.to_record() for row in rows]) from error
+        found.append(item)
+        consumed.update(id(row) for row in rows)
+    return found, [item for item in remaining if id(item) not in consumed]
 
 
 def _take_same_course(
@@ -447,7 +510,7 @@ def _take_coreqs(
     ]
 
 
-# ---- config-driven evaluation (config/persons.toml, config/preferences.toml) ----
+# ---- configuration-driven evaluation (persons.toml and preferences.toml) ----
 #
 # persons.toml holds contractual identity, qualification, alias, and load
 # facts; preferences.toml holds this term's wishes for an instructor.
@@ -960,7 +1023,7 @@ def _overload_statuses(
     reported by ``check_soft_preferences``. Everything this returns *is*
     overload, always soft -- ``penalty`` is ``preference.overload_penalty``
     per credit past the tolerance (``0.0`` when there is no preference
-    profile), plus ``OVERLOAD_FAR_PENALTY`` on top when they're *also* more than
+    preference record), plus ``OVERLOAD_FAR_PENALTY`` on top when they're also more than
     ``OVERLOAD_FAR_THRESHOLD`` credit hours over their own max_load *and*
     ``allow_overload`` -- see the module comment above
     ``OVERLOAD_TOLERANCE``. Mirrors ``solver/constraints.py``'s load model

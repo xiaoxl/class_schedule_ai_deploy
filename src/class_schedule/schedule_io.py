@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from .config_schema import CatalogCourseSchema, CourseRelationshipSchema
 from .schedule_model import PersonRecord, Schedule
 
 
@@ -31,9 +32,13 @@ def read_schedule(
     path: str | Path,
     *,
     persons: Mapping[str, PersonRecord] | None = None,
+    relationships: tuple[CourseRelationshipSchema, ...] = (),
+    catalogs: tuple[CatalogCourseSchema, ...] = (),
 ) -> Schedule:
     """Read, normalize, and group a CSV/XLSX file into atomic classes."""
     return Schedule.from_dataframe(
         read_table(path).dropna(how="all"),
         persons=persons,
+        relationships=relationships,
+        catalogs=catalogs,
     )

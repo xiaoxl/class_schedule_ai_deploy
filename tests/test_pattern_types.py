@@ -126,7 +126,7 @@ class ConfiguredSelectorTests(unittest.TestCase):
         self.assertFalse(pattern_applies(NormalClass((other,)), other, pattern))
 
     def test_production_config_gives_seminar_single_day_patterns(self):
-        patterns = load_meeting_patterns(ROOT / "config" / "timeslot.toml")
+        patterns = load_meeting_patterns(ROOT / "config" / "27S" / "basicinfo" / "timeslot.toml")
         seminar_patterns = [
             pattern for pattern in patterns
             if "MATH 4971" in pattern.courses
@@ -159,7 +159,7 @@ class ConfiguredSelectorTests(unittest.TestCase):
         ))
 
     def test_production_config_grants_mw_noon_only_to_selected_atomic_row(self):
-        patterns = load_meeting_patterns(ROOT / "config" / "timeslot.toml")
+        patterns = load_meeting_patterns(ROOT / "config" / "27S" / "basicinfo" / "timeslot.toml")
         noon = datetime.time(12)
 
         def can_use_mw_noon(item, section):

@@ -240,12 +240,13 @@ def recolor_placeholder(
 def build_initial_schedules(
     draft_path: str | Path,
     changes_path: str | Path,
-    persons_path: str | Path = "config/persons.toml",
+    persons_path: str | Path = "config/27S/basicinfo/persons.toml",
     *,
     output_dir: str | Path = ".",
     placeholder_instructor: str = DEFAULT_PLACEHOLDER_INSTRUCTOR,
     seed: int | None = None,
     meeting_patterns: Iterable[MeetingPatternLike] | None = None,
+    configuration: dict[str, object] | None = None,
 ) -> dict[str, dict[str, object]]:
     """Build the initial schedule and its no-additions audit variant.
 
@@ -316,6 +317,7 @@ def build_initial_schedules(
         manifest = {
             "schema_version": 1,
             "role": "initial",
+            "configuration": configuration or {},
             "draft": {"path": str(draft_path), "sha256": sha256(draft_path)},
             "changes": {"path": str(changes_path), "sha256": sha256(changes_path)},
             "initial": {"path": initial_path.name, "sha256": sha256(initial_path)},

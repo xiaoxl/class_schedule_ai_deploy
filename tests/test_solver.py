@@ -225,7 +225,7 @@ class ConstraintRuleTests(unittest.TestCase):
 
     def test_production_constraint_is_loaded(self):
         config = SolverConfig.load(
-            Path(__file__).parents[1] / "config", term="27S"
+            Path(__file__).parents[1] / "config", package="27S"
         )
         room_rule = next(
             rule for rule in config.constraints_for("MATH 1113", "F01")

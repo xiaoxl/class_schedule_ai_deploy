@@ -9,6 +9,7 @@ import pandas as pd
 from openpyxl import load_workbook
 
 from class_schedule.class_model import HybridClass, NormalClass, Section
+from class_schedule.config_schema import CatalogsFileSchema, CoursesFileSchema
 from class_schedule.data_cleaning import (
     NORMALIZED_COLUMNS,
     clean_dataframe,
@@ -27,7 +28,11 @@ from class_schedule.schedule_model import ConstraintRule, Schedule, TimeWindow
 from class_schedule.schedule_io import read_schedule
 from class_schedule.solver import MeetingPattern, RoomRecord, SolverConfig, diff_schedules
 from class_schedule.solver.candidates import section_candidates
-from class_schedule.solver.config import resolve_config_paths
+from class_schedule.solver.config import (
+    list_config_packages,
+    resolve_config_paths,
+    resolve_config_package,
+)
 
 
 class DataCleaningTests(unittest.TestCase):
@@ -312,19 +317,85 @@ class OverrideTests(unittest.TestCase):
 
 
 class ConfigLayoutTests(unittest.TestCase):
-    def test_term_files_override_flat_files(self):
+    @staticmethod
+    def make_package(root: Path, name: str) -> Path:
+        package = root / name
+        (package / "basicinfo").mkdir(parents=True)
+        for filename in ("catalogs.toml", "locations.toml", "timeslot.toml", "persons.toml"):
+            (package / "basicinfo" / filename).write_text("", encoding="utf-8")
+        for filename in ("courses.toml", "preferences.toml", "constraints.toml"):
+            (package / filename).write_text("", encoding="utf-8")
+        return package
+
+    def test_resolves_the_fixed_seven_file_layout(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "catalog").mkdir()
-            (root / "terms" / "27S").mkdir(parents=True)
-            for name in ("persons.toml", "locations.toml"):
-                (root / "catalog" / name).write_text("", encoding="utf-8")
-            for name in ("preferences.toml", "timeslot.toml"):
-                (root / "terms" / "27S" / name).write_text("", encoding="utf-8")
-                (root / name).write_text("legacy", encoding="utf-8")
+            package = self.make_package(root, "27S")
             paths = resolve_config_paths(root, "27S")
-            self.assertEqual(paths["preferences.toml"].parent.name, "27S")
-            self.assertEqual(paths["persons.toml"].parent.name, "catalog")
+            self.assertEqual(len(paths), 7)
+            self.assertEqual(paths["persons.toml"], package / "basicinfo" / "persons.toml")
+            self.assertEqual(paths["courses.toml"], package / "courses.toml")
+
+    def test_discovers_complete_packages_by_directory_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = self.make_package(root, "department_a")
+            packages = list_config_packages(root)
+            self.assertEqual([item.id for item in packages], ["department_a"])
+            self.assertEqual(packages[0].display_name, "department_a")
+            self.assertEqual(resolve_config_package(root, "department_a").root, package)
+
+    def test_rejects_unknown_or_unsafe_package_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(FileNotFoundError, "Unknown"):
+                resolve_config_package(root, "missing")
+            with self.assertRaisesRegex(ValueError, "Invalid"):
+                resolve_config_package(root, "../private")
+
+    def test_courses_require_catalog_entries(self):
+        catalogs = CatalogsFileSchema.model_validate({
+            "courses": [{
+                "subject": "MATH", "number": "1113",
+                "title": "College Algebra", "credits": 3,
+            }]
+        })
+        courses = CoursesFileSchema.model_validate({
+            "courses": [{
+                "subject": "MATH", "number": "1113", "sections": ["001"],
+            }]
+        })
+        self.assertEqual(catalogs.courses[0].number, "1113")
+        self.assertEqual(courses.courses[0].sections, ["001"])
+
+    def test_relationship_rejects_an_unknown_section(self):
+        with self.assertRaisesRegex(ValueError, "unknown sections"):
+            CoursesFileSchema.model_validate({
+                "courses": [{
+                    "subject": "MATH", "number": "1113", "sections": ["001"],
+                }],
+                "relationships": [{
+                    "id": "missing", "kind": "coreq",
+                    "members": ["MATH 1113 001", "MATH 1110 001"],
+                }],
+            })
+
+    def test_configured_coreq_uses_existing_atomic_class_behavior(self):
+        relationships = CoursesFileSchema.model_validate({
+            "courses": [
+                {"subject": "MATH", "number": "2003", "sections": ["001"]},
+                {"subject": "MATH", "number": "2004", "sections": ["001"]},
+            ],
+            "relationships": [{
+                "id": "configured-coreq", "kind": "coreq",
+                "members": ["MATH 2003 001", "MATH 2004 001"],
+            }],
+        }).relationships
+        schedule = Schedule.from_records([
+            {"Subject": "MATH", "Number": "2003", "Section": "001", "Time Slot": "MWF 9:00am", "Duration": 50, "Building": "Corley", "Room": "101", "Instructor": "Alice"},
+            {"Subject": "MATH", "Number": "2004", "Section": "001", "Time Slot": "MWF 10:00am", "Duration": 50, "Building": "Corley", "Room": "101", "Instructor": "Alice"},
+        ], relationships=relationships)
+        self.assertEqual(type(schedule.classes[0]).__name__, "CoreqClass")
 
 
 class CumulativeDiffTests(unittest.TestCase):

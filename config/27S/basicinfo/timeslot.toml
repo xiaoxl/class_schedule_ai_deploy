@@ -1,3 +1,8 @@
+# Configuration package: 27S
+# Term: Spring 2027
+# Department: MAPS
+# Program: Mathematics
+
 # Time patterns the solver may use when generating new schedule candidates.
 # Mandatory or forbidden times belong in constraints.toml, not this file.
 #

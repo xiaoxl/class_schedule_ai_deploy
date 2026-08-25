@@ -16,7 +16,7 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Press `Ctrl+C` to stop the 
 ## Use the web interface
 
 1. Import a starting schedule in CSV or XLSX format.
-2. Switch between Instructor, Room, and Course views.
+2. Select a Configuration package before import, then switch between Instructor, Room, and Course views.
 3. Drag a class to change its meeting time. Moving between weekday columns can change supported MWF/TR patterns.
 4. Right-click a class to assign an instructor or room. Choose **New** to create another New Instructor identity.
 5. Review workloads and findings. Finding links open the relevant Instructor or Room view.
@@ -24,13 +24,15 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Press `Ctrl+C` to stop the 
 
 Browser saves use the same version publisher as solver output and are written to `out/27S/verN/`.
 
+Complete packages live directly under `config/<package-name>/`. The included package is `27S`; copy the entire directory to create another package.
+
 ## Command-line workflow
 
 ```powershell
-uv run class-schedule --config config initialize 27S inputs/27S/source.xlsx
-uv run class-schedule --config config initial 27S
-uv run class-schedule --config config solve 27S
-uv run class-schedule --config config final 27S ver10
+uv run class-schedule --config config --package 27S initialize 27S inputs/27S/source.xlsx
+uv run class-schedule --config config --package 27S initial 27S work/27S/draft/draft.csv inputs/27S/changes.toml
+uv run class-schedule --config config --package 27S solve 27S
+uv run class-schedule --config config --package 27S final 27S ver10
 ```
 
 `initialize` cleans the source and creates pre-change views. `initial` applies term changes. Every `solve` starts from the same initial schedule and creates an immutable version. `final` applies manual overrides to a selected version.

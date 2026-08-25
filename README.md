@@ -11,15 +11,17 @@ uv run uvicorn class_schedule.webapp:app --host 127.0.0.1 --port 8000
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Import a starting CSV/XLSX schedule, edit it in Instructor, Room, or Course view, enter the term, and select **Save New Version**. Output is published to `out/<term>/verN/`.
 
+The Configuration selector discovers complete packages directly under `config/`. The included package is `config/27S/`; copy that directory to create another independent package. The CLI equivalent is `--package <package-name>`.
+
 See [the documentation home](docs/index.md) for the complete UI workflow.
 
 ## Command-line workflow
 
 ```powershell
-uv run class-schedule --config config initialize 27S inputs/27S/source.xlsx
-uv run class-schedule --config config initial 27S
-uv run class-schedule --config config solve 27S
-uv run class-schedule --config config final 27S ver10
+uv run class-schedule --config config --package 27S initialize 27S inputs/27S/source.xlsx
+uv run class-schedule --config config --package 27S initial 27S work/27S/draft/draft.csv inputs/27S/changes.toml
+uv run class-schedule --config config --package 27S solve 27S
+uv run class-schedule --config config --package 27S final 27S ver10
 ```
 
 `initialize` cleans the source and creates pre-change instructor and room views. `initial` applies the complete term changes. Each `solve` independently starts from the same initial schedule and creates a new immutable `verN`. `final` applies manual overrides to a selected version and refreshes a publishable final directory.

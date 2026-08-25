@@ -1,3 +1,8 @@
+# Configuration package: 27S
+# Term: Spring 2027
+# Department: MAPS
+# Program: Mathematics
+
 # Rooms the solver may use when generating new schedule candidates.
 # A course's existing room remains available as a fallback even when it
 # is not listed here.

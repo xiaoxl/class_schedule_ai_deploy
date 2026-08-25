@@ -8,7 +8,9 @@ from .candidates import (
     TIME_CHANGE_COST,
 )
 from .config import (
+    ConfigPackage,
     SolverConfig,
+    list_config_packages,
     load_meeting_patterns,
     load_rooms,
 )
@@ -29,6 +31,7 @@ from .types import (
 
 __all__ = [
     "HARD_LOAD_CAP_TOLERANCE",
+    "ConfigPackage",
     "DEFAULT_SEARCH_WORKERS",
     "INSTRUCTOR_CHANGE_COST",
     "InfeasibleSchedule",
@@ -47,6 +50,7 @@ __all__ = [
     "TIME_CHANGE_COST",
     "diff_schedules",
     "load_meeting_patterns",
+    "list_config_packages",
     "load_rooms",
     "solve",
     "solve_detailed",

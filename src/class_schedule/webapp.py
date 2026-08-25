@@ -19,6 +19,7 @@ import hashlib
 import io
 import logging
 import math
+import os
 import re
 import tempfile
 from datetime import UTC, datetime
@@ -37,16 +38,16 @@ from .new_instructors import NEW_INSTRUCTOR_MAX_LOAD
 from .schedule_model import (
     GroupingError,
     HardViolation,
-    PersonRecord,
-    PreferenceRecord,
-    PreferenceRule,
     Schedule,
     SoftFinding,
     evaluate_schedule,
 )
 
 PACKAGE_WEB = Path(__file__).with_name("web")
-CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
+CONFIG_DIR = Path(os.environ.get(
+    "CLASS_SCHEDULE_CONFIG_ROOT",
+    Path(__file__).resolve().parents[2] / "config",
+))
 ALLOWED_SUFFIXES = {".csv", ".xlsx"}
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 LOG_PATH = Path("output/logs/webapp.log")
@@ -78,10 +79,24 @@ def _rss_mb() -> float:
 
 # Configuration errors are deployment errors, not a reason to silently run
 # without qualifications/preferences. Fail startup with a precise schema error.
-SOLVER_CONFIG = solver_module.SolverConfig.load(CONFIG_DIR)
-PERSONS: dict[str, PersonRecord] = SOLVER_CONFIG.persons
-PREFERENCES: dict[str, PreferenceRecord] = SOLVER_CONFIG.preferences
-GLOBAL_RULES: tuple[PreferenceRule, ...] = SOLVER_CONFIG.global_rules
+def _default_package() -> str:
+    packages = solver_module.list_config_packages(CONFIG_DIR)
+    if not packages:
+        raise RuntimeError(f"No complete configuration packages found under {CONFIG_DIR}")
+    return packages[0].id
+
+
+DEFAULT_PACKAGE = os.environ.get("CLASS_SCHEDULE_CONFIG_PACKAGE") or _default_package()
+SOLVER_CONFIG = solver_module.SolverConfig.load(CONFIG_DIR, package=DEFAULT_PACKAGE)
+
+
+def _load_web_config(
+    package: str = DEFAULT_PACKAGE,
+) -> solver_module.SolverConfig:
+    try:
+        return solver_module.SolverConfig.load(CONFIG_DIR, package=package)
+    except (FileNotFoundError, ValueError) as error:
+        raise HTTPException(400, str(error)) from error
 
 
 def _configure_logging() -> None:
@@ -109,16 +124,32 @@ _configure_logging()
 def create_app() -> FastAPI:
     app = FastAPI(title="Class Schedule Viewer", version="0.3.0")
 
+    @app.get("/api/configurations")
+    async def configuration_packages():
+        return {
+            "configurations": [
+                {
+                    "id": package.id,
+                    "display_name": package.display_name,
+                }
+                for package in solver_module.list_config_packages(CONFIG_DIR)
+            ]
+        }
+
     @app.post("/api/schedule")
-    async def parse_schedule(schedule_file: UploadFile = File(...)):
-        filename, schedule = await _read_and_group(schedule_file)
+    async def parse_schedule(
+        schedule_file: UploadFile = File(...), package: str = Form(DEFAULT_PACKAGE),
+    ):
+        config = _load_web_config(package)
+        filename, schedule = await _read_and_group(schedule_file, config)
         logger.info("Parsed %r into %d classes", filename, len(schedule))
         return {
             "count": len(schedule),
-            "config_version": SOLVER_CONFIG.version,
-            "assignment_options": _assignment_options(SOLVER_CONFIG),
+            "config_version": config.version,
+            "package_id": config.package_id,
+            "assignment_options": _assignment_options(config),
             "classes": _serialize_schedule(schedule),
-            "violations": _evaluate_schedule(schedule),
+            "violations": _evaluate_schedule(schedule, config),
             "excel": {
                 "raw": _excel_base64(schedule, "to_raw_excel"),
                 "instructor": _excel_base64(schedule, "to_instructor_excel"),
@@ -130,12 +161,14 @@ def create_app() -> FastAPI:
     async def solve_schedule(
         schedule_file: UploadFile = File(...),
         regenerate: bool = Form(False),
+        package: str = Form(DEFAULT_PACKAGE),
     ):
-        filename, schedule = await _read_and_group(schedule_file)
+        config = _load_web_config(package)
+        filename, schedule = await _read_and_group(schedule_file, config)
         rss_before = _rss_mb()
         try:
             solve_result = solver_module.solve_detailed(
-                schedule, SOLVER_CONFIG, time_limit_seconds=SOLVE_TIME_LIMIT_SECONDS,
+                schedule, config, time_limit_seconds=SOLVE_TIME_LIMIT_SECONDS,
                 # On a "regenerate" re-solve, `schedule` is already the
                 # caller's own previous solve output (see app.js's
                 # currentFile) -- forbidding it as `previous` guarantees a
@@ -162,15 +195,16 @@ def create_app() -> FastAPI:
             )
             raise HTTPException(422, str(error)) from error
         changes = solver_module.diff_schedules(schedule, solved)
-        violations = _evaluate_schedule(solved)
+        violations = _evaluate_schedule(solved, config)
         logger.info(
             "Solved %r cleanly (%d classes, %d field change(s), RSS %.1f -> %.1f MB)",
             filename, len(solved), len(changes), rss_before, _rss_mb(),
         )
         return {
             "count": len(solved),
-            "config_version": SOLVER_CONFIG.version,
-            "assignment_options": _assignment_options(SOLVER_CONFIG),
+            "config_version": config.version,
+            "package_id": config.package_id,
+            "assignment_options": _assignment_options(config),
             "classes": _serialize_schedule(solved),
             "violations": violations,
             "changes": [_serialize_change(c) for c in changes],
@@ -199,10 +233,19 @@ def create_app() -> FastAPI:
         baseline_records = payload.get("baseline_records")
         if not isinstance(records, list) or not isinstance(baseline_records, list):
             raise HTTPException(400, "Current and baseline schedule records are required")
-        config = solver_module.SolverConfig.load(CONFIG_DIR, term=term)
+        package = str(payload.get("package", DEFAULT_PACKAGE)).strip()
+        config = _load_web_config(package)
         try:
-            schedule = Schedule.from_records(records, persons=config.persons)
-            baseline = Schedule.from_records(baseline_records, persons=config.persons)
+            relationships = tuple(config.courses.relationships) if config.courses else ()
+            catalogs = tuple(config.catalogs.courses) if config.catalogs else ()
+            schedule = Schedule.from_records(
+                records, persons=config.persons, relationships=relationships,
+                catalogs=catalogs,
+            )
+            baseline = Schedule.from_records(
+                baseline_records, persons=config.persons, relationships=relationships,
+                catalogs=catalogs,
+            )
         except (GroupingError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
         evaluation = evaluate_schedule(
@@ -242,6 +285,7 @@ def create_app() -> FastAPI:
                 "snapshot": "baseline.csv", "role": "initial",
             },
             "configuration": {
+                "package_id": config.package_id,
                 "version": config.version,
                 "files": [{"path": name, "sha256": sha256(Path(name))} for name in config.source_paths],
             },
@@ -321,7 +365,9 @@ def _assignment_options(config: solver_module.SolverConfig) -> dict:
     }
 
 
-async def _read_and_group(schedule_file: UploadFile) -> tuple[str, Schedule]:
+async def _read_and_group(
+    schedule_file: UploadFile, config: solver_module.SolverConfig,
+) -> tuple[str, Schedule]:
     """Shared upload -> DataFrame -> Schedule pipeline for both
     ``/api/schedule`` and ``/api/solve`` -- same validation, same
     GroupingError handling either way."""
@@ -350,7 +396,9 @@ async def _read_and_group(schedule_file: UploadFile) -> tuple[str, Schedule]:
 
     try:
         schedule = Schedule.from_dataframe(
-            dataframe, persons=PERSONS,
+            dataframe, persons=config.persons,
+            relationships=tuple(config.courses.relationships) if config.courses else (),
+            catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
         )
     except GroupingError as error:
         logger.warning(
@@ -412,14 +460,16 @@ def _serialize_schedule(schedule: Schedule) -> list[dict]:
     ]
 
 
-def _evaluate_schedule(schedule: Schedule) -> dict:
+def _evaluate_schedule(
+    schedule: Schedule, config: solver_module.SolverConfig,
+) -> dict:
     """Run both checks and shape them for the frontend's violations
     summary: hard (red, room/instructor conflicts and constraints), soft
     (orange/yellow by penalty threshold)."""
     evaluation = evaluate_schedule(
-        schedule, PREFERENCES, PERSONS, GLOBAL_RULES,
-        SOLVER_CONFIG.meeting_patterns,
-        SOLVER_CONFIG.constraint_rules,
+        schedule, config.preferences, config.persons, config.global_rules,
+        config.meeting_patterns,
+        config.constraint_rules,
     )
     return {
         "hard": [_serialize_hard(v) for v in evaluation.hard_violations],

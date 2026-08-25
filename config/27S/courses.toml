@@ -1,0 +1,253 @@
+# Configuration package: 27S
+# Term: Spring 2027
+# Department: MAPS
+# Program: Mathematics
+
+# This file declares which sections exist and how sections are related.
+# Scheduling behavior for each relationship kind remains implemented by the
+# existing Python atomic-class types.
+
+[[courses]]
+subject = "MATH"
+number = "0803"
+sections = ["001", "002", "003", "004", "TC1"]
+
+[[courses]]
+subject = "MATH"
+number = "0903"
+sections = ["001", "002", "TC1"]
+
+[[courses]]
+subject = "MATH"
+number = "1003"
+sections = ["001", "002", "003", "004", "005", "006", "007", "TC1", "TC2"]
+
+[[courses]]
+subject = "MATH"
+number = "1110"
+sections = ["003"]
+
+[[courses]]
+subject = "MATH"
+number = "1113"
+sections = ["001", "002", "003", "006", "F01", "TC1", "TC2"]
+
+[[courses]]
+subject = "MATH"
+number = "1203"
+sections = ["TC1"]
+
+[[courses]]
+subject = "MATH"
+number = "1914"
+sections = ["001", "003"]
+
+[[courses]]
+subject = "MATH"
+number = "2033"
+sections = ["001"]
+
+[[courses]]
+subject = "MATH"
+number = "2043"
+sections = ["001", "TC1"]
+
+[[courses]]
+subject = "MATH"
+number = "2223"
+sections = ["001", "002", "003", "TC1"]
+
+[[courses]]
+subject = "MATH"
+number = "2243"
+sections = ["001", "002"]
+
+[[courses]]
+subject = "MATH"
+number = "2703"
+sections = ["001", "002", "TC1"]
+
+[[courses]]
+subject = "MATH"
+number = "2914"
+sections = ["001", "002", "003"]
+
+[[courses]]
+subject = "MATH"
+number = "2924"
+sections = ["001", "002", "003"]
+
+[[courses]]
+subject = "MATH"
+number = "2934"
+sections = ["001", "002"]
+
+[[courses]]
+subject = "MATH"
+number = "3033"
+sections = ["001"]
+
+[[courses]]
+subject = "MATH"
+number = "3123"
+sections = ["001"]
+
+[[courses]]
+subject = "MATH"
+number = "3243"
+sections = ["001", "002"]
+
+[[courses]]
+subject = "MATH"
+number = "4003"
+sections = ["001"]
+
+[[courses]]
+subject = "MATH"
+number = "4123"
+sections = ["001", "H01"]
+
+[[courses]]
+subject = "MATH"
+number = "4971"
+sections = ["001"]
+
+[[courses]]
+subject = "MATH"
+number = "5173"
+sections = ["TC1"]
+
+[[courses]]
+subject = "STAT"
+number = "2163"
+sections = ["001", "002", "003", "004", "TC1", "TC2"]
+
+[[courses]]
+subject = "STAT"
+number = "3113"
+sections = ["001"]
+
+[[courses]]
+subject = "STAT"
+number = "3153"
+sections = ["001", "002"]
+
+[[courses]]
+subject = "STAT"
+number = "3183"
+sections = ["001"]
+
+[[courses]]
+subject = "STAT"
+number = "4173"
+sections = ["TC1"]
+
+[[relationships]]
+id = "math-1113-f01-hybrid"
+kind = "hybrid"
+members = ["MATH 1113 F01"]
+
+[[relationships]]
+id = "math-1914-001-four-credit"
+kind = "four_credit"
+members = ["MATH 1914 001"]
+
+[[relationships]]
+id = "math-1914-003-four-credit"
+kind = "four_credit"
+members = ["MATH 1914 003"]
+
+[[relationships]]
+id = "math-2914-001-four-credit"
+kind = "four_credit"
+members = ["MATH 2914 001"]
+
+[[relationships]]
+id = "math-2914-002-four-credit"
+kind = "four_credit"
+members = ["MATH 2914 002"]
+
+[[relationships]]
+id = "math-2914-003-four-credit"
+kind = "four_credit"
+members = ["MATH 2914 003"]
+
+[[relationships]]
+id = "math-2924-001-four-credit"
+kind = "four_credit"
+members = ["MATH 2924 001"]
+
+[[relationships]]
+id = "math-2924-002-four-credit"
+kind = "four_credit"
+members = ["MATH 2924 002"]
+
+[[relationships]]
+id = "math-2924-003-four-credit"
+kind = "four_credit"
+members = ["MATH 2924 003"]
+
+[[relationships]]
+id = "math-2934-001-four-credit"
+kind = "four_credit"
+members = ["MATH 2934 001"]
+
+[[relationships]]
+id = "math-2934-002-four-credit"
+kind = "four_credit"
+members = ["MATH 2934 002"]
+
+[[relationships]]
+id = "math-5173-stat-4173-tc1-cross-listing"
+kind = "cross_listing"
+members = ["MATH 5173 TC1", "STAT 4173 TC1"]
+
+[[relationships]]
+id = "math-4123-001-h01-cross-listing"
+kind = "cross_listing"
+members = ["MATH 4123 001", "MATH 4123 H01"]
+
+[[relationships]]
+id = "math-0803-1003-001-coreq"
+kind = "coreq"
+members = ["MATH 0803 001", "MATH 1003 001"]
+
+[[relationships]]
+id = "math-0803-1003-002-coreq"
+kind = "coreq"
+members = ["MATH 0803 002", "MATH 1003 002"]
+
+[[relationships]]
+id = "math-0803-1003-003-coreq"
+kind = "coreq"
+members = ["MATH 0803 003", "MATH 1003 003"]
+
+[[relationships]]
+id = "math-0803-1003-004-coreq"
+kind = "coreq"
+members = ["MATH 0803 004", "MATH 1003 004"]
+
+[[relationships]]
+id = "math-0803-1003-tc1-coreq"
+kind = "coreq"
+members = ["MATH 0803 TC1", "MATH 1003 TC1"]
+
+[[relationships]]
+id = "math-0903-1113-001-coreq"
+kind = "coreq"
+members = ["MATH 0903 001", "MATH 1113 001"]
+
+[[relationships]]
+id = "math-0903-1113-002-coreq"
+kind = "coreq"
+members = ["MATH 0903 002", "MATH 1113 002"]
+
+[[relationships]]
+id = "math-0903-1113-tc1-coreq"
+kind = "coreq"
+members = ["MATH 0903 TC1", "MATH 1113 TC1"]
+
+[[relationships]]
+id = "math-1110-1113-003-coreq"
+kind = "coreq"
+members = ["MATH 1110 003", "MATH 1113 003"]
