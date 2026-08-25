@@ -363,7 +363,7 @@ class SolveAdjustsPlaceholderCountTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            solved.get("MATH 1113-002").sections[0].instructor, "Staff"
+            solved.get("MATH 1113-002").sections[0].instructor, "new_instructor"
         )
 
     def test_collapses_numbered_staff_when_times_do_not_conflict(self):
@@ -378,7 +378,7 @@ class SolveAdjustsPlaceholderCountTests(unittest.TestCase):
         solved = solve(Schedule([a, b]), empty_config(), time_limit_seconds=10.0)
         self.assertEqual(
             {s.instructor for item in solved.classes for s in item.sections},
-            {"Staff"},
+            {"new_instructor"},
         )
 
     def test_adds_numbered_staff_for_overlapping_placeholder_courses(self):
@@ -392,7 +392,7 @@ class SolveAdjustsPlaceholderCountTests(unittest.TestCase):
         instructors = {
             s.instructor for item in solved.classes for s in item.sections
         }
-        self.assertEqual(instructors, {"Staff", "Staff 2"})
+        self.assertEqual(instructors, {"new_instructor", "new_instructor 2"})
         self.assertEqual(check_conflicts(solved), [])
 
     def test_global_staff_cost_moves_time_to_use_one_identity(self):
@@ -420,7 +420,9 @@ class SolveAdjustsPlaceholderCountTests(unittest.TestCase):
         solved = solve(Schedule([a, b]), config, time_limit_seconds=10.0)
 
         sections = [section for item in solved for section in item.sections]
-        self.assertEqual({section.instructor for section in sections}, {"Staff"})
+        self.assertEqual(
+            {section.instructor for section in sections}, {"new_instructor"}
+        )
         self.assertEqual({section.start for section in sections}, {
             datetime.time(9), datetime.time(10),
         })

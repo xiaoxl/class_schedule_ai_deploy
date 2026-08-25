@@ -9,7 +9,14 @@ from ortools.sat.python import cp_model
 from ..class_model import Section
 from ..overrides import LockMap, locks_for_section
 from ..schedule_model import Schedule
+from ..schedule_model import PersonRecord
 from ..initial_builder import is_placeholder_instructor, recolor_placeholder
+from ..instructor_identity import new_instructor_name, new_instructor_rank
+from ..new_instructors import (
+    NEW_INSTRUCTOR_MAX_LOAD,
+    required_by_concurrency,
+    required_by_load,
+)
 from .candidates import (
     MAX_CANDIDATES_PAIRED_SECTION,
     MAX_CANDIDATES_SINGLE_SECTION,
@@ -64,13 +71,24 @@ def solve_detailed(
             section.instructor
             for item in schedule.classes for section in item.sections
             if is_placeholder_instructor(section.instructor)
-        }))
+        }, key=new_instructor_rank))
     else:
         normalized_schedule, placeholder_assignments = recolor_placeholder(
             schedule, seed=0
         )
         placeholder_instructors = tuple(placeholder_assignments)
     class_list = list(normalized_schedule.classes)
+    existing_count = max(
+        (new_instructor_rank(name) for name in placeholder_instructors), default=0
+    )
+    pool_size = max(
+        existing_count,
+        required_by_load(class_list),
+        required_by_concurrency(class_list),
+    )
+    placeholder_instructors = tuple(
+        new_instructor_name(rank) for rank in range(1, pool_size + 1)
+    )
     sections: list[Section] = []
     owner: list[int] = []
     for class_index, item in enumerate(class_list):
@@ -121,9 +139,14 @@ def solve_detailed(
     back_to_back_terms = add_scheduling_constraints(
         slots, chosen, config.preferences, model
     )
+    effective_persons = dict(config.persons)
+    effective_persons.update({
+        name: PersonRecord(name=name, max_load=NEW_INSTRUCTOR_MAX_LOAD)
+        for name in placeholder_instructors
+    })
     load_terms = add_load_terms(
         class_list, sections_by_class, candidates, chosen,
-        config.persons, config.preferences, model,
+        effective_persons, config.preferences, model,
     )
     placeholder_terms = add_placeholder_count_terms(
         candidates, chosen, placeholder_instructors,

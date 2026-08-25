@@ -1,53 +1,8 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Class Schedule Workbench</title>
-  <meta name="description" content="Upload a schedule file, parse it with the atomic class model, and view the grouped result.">
-  <link rel="stylesheet" href="/styles.css?v=7">
-</head>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>排课工作台</title><link rel="stylesheet" href="/styles.css?v=21"><link rel="stylesheet" href="/context-menu.css?v=1"><link rel="stylesheet" href="/online-sections.css?v=1"><link rel="stylesheet" href="/workload-status.css?v=1"></head>
 <body>
-  <main class="shell">
-    <header class="masthead">
-      <p class="eyebrow">CLASS SCHEDULE</p>
-      <h1>Class Schedule Workbench</h1>
-      <p class="lede">Upload a CSV or Excel schedule to parse and view it automatically; click "Solve Schedule" to run the solver, eliminating hard conflicts and minimizing soft preference penalties.</p>
-    </header>
-
-    <section class="upload-panel">
-      <form id="uploadForm">
-        <label class="drop-zone" id="dropZone">
-          <input id="scheduleFile" name="schedule_file" type="file" accept=".csv,.xlsx" required>
-          <span class="upload-mark">+</span>
-          <strong id="fileLabel">Drop a schedule file here, or click to choose one</strong>
-          <small>Supports CSV and XLSX, up to 50 MB</small>
-        </label>
-        <button id="submitButton" type="submit" disabled>Solve Schedule</button>
-      </form>
-      <div id="errorBox" class="error-box hidden"></div>
-    </section>
-
-    <section id="results" class="results hidden">
-      <div class="results-summary"><strong id="countLabel"></strong></div>
-      <div id="solverSummary" class="solver-summary hidden"></div>
-      <div id="attemptTabs" class="attempt-tabs hidden" role="tablist"></div>
-      <div id="changesSummary" class="changes-summary hidden"></div>
-      <div id="excelDownloads" class="excel-downloads hidden">
-        <a id="downloadRaw" download="schedule.xlsx">Download Schedule (As-Is)</a>
-        <a id="downloadInstructor" download="schedule_instructor.xlsx">Download Schedule (By Instructor)</a>
-        <a id="downloadRoom" download="schedule_room.xlsx">Download Schedule (By Room)</a>
-      </div>
-      <div id="violationsSummary" class="violations-summary hidden"></div>
-      <div class="view-switcher" role="tablist">
-        <button type="button" class="view-tab" data-view="atomic">Atomic Classes</button>
-        <button type="button" class="view-tab" data-view="course">By Course</button>
-        <button type="button" class="view-tab active" data-view="instructor">By Instructor</button>
-        <button type="button" class="view-tab" data-view="room">By Room</button>
-      </div>
-      <div id="classList" class="class-list"></div>
-    </section>
-  </main>
-  <script src="/app.js?v=11" defer></script>
-</body>
-</html>
+<header class="topbar"><div class="brand"><span class="brand-mark">S</span><span><strong>排课工作台</strong><small>Schedule Studio</small></span></div><div class="top-actions"><input id="termInput" class="term-input" value="27S" aria-label="学期" placeholder="学期，如 27S"><label class="import-button"><input id="scheduleFile" type="file" accept=".csv,.xlsx">导入 CSV / XLSX</label><button id="saveButton" disabled>保存新版本</button><button id="solveButton" class="primary" disabled>自动排课</button><div class="export-menu"><button id="exportButton" disabled>导出 ▾</button><div id="exportLinks" class="export-links hidden"><a id="downloadRaw" download="schedule.xlsx">课表数据</a><a id="downloadInstructor" download="schedule_instructor.xlsx">教师课表</a><a id="downloadRoom" download="schedule_room.xlsx">教室课表</a></div></div></div></header>
+<main class="workspace"><section id="emptyState" class="empty-state"><div class="empty-icon">↥</div><h1>从 starting 文件开始排课</h1><p>导入 CSV 或 XLSX 后，即可在教师、教室与课程视图间切换，并直接拖动课程调整时间。</p><label class="large-import"><input type="file" id="emptyFile" accept=".csv,.xlsx">选择课表文件</label><small>最大 50 MB</small></section>
+<section id="app" class="app hidden"><div class="toolbar"><div class="view-tabs" role="tablist"><button class="view-tab active" data-view="instructor">教师视图</button><button class="view-tab" data-view="room">教室视图</button><button class="view-tab" data-view="course">课程视图</button></div><div class="file-status"><span id="statusDot"></span><span id="fileName"></span><span id="countLabel"></span></div></div>
+<div class="content-grid"><section class="schedule-panel"><div id="gridControls" class="grid-controls"><div><label id="resourceLabel" for="resourceSelect">教师</label><select id="resourceSelect"></select></div><div class="legend"><span><i class="legend-color"></i>可拖动课程</span><span><i class="conflict-color"></i>冲突</span></div></div><div id="scheduleView" class="schedule-view"></div></section><aside class="side-panel"><div class="side-heading"><div><span class="kicker">WORKLOAD</span><h2>教师总课时</h2></div><span id="totalHours" class="total-pill"></span></div><div id="workloadList" class="workload-list"></div></aside></div>
+<section class="issues-panel"><div class="issues-heading"><div><span class="kicker">SCHEDULE HEALTH</span><h2>冲突与不合理安排</h2></div><div id="healthSummary"></div></div><div id="violationsSummary"></div></section></section></main><div id="toast" class="toast hidden"></div><script src="/app.js?v=21" defer></script></body></html>

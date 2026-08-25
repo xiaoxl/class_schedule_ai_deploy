@@ -20,6 +20,7 @@ from dataclasses import dataclass, field, replace
 from typing import ClassVar
 
 from . import record_utils
+from .instructor_identity import canonical_instructor
 
 # Course numbers encode credit hours in their last digit by convention
 # (e.g. "1914" -> 4 credits, "0803" -> 3 credits). These full-course
@@ -61,6 +62,7 @@ class Section:
         self.subject = record_utils.text(self.subject).upper()
         self.number = record_utils.text(self.number)
         self.section = record_utils.text(self.section)
+        self.instructor = canonical_instructor(record_utils.text(self.instructor))
         self.time_slot = record_utils.text(self.time_slot)
         if not self.subject or not self.number or not self.section:
             raise ValueError("Each record requires Subject, Number, and Section")

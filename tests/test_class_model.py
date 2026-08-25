@@ -33,6 +33,15 @@ class SectionTests(unittest.TestCase):
     def test_subject_normalized_to_uppercase(self):
         self.assertEqual(make_section(subject="math").subject, "MATH")
 
+    def test_legacy_staff_identity_is_canonicalized_on_input_and_output(self):
+        section = make_section(instructor="Staff 02")
+        self.assertEqual(section.instructor, "new_instructor 2")
+        self.assertEqual(section.to_record()["Instructor"], "new_instructor 2")
+
+    def test_canonical_new_instructor_identity_is_preserved(self):
+        section = make_section(instructor="new_instructor 3")
+        self.assertEqual(section.instructor, "new_instructor 3")
+
     def test_course_id(self):
         section = make_section(subject="MATH", number="1113", section="001")
         self.assertEqual(section.course_id, "MATH 1113-001")

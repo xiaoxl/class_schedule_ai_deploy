@@ -14,7 +14,7 @@ On top of both, two more passes run in this order:
 1. **``place_new_hires``** -- ``changes.new_hires`` (see
    ``term_builder.TermChanges``) are seated into open positions, each up
    to their own ``persons.toml`` ``max_load``: first by taking over a
-   placeholder-assigned ("Staff") class they're qualified for, and --
+   placeholder-assigned ("new_instructor") class they're qualified for, and --
    only once no open, qualified, non-conflicting placeholder class is
    left -- by taking a class from an instructor currently over their own
    max_load (relieving that overload). If neither is available for a
@@ -22,7 +22,7 @@ On top of both, two more passes run in this order:
    assignment; whatever's left unplaced stays open for the solver.
 2. **``recolor_placeholder``** -- every class still on the placeholder
    after that is greedily assigned a placeholder identity
-   (``"Staff"``, ``"Staff 2"``, ``"Staff 3"``, ...) so that no two classes
+   (``"new_instructor"``, ``"new_instructor 2"``, ...) so that no two classes
    sharing one identity overlap in time. Two *different* open positions
    landing at an overlapping time would otherwise read as a same-
    instructor double-booking to ``check_conflicts`` -- not real, just an
@@ -60,6 +60,11 @@ from .schedule_model import (
     overlaps_in_time,
     teaching_loads,
 )
+from .instructor_identity import (
+    is_new_instructor,
+    new_instructor_name,
+    new_instructor_rank,
+)
 from .term_builder import (
     DEFAULT_PLACEHOLDER_INSTRUCTOR,
     InitialReport,
@@ -88,19 +93,15 @@ def _conflicts_with_any(item: Class, others: list[Class]) -> bool:
 def is_placeholder_instructor(
     instructor: str, placeholder: str = DEFAULT_PLACEHOLDER_INSTRUCTOR
 ) -> bool:
-    """Return whether a name is the base placeholder or ``placeholder N``."""
-    if instructor == placeholder:
-        return True
-    prefix = f"{placeholder} "
-    suffix = instructor[len(prefix):] if instructor.startswith(prefix) else ""
-    return suffix.isdigit() and int(suffix) >= 2
+    """Compatibility name for the canonical New Instructor predicate."""
+    return is_new_instructor(instructor)
 
 
 def _placeholder_rank(
     instructor: str, placeholder: str = DEFAULT_PLACEHOLDER_INSTRUCTOR
 ) -> int:
     """Numeric order used by the solver's contiguous placeholder constraint."""
-    return 1 if instructor == placeholder else int(instructor.rsplit(" ", 1)[1])
+    return new_instructor_rank(instructor)
 
 
 def _qualifies(item: Class, person: PersonRecord) -> bool:
@@ -214,7 +215,7 @@ def recolor_placeholder(
         used = {color_of[n] for n in conflicts[i] if n in color_of}
         rank = 1
         while True:
-            name = placeholder if rank == 1 else f"{placeholder} {rank}"
+            name = new_instructor_name(rank)
             if name not in used:
                 color_of[i] = name
                 break

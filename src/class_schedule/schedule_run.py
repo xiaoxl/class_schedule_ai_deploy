@@ -5,14 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import shutil
-import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
 
+from .instructor_identity import is_new_instructor
 from .schedule_model import (
     HardViolation,
     OVERLOAD_TOLERANCE,
@@ -40,6 +39,7 @@ from .solver import (
     solve_detailed,
 )
 from .term_builder import apply_cancellations, load_changes
+from .version_publisher import publish_version
 
 
 @dataclass(frozen=True)
@@ -401,7 +401,7 @@ def _report(
     changes = simplified_changes(baseline, after)
     unresolved = sorted(
         {s.instructor for item in after.classes for s in item.sections
-         if s.instructor.lower().startswith("staff")}
+         if is_new_instructor(s.instructor)}
     )
 
     lines = [
@@ -675,83 +675,15 @@ def run_term(
     attempts_tuple = tuple(attempt_results)
     assert best.result is not None
 
-    term_dir.mkdir(parents=True, exist_ok=True)
-    staging = term_dir / f".{version}-staging-{uuid.uuid4().hex}"
-    staging.mkdir()
-    try:
-        base = f"{term}_{version}"
-        schedule_path = staging / f"{base}.csv"
-        instructor_path = staging / f"{base}_instructor.xlsx"
-        room_path = staging / f"{base}_room.xlsx"
-        report_path = staging / "report.md"
-        attempts_path = staging / "attempts.csv"
-        changes_path = staging / "changes.csv"
-        baseline_snapshot_path = staging / "baseline.csv"
-        manifest_path = staging / "manifest.json"
-        saved_overrides_path = staging / "overrides.toml"
-        applied_overrides_path = staging / "applied_overrides.toml"
-        applied_changes_path = staging / "applied_changes.toml"
-        best.result.schedule.to_dataframe().to_csv(schedule_path, index=False)
-        best.result.schedule.to_instructor_excel(instructor_path)
-        best.result.schedule.to_room_excel(room_path)
-        pd.DataFrame(_attempt_rows(attempts_tuple)).to_csv(attempts_path, index=False)
-        # The baseline is already a verified Schedule artifact. Preserve its
-        # exact bytes so every descendant carries the identical initial CSV,
-        # not merely an equivalent reserialization.
-        shutil.copyfile(baseline_path, baseline_snapshot_path)
-        changes = simplified_changes(baseline_schedule, best.result.schedule)
-        pd.DataFrame(
-            ({"Course ID": item.course_id, "Field": item.field,
-              "Before": item.before, "After": item.after} for item in changes),
-            columns=("Course ID", "Field", "Before", "After"),
-        ).to_csv(changes_path, index=False)
-        if overrides_path:
-            applied_overrides_path.write_bytes(Path(overrides_path).read_bytes())
-        else:
-            applied_overrides_path.write_text(
-                "# No manual edits or locks were applied to this version.\n",
-                encoding="utf-8",
-            )
-        if resolved_changes_path is not None:
-            applied_changes_path.write_bytes(resolved_changes_path.read_bytes())
-        else:
-            applied_changes_path.write_text(
-                "# No term changes file was found for this solve.\n",
-                encoding="utf-8",
-            )
-        if is_final:
-            saved_overrides_path.write_bytes(applied_overrides_path.read_bytes())
-        else:
-            saved_overrides_path.write_text(
-                render_override_template(
-                    best.result.schedule, term=term, source_version=version
-                ),
-                encoding="utf-8",
-            )
-        report_path.write_text(
-            _report(
-                term, version, input_path, source_schedule,
-                baseline_path, baseline_schedule,
-                resolved_changes_path,
-                config, attempts_tuple, best,
-                time_limit_seconds,
-            ),
-            encoding="utf-8",
-        )
-        artifact_names = (
-            schedule_path.name,
-            instructor_path.name,
-            room_path.name,
-            report_path.name,
-            attempts_path.name,
-            changes_path.name,
-            baseline_snapshot_path.name,
-            applied_overrides_path.name,
-            applied_changes_path.name,
-        )
-        if is_final:
-            artifact_names += (saved_overrides_path.name,)
-        manifest = {
+    applied_overrides = (
+        Path(overrides_path).read_bytes() if overrides_path
+        else b"# No manual edits or locks were applied to this version.\n"
+    )
+    applied_changes = (
+        resolved_changes_path.read_bytes() if resolved_changes_path is not None
+        else b"# No term changes file was found for this solve.\n"
+    )
+    manifest = {
             "schema_version": 4,
             "term": term,
             "version": version,
@@ -761,7 +693,7 @@ def run_term(
             "initial_baseline": {
                 "path": str(baseline_path),
                 "sha256": _sha256(baseline_path),
-                "snapshot": baseline_snapshot_path.name,
+                "snapshot": "baseline.csv",
                 "role": "initial",
             },
             "configuration": {
@@ -787,11 +719,11 @@ def run_term(
                     for spec in configured_cancels
                 ],
                 "cancelled_course_validation": "passed",
-                "snapshot": applied_changes_path.name,
+                "snapshot": "applied_changes.toml",
             },
-            "applied_overrides_sha256": _sha256(applied_overrides_path),
+            "applied_overrides_sha256": hashlib.sha256(applied_overrides).hexdigest(),
             "override_workspace": {
-                "path": saved_overrides_path.name,
+                "path": "overrides.toml",
                 "mutable": not is_final,
                 "source_version": parent if is_final else version,
             },
@@ -812,46 +744,39 @@ def run_term(
                 "soft_penalty": best.soft_penalty,
                 "worst_overload": best.worst_overload,
             },
-            "files": {
-                name: _sha256(staging / name) for name in artifact_names
-            },
         }
-        manifest_path.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=True) + "\n",
-            encoding="utf-8",
-        )
-        backup = None
-        if destination.exists():
-            backup = term_dir / f".{version}-backup-{uuid.uuid4().hex}"
-            destination.replace(backup)
-        try:
-            staging.replace(destination)
-        except Exception:
-            if backup is not None and backup.exists() and not destination.exists():
-                backup.replace(destination)
-            raise
-        finally:
-            if backup is not None and backup.exists():
-                shutil.rmtree(backup)
-    finally:
-        if staging.exists():
-            shutil.rmtree(staging)
+    published = publish_version(
+        term=term, version=version, destination=destination,
+        schedule=best.result.schedule, baseline=baseline_schedule,
+        baseline_bytes=baseline_path.read_bytes(),
+        attempts_rows=_attempt_rows(attempts_tuple),
+        report=_report(
+            term, version, input_path, source_schedule,
+            baseline_path, baseline_schedule, resolved_changes_path,
+            config, attempts_tuple, best, time_limit_seconds,
+        ),
+        manifest=manifest,
+        applied_overrides=applied_overrides,
+        applied_changes=applied_changes,
+        final=is_final,
+        replace_destination=replace_destination,
+    )
 
     return RunBundle(
         term=term,
         version=version,
-        output_dir=destination,
-        schedule_path=destination / f"{term}_{version}.csv",
-        instructor_path=destination / f"{term}_{version}_instructor.xlsx",
-        room_path=destination / f"{term}_{version}_room.xlsx",
-        report_path=destination / "report.md",
-        attempts_path=destination / "attempts.csv",
-        changes_path=destination / "changes.csv",
-        baseline_path=destination / "baseline.csv",
-        manifest_path=destination / "manifest.json",
-        overrides_path=destination / "overrides.toml",
-        applied_overrides_path=destination / "applied_overrides.toml",
-        applied_changes_path=destination / "applied_changes.toml",
+        output_dir=published.output_dir,
+        schedule_path=published.schedule_path,
+        instructor_path=published.instructor_path,
+        room_path=published.room_path,
+        report_path=published.report_path,
+        attempts_path=published.attempts_path,
+        changes_path=published.changes_path,
+        baseline_path=published.baseline_path,
+        manifest_path=published.manifest_path,
+        overrides_path=published.overrides_path,
+        applied_overrides_path=published.applied_overrides_path,
+        applied_changes_path=published.applied_changes_path,
         best_attempt=best,
         attempts=attempts_tuple,
     )

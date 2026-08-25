@@ -65,7 +65,7 @@ class PlaceNewHiresTests(unittest.TestCase):
         )}
         placed, assignments = place_new_hires(schedule, ("Yousuf, Marium",), persons)
         self.assertEqual(assignments, {})
-        self.assertEqual(placed.get("MATH 2703-001").sections[0].instructor, "Staff")
+        self.assertEqual(placed.get("MATH 2703-001").sections[0].instructor, "new_instructor")
 
     def test_stops_at_max_load_rather_than_overfilling(self):
         # Two qualified, non-conflicting 3-credit open slots; max_load 3
@@ -149,17 +149,17 @@ class RecolorPlaceholderTests(unittest.TestCase):
         b = make_class("1003", "001", "MWF 10:00am")
         schedule = Schedule([a, b])
         recolored, assignments = recolor_placeholder(schedule, seed=1)
-        self.assertEqual(set(assignments), {"Staff"})
+        self.assertEqual(set(assignments), {"new_instructor"})
         self.assertEqual(check_conflicts(recolored), [])
 
     def test_existing_numbered_placeholders_collapse_when_no_longer_needed(self):
         a = make_class("1113", "001", "MWF 9:00am", instructor="Staff")
         b = make_class("1003", "001", "MWF 10:00am", instructor="Staff 2")
         recolored, assignments = recolor_placeholder(Schedule([a, b]), seed=1)
-        self.assertEqual(set(assignments), {"Staff"})
+        self.assertEqual(set(assignments), {"new_instructor"})
         self.assertEqual(
             {s.instructor for item in recolored.classes for s in item.sections},
-            {"Staff"},
+            {"new_instructor"},
         )
 
     def test_two_overlapping_classes_split_into_two_identities(self):
@@ -179,7 +179,10 @@ class RecolorPlaceholderTests(unittest.TestCase):
         schedule = Schedule([a, b, c])
         recolored, assignments = recolor_placeholder(schedule, seed=1)
         self.assertEqual(len(assignments), 3)
-        self.assertEqual(list(assignments), ["Staff", "Staff 2", "Staff 3"])
+        self.assertEqual(
+            list(assignments),
+            ["new_instructor", "new_instructor 2", "new_instructor 3"],
+        )
         self.assertEqual(check_conflicts(recolored), [])
 
     def test_a_real_instructors_class_is_left_untouched(self):

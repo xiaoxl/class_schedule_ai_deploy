@@ -80,7 +80,7 @@ class DepartureReassignmentTests(unittest.TestCase):
 
         draft, report = build_initial_schedule(template, changes)
 
-        self.assertEqual(draft.classes[0].sections[0].instructor, "Staff")
+        self.assertEqual(draft.classes[0].sections[0].instructor, "new_instructor")
         self.assertEqual(report.reassigned, ("MATH 1113-001",))
         self.assertEqual(report.departures_not_found, ())
 
@@ -96,7 +96,7 @@ class DepartureReassignmentTests(unittest.TestCase):
         draft, report = build_initial_schedule(template, changes)
 
         item = draft.classes[0]
-        self.assertTrue(all(s.instructor == "Staff" for s in item.sections))
+        self.assertTrue(all(s.instructor == "new_instructor" for s in item.sections))
 
     def test_departure_not_present_in_template_is_reported(self):
         template = Schedule.from_records([make_record(Instructor="Ballard, Kasey L.")])
@@ -116,7 +116,7 @@ class NewCourseTests(unittest.TestCase):
         draft, report = build_initial_schedule(template, changes)
 
         self.assertEqual(draft.course_ids, ["MATH 1013-001"])
-        self.assertEqual(draft.classes[0].sections[0].instructor, "Staff")
+        self.assertEqual(draft.classes[0].sections[0].instructor, "new_instructor")
         self.assertEqual(report.added, ("MATH 1013-001",))
 
     def test_new_cross_listed_pair_grouped_automatically(self):

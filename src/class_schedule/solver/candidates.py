@@ -7,6 +7,8 @@ from dataclasses import replace
 
 from .. import record_utils
 from ..class_model import Class, Section
+from ..new_instructors import can_new_instructor_teach
+from ..instructor_identity import is_new_instructor
 from ..pattern_rules import pattern_applies, section_pattern_role
 from ..schedule_model import (
     PersonRecord,
@@ -31,9 +33,12 @@ def candidate_instructors(
 ) -> list[str]:
     course = f"{section.subject} {section.number}"
     names = {name for name, person in persons.items() if course in person.courses}
-    if section.instructor:
+    eligible_for_new = can_new_instructor_teach(section)
+    if section.instructor and (
+        not is_new_instructor(section.instructor) or eligible_for_new
+    ):
         names.add(section.instructor)
-    if section.instructor in placeholder_instructors:
+    if eligible_for_new:
         names.update(placeholder_instructors)
     return sorted(names)
 

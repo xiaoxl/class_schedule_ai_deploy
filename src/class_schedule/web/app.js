@@ -1,626 +1,87 @@
-const $ = (selector) => document.querySelector(selector);
-const $all = (selector) => Array.from(document.querySelectorAll(selector));
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
+const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const DAYS = [["M","周一"],["T","周二"],["W","周三"],["R","周四"],["F","周五"]];
+const START_MIN = 8 * 60, END_MIN = 20 * 60, STEP = 30;
+let data = null, baselineData = null, selectedFile = null, currentView = "instructor", currentResource = "", busy = false, dragged = null, dirty = false, version = 0, contextTarget = null, nextNewInstructorNumber = 1;
 
-const KIND_LABELS = {
-  NormalClass: "Single Class",
-  FourCreditClass: "Four-Credit Class",
-  HybridClass: "Hybrid Class",
-  CrossListingClass: "Cross-Listing Class",
-  CoreqClass: "Coreq Class",
-};
+document.body.insertAdjacentHTML("beforeend",`<div id="slotContextMenu" class="context-menu hidden" role="dialog" aria-label="课程分配菜单"><div class="context-title"><strong id="contextCourse"></strong><small id="contextSlot"></small></div><label class="context-field"><span>Assign teacher</span><div class="context-row"><select id="contextTeacher"></select><button id="assignTeacher">Assign</button><button id="newInstructor">New</button></div></label><label class="context-field"><span>Assign room</span><div class="context-row"><select id="contextRoom"></select><button id="assignRoom">Assign</button></div></label><small class="context-hint">教师调整应用于整个原子课程；教室调整应用于当前 meeting。</small></div>`);
 
-let lastData = null;
-let currentView = "instructor";
-let busy = false;
-// The file actually submitted to /api/solve. Starts as whatever the user
-// picked; after each successful solve it's replaced with that solve's
-// own output (built from the response's "excel.raw"), so clicking
-// "Solve Schedule" again refines the just-solved result instead of
-// restarting from the original upload every time.
-let currentFile = null;
+function esc(v){return String(v ?? "—").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function roomLabel(r){return [r.Building,r.Room].filter(Boolean).join(" ") || "未分配";}
+function courseId(r){return `${r.Subject} ${r.Number}-${r.Section}`;}
+function instructorLabel(name){return String(name||"未分配").replace(/^(?:Staff|new_instructor)(?=\s|$)/i,"New Instructor");}
+function uiText(value){return String(value??"").replace(/\b(?:Staff|new_instructor)(?=\s|$)/gi,"New Instructor");}
+function isNewInstructor(name){return /^(?:Staff|new_instructor)(?:\s|$)/i.test(String(name||""));}
+function newInstructorName(rank){return rank===1?"new_instructor":`new_instructor ${rank}`;}
+function sections(){return data?.classes.flatMap((item,classIndex)=>item.sections.map((row,recordIndex)=>({...row,_item:item,_classIndex:classIndex,_recordIndex:recordIndex,_id:`${classIndex}:${recordIndex}`,course_id:courseId(row),credit_hours:item.credit_hours}))) || [];}
+function displaySections(){const output=[];data?.classes.forEach((item,classIndex)=>{let rows=item.sections.map((row,recordIndex)=>({...row,_item:item,_classIndex:classIndex,_recordIndex:recordIndex,_id:`${classIndex}:${recordIndex}`,course_id:courseId(row),credit_hours:item.credit_hours}));if(item.kind==="HybridClass")rows=rows.filter(row=>startOf(row)!=null);if(item.kind==="CrossListingClass"){const groups=new Map;for(const row of rows){const key=[row.Instructor,row["Time Slot"],row.Building,row.Room].join("::");if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}rows=[...groups.values()].map(group=>({...group[0],display_course_id:group.map(row=>row.course_id).join(" / ")}));}output.push(...rows);});return output;}
+function parseTime(value){if(!value)return null; if(typeof value==="string"){const m=value.match(/(\d{1,2}):(\d{2})/);if(m)return +m[1]*60 + +m[2];}return null;}
+function startOf(r){return parseTime(r.Start) ?? parseTime(r["Time Slot"]);}
+function daysOf(r){return r.Days || String(r["Time Slot"]||"").split(/\s+/)[0] || "";}
+function clock(m){const h=Math.floor(m/60),mm=m%60;return `${h%12||12}:${String(mm).padStart(2,"0")} ${h<12?"AM":"PM"}`;}
+function slotValue(days,minute){return `${days} ${String(Math.floor(minute/60)).padStart(2,"0")}:${String(minute%60).padStart(2,"0")}`;}
+function overlap(a,b){const as=startOf(a),bs=startOf(b);if(as==null||bs==null)return false;const ae=as+(+a.Duration||0),be=bs+(+b.Duration||0);return [...daysOf(a)].some(d=>daysOf(b).includes(d)) && as<be && bs<ae;}
 
-// Every solve's full response, in order -- browsable/downloadable via
-// tabs without re-fetching (see renderAttemptTabs). Reset whenever a
-// fresh file is parsed, since that starts a new lineage. solvedOnce
-// gates the "regenerate" flag: the first solve on a given file is a
-// normal solve; every solve after that is a re-roll that must return a
-// different result (see the /api/solve `regenerate` field).
-let attempts = [];
-let solvedOnce = false;
-let activeAttemptIndex = -1;
-// Set when /api/solve comes back 422 (no conflict-free assignment exists
-// for this input -- see the backend's InfeasibleSchedule handling): retrying the same
-// input can't succeed, so "Solve Schedule" stays disabled until a fresh
-// file is chosen instead of inviting a pointless re-click.
-let solveBlocked = false;
+function setBusy(on,label){busy=on;$("#solveButton").disabled=on||!data;$("#saveButton").disabled=on||!data||!dirty;$("#scheduleFile").disabled=on;if(label)$("#solveButton").textContent=label;}
+function toast(message,error=false){const el=$("#toast");el.textContent=message;el.className=`toast${error?" error":""}`;setTimeout(()=>el.classList.add("hidden"),2600);}
+function connectFile(input){input.addEventListener("change",()=>{if(input.files[0])loadFile(input.files[0]);});}
+connectFile($("#scheduleFile"));connectFile($("#emptyFile"));
 
-const file = $("#scheduleFile");
-const zone = $("#dropZone");
-const submitButton = $("#submitButton");
-const IDLE_BUTTON_TEXT = "Solve Schedule";
-const EXCEL_XLSX_MIME =
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+async function loadFile(file){if(busy)return;selectedFile=file;dirty=false;version=versionFromName(file.name);setBusy(true,"正在读取…");try{const form=new FormData();form.append("schedule_file",file);const res=await fetch("/api/schedule",{method:"POST",body:form});const body=await res.json();if(!res.ok)throw new Error(typeof body.detail==="string"?body.detail:body.detail?.message||"无法读取文件");data=body;baselineData=structuredClone(body);currentResource="";nextNewInstructorNumber=Math.max(0,...sections().map(r=>String(r.Instructor||"").match(/^(?:Staff|new_instructor)(?:\s+(\d+))?$/i)).filter(Boolean).map(m=>m[1]?+m[1]:1))+1;const inferred=file.name.match(/(?:^|[_-])(\d{2}[A-Za-z])(?:[_-]|\.)/);if(inferred)$("#termInput").value=inferred[1].toUpperCase();showApp();renderAll();toast(`已导入 ${body.count} 门课程`);}catch(e){toast(e.message,true);}finally{setBusy(false,"自动排课");}}
 
-function updateFileLabel() {
-  $("#fileLabel").textContent = file.files[0]?.name || "Drop a schedule file here, or click to choose one";
-}
+$("#solveButton").addEventListener("click",async()=>{if(!selectedFile||busy)return;setBusy(true,"正在排课…");try{const form=new FormData();form.append("schedule_file",selectedFile);const res=await fetch("/api/solve",{method:"POST",body:form});const body=await res.json();if(!res.ok)throw new Error(typeof body.detail==="string"?body.detail:"自动排课失败");data=body;currentResource="";renderAll();markDirty();toast("自动排课完成，可保存为新版本");}catch(e){toast(e.message,true);}finally{setBusy(false,"自动排课");}});
 
-function setBusy(value, buttonText) {
-  busy = value;
-  file.disabled = value;
-  submitButton.disabled = value || !lastData || solveBlocked;
-  if (buttonText) submitButton.textContent = buttonText;
-}
+function showApp(){$("#emptyState").classList.add("hidden");$("#app").classList.remove("hidden");$("#exportButton").disabled=false;$("#saveButton").disabled=!dirty;}
+$$('.view-tab').forEach(btn=>btn.addEventListener('click',()=>{currentView=btn.dataset.view;currentResource="";$$('.view-tab').forEach(x=>x.classList.toggle('active',x===btn));renderSchedule();}));
+$("#resourceSelect").addEventListener("change",e=>{currentResource=e.target.value;renderScheduleBody();});
+$("#exportButton").addEventListener("click",()=>$("#exportLinks").classList.toggle("hidden"));
+document.addEventListener("click",e=>{if(!e.target.closest(".export-menu"))$("#exportLinks").classList.add("hidden");});
 
-file.addEventListener("change", () => {
-  updateFileLabel();
-  if (file.files[0]) parseSelectedFile();
-});
+function renderAll(){$("#fileName").textContent=selectedFile?.name||"已排课文件";$("#countLabel").textContent=`${data.count} 个原子课程`;renderDownloads();renderSchedule();renderWorkload();renderIssues();}
+function renderDownloads(){if(!data.excel)return;for(const [key,id] of [["raw","downloadRaw"],["instructor","downloadInstructor"],["room","downloadRoom"]]){const a=$("#"+id);if(a.dataset.url)URL.revokeObjectURL(a.dataset.url);const bytes=Uint8Array.from(atob(data.excel[key]),c=>c.charCodeAt(0));a.href=URL.createObjectURL(new Blob([bytes],{type:XLSX}));a.dataset.url=a.href;}}
 
-["dragenter", "dragover"].forEach((eventName) =>
-  zone.addEventListener(eventName, (event) => {
-    event.preventDefault();
-    zone.classList.add("drag");
-  })
-);
-["dragleave", "drop"].forEach((eventName) =>
-  zone.addEventListener(eventName, (event) => {
-    event.preventDefault();
-    zone.classList.remove("drag");
-  })
-);
-zone.addEventListener("drop", (event) => {
-  if (busy) return;
-  file.files = event.dataTransfer.files;
-  updateFileLabel();
-  if (file.files[0]) parseSelectedFile();
-});
+function resources(mode){const rows=mode==="instructor"?sections():sections().filter(r=>String(r["Time Slot"]||"").toUpperCase()!=="ONLINE");const vals=rows.map(r=>mode==="instructor"?(r.Instructor||"未分配"):roomLabel(r));return [...new Set(vals)].sort((a,b)=>(mode==="instructor"?instructorLabel(a):a).localeCompare(mode==="instructor"?instructorLabel(b):b,undefined,{sensitivity:"base",numeric:true}));}
+function renderSchedule(){const controls=$("#gridControls");if(currentView==="course"){controls.classList.add("hidden");renderCourseList();return;}controls.classList.remove("hidden");const list=resources(currentView);if(!list.includes(currentResource))currentResource=list[0]||"";$("#resourceLabel").textContent=currentView==="instructor"?"选择教师":"选择教室";$("#resourceSelect").innerHTML=list.map(x=>`<option value="${esc(x)}" ${x===currentResource?"selected":""}>${esc(currentView==="instructor"?instructorLabel(x):x)}</option>`).join("");if(!$("#onlineSections"))$("#resourceSelect").insertAdjacentHTML("afterend",'<span id="onlineSections" class="online-sections"></span>');renderScheduleBody();}
+function isOnTimeGrid(row){const start=startOf(row),days=daysOf(row);return start!=null&&start>=START_MIN&&start<END_MIN&&DAYS.some(([day])=>days.includes(day));}
+function renderOnlineSections(){const box=$("#onlineSections");if(!box)return;if(currentView!=="instructor"){box.innerHTML="";box.classList.add("hidden");return;}const unplaced=displaySections().filter(row=>(row.Instructor||"未分配")===currentResource&&!isOnTimeGrid(row));box.classList.toggle("hidden",!unplaced.length);box.innerHTML=unplaced.length?`<span class="online-label">未显示在时间表</span>${unplaced.map(row=>`<span class="online-chip ${String(row["Time Slot"]||"").toUpperCase()==="TBA"?"tba":""}" data-class="${row._classIndex}" data-record="${row._recordIndex}" title="右键分配 · ${esc(row["Time Slot"]||"未安排")}">${esc(row.display_course_id||row.course_id)}</span>`).join("")}`:"";}
+function visibleRows(){return displaySections().filter(r=>currentView==="instructor"?(r.Instructor||"未分配")===currentResource:roomLabel(r)===currentResource).filter(isOnTimeGrid);}
+function conflictIds(){const rows=sections(),ids=new Set;for(let i=0;i<rows.length;i++)for(let j=i+1;j<rows.length;j++){const a=rows[i],b=rows[j];if(a._classIndex===b._classIndex||!overlap(a,b))continue;if((a.Instructor&&a.Instructor===b.Instructor)||(roomLabel(a)!=="未分配"&&roomLabel(a)===roomLabel(b))){ids.add(a._id);ids.add(b._id);}}[...fourCreditIssues(),...coreqIssues()].forEach(issue=>issue.ids.forEach(id=>ids.add(id)));return ids;}
+function renderScheduleBody(){renderOnlineSections();const rows=visibleRows(),conflicts=conflictIds();let html='<div class="calendar"><div class="cal-corner"></div>'+DAYS.map(d=>`<div class="day-head">${d[1]}</div>`).join("");for(let m=START_MIN;m<END_MIN;m+=STEP){html+=`<div class="time-label">${m%60===0?clock(m):""}</div>`;for(const [day] of DAYS){const blocks=rows.filter(r=>daysOf(r).includes(day)&&Math.floor((startOf(r)-START_MIN)/STEP)*STEP+START_MIN===m);html+=`<div class="drop-cell ${m%60===30?"hour":""}" data-day="${day}" data-minute="${m}">${blocks.map(r=>blockHtml(r,conflicts.has(r._id))).join("")}</div>`;}}html+='</div>';$("#scheduleView").innerHTML=html;bindDrag();}
+function blockHtml(r,conflict){const height=Math.max(34,Math.ceil((+r.Duration||STEP)/STEP)*40-4);const secondary=currentView==="instructor"?roomLabel(r):instructorLabel(r.Instructor);return `<div class="course-block${conflict?" conflict":""}" draggable="true" data-class="${r._classIndex}" data-record="${r._recordIndex}" style="height:${height}px"><strong>${esc(r.display_course_id||r.course_id)}</strong><small>${esc(secondary)}</small><small>${esc(clock(startOf(r)))} · ${esc(r.Duration||0)} 分钟</small></div>`;}
+function bindDrag(){$$(".course-block").forEach(el=>{el.addEventListener("dragstart",()=>{hideContextMenu();dragged={classIndex:+el.dataset.class,recordIndex:+el.dataset.record};el.classList.add("dragging")});el.addEventListener("dragend",()=>el.classList.remove("dragging"));el.addEventListener("contextmenu",event=>{event.preventDefault();openContextMenu(event,+el.dataset.class,+el.dataset.record);});});$$(".online-chip").forEach(el=>el.addEventListener("contextmenu",event=>{event.preventDefault();openContextMenu(event,+el.dataset.class,+el.dataset.record);}));$$('.drop-cell').forEach(cell=>{cell.addEventListener('dragover',e=>{e.preventDefault();cell.classList.add('drag-over')});cell.addEventListener('dragleave',()=>cell.classList.remove('drag-over'));cell.addEventListener('drop',e=>{e.preventDefault();cell.classList.remove('drag-over');moveSection(+cell.dataset.minute,cell.dataset.day);});});}
+function draggedPattern(item,oldDays,targetDay){if(item.kind==="FourCreditClass"){if(oldDays==="MWF")return "MWF";if(["T","R"].includes(oldDays))return "TR".includes(targetDay)?targetDay:oldDays;}if(oldDays==="MWF"&&"TR".includes(targetDay))return "TR";if(oldDays==="TR"&&"MWF".includes(targetDay))return "MWF";return oldDays.length===1?targetDay:oldDays;}
+function patternRole(item,row){if(item.kind==="HybridClass")return "hybrid_physical";if(item.kind==="CrossListingClass")return "cross_listing";if(item.kind==="CoreqClass")return (+row.Duration===50&&["MW","TR"].includes(daysOf(row)))?"coreq_supplement":"coreq";return "normal";}
+function patternDuration(item,row,newDays){if(newDays===daysOf(row))return +row.Duration||0;const role=patternRole(item,row),patterns=data.assignment_options?.meeting_patterns||[];const match=patterns.find(pattern=>pattern.days===newDays&&pattern.roles.includes(role));return match?.duration||(+row.Duration||0);}
+function moveSection(minute,day){if(!dragged)return;const item=data.classes[dragged.classIndex],row=item.sections[dragged.recordIndex],oldSlot=row["Time Slot"],oldDays=daysOf(row);const newDays=draggedPattern(item,oldDays,day),duration=patternDuration(item,row,newDays),value=slotValue(newDays,minute),end=minute+duration,startText=`${String(Math.floor(minute/60)).padStart(2,"0")}:${String(minute%60).padStart(2,"0")}`,endText=`${String(Math.floor(end/60)).padStart(2,"0")}:${String(end%60).padStart(2,"0")}`;const targets=item.kind==="CrossListingClass"?item.sections.filter(section=>section["Time Slot"]===oldSlot):[row];targets.forEach(section=>{section["Time Slot"]=value;section.Days=newDays;section.Duration=duration;section.Start=startText;section.End=endText;});dragged=null;renderScheduleBody();renderIssues();markDirty();toast(`${item.kind==="CrossListingClass"?item.course_ids.join(" / "):courseId(row)} 已移至 ${value}${newDays!==oldDays?`，pattern ${oldDays} → ${newDays}`:""}`);}
+function markDirty(){dirty=true;$("#saveButton").disabled=false;$("#statusDot").style.background="#c27a17";$("#countLabel").textContent=`${data.count} 个原子课程 · 有未保存调整`;$("#downloadRaw").textContent="课表数据（上次保存）";$("#downloadInstructor").textContent="教师课表（上次保存）";$("#downloadRoom").textContent="教室课表（上次保存）";}
 
-$all(".view-tab").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    if (tab.dataset.view === currentView) return;
-    currentView = tab.dataset.view;
-    $all(".view-tab").forEach((t) => t.classList.toggle("active", t === tab));
-    if (lastData) renderView();
-  });
-});
+function teacherNames(){const configured=(data.assignment_options?.instructors||[]).filter(name=>!isNewInstructor(name));return [...new Set([...configured,...sections().map(r=>r.Instructor).filter(Boolean)])].sort((a,b)=>instructorLabel(a).localeCompare(instructorLabel(b),undefined,{sensitivity:"base",numeric:true}));}
+function assignedRooms(){const unique=new Map;for(const room of data.assignment_options?.rooms||[]){const label=[room.building,room.room].filter(Boolean).join(" ");if(label)unique.set(label,{label,building:room.building||"",room:room.room});}for(const row of sections()){if(!row.Room)continue;const label=roomLabel(row);if(!unique.has(label))unique.set(label,{label,building:row.Building||"",room:row.Room});}return [...unique.values()].sort((a,b)=>a.label.localeCompare(b.label));}
+function openContextMenu(event,classIndex,recordIndex){contextTarget={classIndex,recordIndex};const row=data.classes[classIndex].sections[recordIndex];$("#contextCourse").textContent=courseId(row);$("#contextSlot").textContent=`${row["Time Slot"]||"未安排"} · ${instructorLabel(row.Instructor)} · ${roomLabel(row)}`;$("#contextTeacher").innerHTML=teacherNames().map(name=>`<option value="${esc(name)}" ${name===row.Instructor?"selected":""}>${esc(instructorLabel(name))}</option>`).join("");const rooms=assignedRooms();$("#contextRoom").innerHTML=rooms.map((room,index)=>`<option value="${index}" ${room.room===row.Room&&room.building===(row.Building||"")?"selected":""}>${esc(room.label)}</option>`).join("");const menu=$("#slotContextMenu");menu.classList.remove("hidden");const width=menu.offsetWidth,height=menu.offsetHeight;menu.style.left=`${Math.max(8,Math.min(event.clientX,innerWidth-width-8))}px`;menu.style.top=`${Math.max(8,Math.min(event.clientY,innerHeight-height-8))}px`;}
+function hideContextMenu(){contextTarget=null;$("#slotContextMenu").classList.add("hidden");}
+function assignTeacher(name){if(!contextTarget||!name)return;const item=data.classes[contextTarget.classIndex],target=item.sections[contextTarget.recordIndex];if(item.kind==="CoreqClass")target.Instructor=name;else item.sections.forEach(row=>row.Instructor=name);markDirty();hideContextMenu();renderSchedule();renderWorkload();renderIssues();toast(`已将 ${item.kind==="CoreqClass"?courseId(target):item.course_ids.join(" / ")} 分配给 ${instructorLabel(name)}`);}
+$("#assignTeacher").addEventListener("click",()=>assignTeacher($("#contextTeacher").value));
+$("#newInstructor").addEventListener("click",()=>assignTeacher(newInstructorName(nextNewInstructorNumber++)));
+$("#assignRoom").addEventListener("click",()=>{if(!contextTarget)return;const rooms=assignedRooms(),choice=rooms[+$("#contextRoom").value];if(!choice)return;const item=data.classes[contextTarget.classIndex],target=item.sections[contextTarget.recordIndex],slot=target["Time Slot"];item.sections.filter(row=>row["Time Slot"]===slot).forEach(row=>{row.Building=choice.building;row.Room=choice.room;});markDirty();hideContextMenu();renderSchedule();renderIssues();toast(`已将 ${courseId(target)} 分配到 ${choice.label}`);});
+document.addEventListener("pointerdown",event=>{if(!event.target.closest("#slotContextMenu")&&!event.target.closest(".course-block"))hideContextMenu();});
+document.addEventListener("keydown",event=>{if(event.key==="Escape")hideContextMenu();});
+window.addEventListener("resize",hideContextMenu);
 
-// Selecting/dropping a file parses it immediately; the button is only
-// for the (slow) solve step, which needs an already-parsed schedule.
-// A fresh selection always resets currentFile to that literal file,
-// discarding any earlier solve's output.
-async function parseSelectedFile() {
-  if (busy) return;
-  lastData = null;
-  currentFile = file.files[0];
-  attempts = [];
-  solvedOnce = false;
-  activeAttemptIndex = -1;
-  solveBlocked = false;
-  renderAttemptTabs();
-  setBusy(true, "Parsing…");
-  const data = await submitFile("/api/schedule", currentFile);
-  if (data) render(data);
-  setBusy(false, IDLE_BUTTON_TEXT);
-}
+function renderCourseList(){const slots=[...new Set(sections().map(r=>r["Time Slot"]).filter(Boolean))].sort();const rows=sections().map(r=>`<div class="course-row"><div class="course-name"><strong>${esc(r.course_id)}</strong><small>${esc(r._item.kind)}</small></div><span>${esc(instructorLabel(r.Instructor))}</span><span>${esc(roomLabel(r))}</span><select class="slot-select" data-class="${r._classIndex}" data-record="${r._recordIndex}">${slots.map(s=>`<option ${s===r["Time Slot"]?"selected":""}>${esc(s)}</option>`).join("")}</select><span>${esc(r.Duration||"—")} 分钟</span></div>`).join("");$("#scheduleView").innerHTML=`<div class="course-list"><div class="course-row header"><span>课程</span><span>教师</span><span>教室</span><span>时间槽</span><span>时长</span></div>${rows}</div>`;$$('.slot-select').forEach(el=>el.addEventListener('change',()=>{const row=data.classes[+el.dataset.class].sections[+el.dataset.record];row['Time Slot']=el.value;const [days,time]=el.value.split(/\s+/);row.Days=days;row.Start=time;renderIssues();markDirty();toast(`${courseId(row)} 时间已更新`);}));}
 
-$("#uploadForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (busy || !lastData || !currentFile) return;
-  setBusy(true, "Solving, this may take up to a minute…");
-  // Submits currentFile, not necessarily the original upload -- see its
-  // declaration above. regenerate=true from the second solve onward asks
-  // the solver to guarantee a different result from this same input
-  // (which, by then, is itself the previous solve's own output) instead
-  // of possibly reconverging on the same answer.
-  const data = await submitFile("/api/solve", currentFile, {
-    regenerate: String(solvedOnce),
-  });
-  if (data && data.excel) {
-    currentFile = base64ToFile(data.excel.raw, "solved_schedule.xlsx", EXCEL_XLSX_MIME);
-    // data.changes is only this step's diff (its input was the previous
-    // attempt's output, not the original file) -- merge it onto the
-    // running total so the displayed solve plan always reads as "changed
-    // from the original upload", not "changed since last click".
-    const previousCumulative = attempts.length
-      ? attempts[attempts.length - 1].cumulativeChanges
-      : [];
-    const cumulativeChanges = mergeChanges(previousCumulative, data.changes);
-    attempts.push({ data, cumulativeChanges, label: `Attempt ${attempts.length + 1}` });
-    activeAttemptIndex = attempts.length - 1;
-    solvedOnce = true;
-    render(data, cumulativeChanges);
-    renderAttemptTabs();
-  } else if (lastResponseStatus === 422) {
-    solveBlocked = true;
-  }
-  setBusy(false, IDLE_BUTTON_TEXT);
-});
+function versionFromName(name){const match=String(name).match(/(?:^|[_-])ver(\d+)/i);return match?Number(match[1]):0;}
+function recordsOf(source){return source.classes.flatMap(item=>item.sections.map(row=>Object.fromEntries(Object.entries(row).filter(([key])=>!key.startsWith("_")))));}
+$("#saveButton").addEventListener("click",async()=>{if(!data||!baselineData||!dirty||busy)return;const term=$("#termInput").value.trim().toUpperCase();if(!term){toast("请先填写学期，例如 27S",true);return;}setBusy(true,"自动排课");$("#saveButton").textContent="正在发布…";try{const response=await fetch("/api/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({term,records:recordsOf(data),baseline_records:recordsOf(baselineData)})});const body=await response.json();if(!response.ok){const detail=body.detail;throw new Error(typeof detail==="string"?detail:detail?.message||"保存版本失败");}version=Number(body.version.replace("ver",""));dirty=false;$("#statusDot").style.background="";$("#fileName").textContent=`${term}_${body.version}.csv`;$("#countLabel").textContent=`${data.count} 个原子课程 · 已发布到 ${body.output_dir}`;toast(`已发布 ${term}/${body.version}`);}catch(error){toast(error.message,true);}finally{$("#saveButton").textContent="保存新版本";setBusy(false,"自动排课");}});
 
-// ---- cumulative solve plan ----
-//
-// Each attempt's own `data.changes` is a step diff (previous attempt's
-// output -> this attempt's output), not a diff from the original file --
-// the backend is stateless and only ever sees one input at a time (see
-// webapp.py's /api/solve). Merging every step's diff into a running
-// per-(course, field) total, keeping the first "before" and the latest
-// "after" seen for each, reconstructs the true original -> current diff
-// without the backend needing to track history at all. A field nudged
-// back to its original value nets out to no real change, so it's dropped
-// rather than shown as a no-op.
-function mergeChanges(previous, step) {
-  const merged = new Map();
-  for (const change of previous) {
-    merged.set(`${change.course_id}::${change.field}`, { ...change });
-  }
-  for (const change of step) {
-    const key = `${change.course_id}::${change.field}`;
-    const existing = merged.get(key);
-    if (existing) {
-      existing.after = change.after;
-    } else {
-      merged.set(key, { ...change });
-    }
-  }
-  return [...merged.values()].filter((change) => change.before !== change.after);
-}
-
-function base64ToFile(base64, filename, mimeType) {
-  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-  return new File([bytes], filename, { type: mimeType });
-}
-
-// Set by submitFile on every call so callers that care about *why* a
-// request failed (see the /api/solve handler's 422 check) can look past
-// the generic null-on-failure return without changing that contract for
-// every other caller.
-let lastResponseStatus = null;
-
-async function submitFile(endpoint, fileToSend, extraFields = {}) {
-  if (!fileToSend) return null;
-  hideError();
-  lastResponseStatus = null;
-  try {
-    const formData = new FormData();
-    formData.append("schedule_file", fileToSend);
-    for (const [key, value] of Object.entries(extraFields)) {
-      formData.append(key, value);
-    }
-    const response = await fetch(endpoint, { method: "POST", body: formData });
-    lastResponseStatus = response.status;
-    const data = await response.json();
-    if (!response.ok) {
-      const detail = data.detail;
-      if (detail && typeof detail === "object") {
-        showError(detail.message, detail.records);
-      } else {
-        showError(detail || "Request failed");
-      }
-      return null;
-    }
-    return data;
-  } catch (error) {
-    showError(error.message);
-    return null;
-  }
-}
-
-// `changesOverride` lets a caller display something other than this
-// response's own raw `data.changes` -- specifically the merged
-// cumulative-from-original changes for a solve attempt (see
-// mergeChanges). Defaults to `data.changes` for a plain parse response,
-// which has no such concept.
-function render(data, changesOverride = data.changes) {
-  lastData = data;
-  $("#results").classList.remove("hidden");
-  $("#countLabel").textContent = `Parsed ${data.count} classes`;
-  renderSolverSummary(data.solver);
-  renderChanges(changesOverride);
-  renderExcelDownloads(data.excel);
-  renderViolations(data.violations);
-  renderView();
-}
-
-function renderSolverSummary(metadata) {
-  const box = $("#solverSummary");
-  if (!metadata) {
-    box.classList.add("hidden");
-    box.textContent = "";
-    return;
-  }
-  const optimality = metadata.status === "optimal" ? "Optimal" : "Feasible";
-  const gap = Math.max(0, metadata.objective - metadata.best_bound);
-  box.textContent = [
-    optimality,
-    `score ${metadata.objective.toFixed(1)}`,
-    `bound ${metadata.best_bound.toFixed(1)}`,
-    `gap ${gap.toFixed(1)}`,
-    `${metadata.solve_seconds.toFixed(2)}s`,
-    `${metadata.candidate_count} candidates`,
-    `config ${metadata.config_version || "unversioned"}`,
-  ].join(" · ");
-  box.classList.remove("hidden");
-}
-
-// ---- attempt history: every solve's full response, browsable via tabs ----
-//
-// Purely a client-side view over data already in memory -- selecting an
-// older attempt just re-renders it (render() is a pure function of a
-// response object), never re-fetches. The next solve always continues
-// from currentFile (the latest attempt), regardless of which tab is
-// currently being viewed.
-
-function renderAttemptTabs() {
-  const box = $("#attemptTabs");
-  if (attempts.length < 2) {
-    // A single attempt has nothing to switch between -- the normal
-    // results view already shows it.
-    box.classList.add("hidden");
-    box.innerHTML = "";
-    return;
-  }
-  box.innerHTML = attempts
-    .map((attempt, index) => {
-      const score = attempt.data.violations?.soft_total;
-      const scoreLabel = score === undefined ? "" : ` (${score} pts)`;
-      const active = index === activeAttemptIndex ? " active" : "";
-      return `<button type="button" class="view-tab${active}" data-index="${index}">${esc(attempt.label)}${esc(scoreLabel)}</button>`;
-    })
-    .join("");
-  box.classList.remove("hidden");
-}
-
-$("#attemptTabs").addEventListener("click", (event) => {
-  const tab = event.target.closest("[data-index]");
-  if (!tab) return;
-  const index = Number(tab.dataset.index);
-  if (index === activeAttemptIndex) return;
-  activeAttemptIndex = index;
-  render(attempts[index].data, attempts[index].cumulativeChanges);
-  renderAttemptTabs();
-});
-
-// ---- excel downloads: present after both a plain parse and a solve ----
-
-function renderExcelDownloads(excel) {
-  const box = $("#excelDownloads");
-  const links = {
-    raw: $("#downloadRaw"),
-    instructor: $("#downloadInstructor"),
-    room: $("#downloadRoom"),
-  };
-  for (const url of Object.values(links)) {
-    if (url.dataset.objectUrl) URL.revokeObjectURL(url.dataset.objectUrl);
-  }
-  if (!excel) {
-    box.classList.add("hidden");
-    return;
-  }
-  for (const [key, anchor] of Object.entries(links)) {
-    const bytes = Uint8Array.from(atob(excel[key]), (c) => c.charCodeAt(0));
-    const blobUrl = URL.createObjectURL(new Blob([bytes], { type: EXCEL_XLSX_MIME }));
-    anchor.href = blobUrl;
-    anchor.dataset.objectUrl = blobUrl;
-  }
-  box.classList.remove("hidden");
-}
-
-// ---- changes summary: what the solver actually adjusted ----
-
-const CHANGE_FIELD_LABELS = { instructor: "Instructor", time: "Time", room: "Room" };
-const CHANGE_FIELD_ORDER = ["time", "room", "instructor"];
-
-// changes only carries fields that actually differ (see solver/result.py's
-// diff_schedules) -- to show the other, unchanged fields alongside them
-// we look the section back up in the current render's own data.
-function currentSectionByCourseId(courseId) {
-  if (!lastData) return null;
-  return flattenSections(lastData).find((s) => s.course_id === courseId) || null;
-}
-
-function currentFieldValue(section, field) {
-  if (!section) return "";
-  if (field === "time") return section["Time Slot"] || "";
-  if (field === "room") return roomLabel(section);
-  if (field === "instructor") return section["Instructor"] || "";
-  return "";
-}
-
-function renderChanges(changes) {
-  const box = $("#changesSummary");
-  if (!changes || !changes.length) {
-    box.classList.add("hidden");
-    box.innerHTML = "";
-    return;
-  }
-  const groups = groupBy(changes, (c) => c.course_id, "(Unknown course)");
-  const items = groups
-    .map(([courseId, courseChanges]) => {
-      const changedByField = new Map(courseChanges.map((c) => [c.field, c]));
-      const section = currentSectionByCourseId(courseId);
-      // Unchanged fields first (plain current value), changed fields
-      // after (before -> after) -- both halves in the same Time/Room/
-      // Instructor order for a predictable read.
-      const unchangedParts = CHANGE_FIELD_ORDER
-        .filter((field) => !changedByField.has(field))
-        .map((field) => {
-          const label = CHANGE_FIELD_LABELS[field];
-          const value = currentFieldValue(section, field) || "(empty)";
-          return `${esc(label)} ${esc(value)}`;
-        });
-      const changedParts = CHANGE_FIELD_ORDER
-        .filter((field) => changedByField.has(field))
-        .map((field) => {
-          const c = changedByField.get(field);
-          const label = CHANGE_FIELD_LABELS[field] || field;
-          const before = c.before || "(empty)";
-          const after = c.after || "(empty)";
-          return `${esc(label)} ${esc(before)} → ${esc(after)}`;
-        });
-      const parts = [...unchangedParts, ...changedParts].join("; ");
-      return `<li><strong>${esc(courseId)}</strong>: ${parts}</li>`;
-    })
-    .join("");
-  box.innerHTML = `<h3>Solve Plan (${groups.length} class(es) adjusted)</h3><ul>${items}</ul>`;
-  box.classList.remove("hidden");
-}
-
-// ---- violations summary (hard = red, soft = orange/yellow by penalty) ----
-
-function renderViolations(violations) {
-  const box = $("#violationsSummary");
-  const hard = violations?.hard || [];
-  const soft = violations?.soft || [];
-  if (!hard.length && !soft.length) {
-    box.classList.add("hidden");
-    box.innerHTML = "";
-    return;
-  }
-  const orange = soft.filter((f) => f.severity === "orange");
-  const yellow = soft.filter((f) => f.severity === "yellow");
-  const groups = [];
-  if (hard.length) {
-    groups.push(renderViolationGroup(
-      "red", `Hard Conflicts (${hard.length})`,
-      hard.map((v) => ({ subject: v.subject, message: v.message }))
-    ));
-  }
-  if (orange.length) {
-    groups.push(renderViolationGroup(
-      "orange", `Please Follow If Possible (${orange.length})`,
-      orange.map((f) => ({ subject: f.subject, message: f.message, penalty: f.penalty }))
-    ));
-  }
-  if (yellow.length) {
-    // This group's own point total -- not violations.soft_total, which
-    // is the grand total across *both* severities and would silently
-    // include orange's points here too whenever both groups are present.
-    const yellowTotal = yellow.reduce((sum, f) => sum + f.penalty, 0);
-    groups.push(renderViolationGroup(
-      "yellow",
-      `Soft Preferences Not Met (${yellow.length}, ${yellowTotal} pts total)`,
-      yellow.map((f) => ({ subject: f.subject, message: f.message, penalty: f.penalty }))
-    ));
-  }
-  box.innerHTML = groups.join("");
-  box.classList.remove("hidden");
-}
-
-function renderViolationGroup(level, title, items) {
-  const rows = items
-    .map((item) => `<li><strong>${esc(item.subject)}</strong>：${esc(item.message)}${
-      item.penalty !== undefined ? ` <span class="penalty">(-${item.penalty})</span>` : ""
-    }</li>`)
-    .join("");
-  return `<div class="violation-group violation-${level}">
-    <h3>${esc(title)}</h3>
-    <ul>${rows}</ul>
-  </div>`;
-}
-
-function renderView() {
-  const renderers = {
-    atomic: renderAtomicView,
-    course: () => renderGroupedView(groupByCourse(lastData), "course"),
-    instructor: () => renderGroupedView(groupByInstructor(lastData), "instructor"),
-    room: () => renderGroupedView(groupByRoom(lastData), "room"),
-  };
-  $("#classList").innerHTML = (renderers[currentView] || renderAtomicView)();
-}
-
-function renderAtomicView() {
-  return lastData.classes.map(renderClass).join("");
-}
-
-function renderClass(item) {
-  const label = KIND_LABELS[item.kind] || item.kind;
-  const rows = item.sections.map(renderSection).join("");
-  return `<article class="class-card">
-    <header><span class="kind-badge">${esc(label)}</span><strong>${esc(item.course_ids.join(" / "))}</strong></header>
-    <table>
-      <thead><tr><th>Time Slot</th><th>Room</th><th>Instructor</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-  </article>`;
-}
-
-function renderSection(section) {
-  return `<tr>
-    <td>${esc(section["Time Slot"])}</td>
-    <td>${esc(roomLabel(section))}</td>
-    <td>${esc(section["Instructor"])}</td>
-  </tr>`;
-}
-
-// ---- grouped views (by course / instructor / room) ----
-//
-// The API already returns every section's Subject/Number/Section/Room/
-// Instructor, so these views are pure client-side re-groupings of the
-// same upload response -- no extra request needed when switching tabs.
-
-function flattenSections(data) {
-  return data.classes.flatMap((item, classIndex) =>
-    item.sections.map((section) => ({
-      ...section,
-      course_id: `${section["Subject"]} ${section["Number"]}-${section["Section"]}`,
-      kind: item.kind,
-      class_index: classIndex,
-      credit_hours: item.credit_hours,
-    }))
-  );
-}
-
-function groupBy(rows, keyFn, fallback) {
-  const groups = new Map();
-  for (const row of rows) {
-    const key = keyFn(row) || fallback;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(row);
-  }
-  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
-}
-
-// Within a room's or instructor's group, MW/MWF meetings are listed
-// before TR meetings (any other pattern sorts last), then chronologically
-// by start time -- easier to scan than upload order.
-const DAY_PATTERN_PRIORITY = { MW: 0, MWF: 0, TR: 1 };
-function dayPatternPriority(days) {
-  return DAY_PATTERN_PRIORITY[days] ?? 2;
-}
-function sortByDayThenTime(rows) {
-  return [...rows].sort((a, b) => {
-    const order = dayPatternPriority(a["Days"]) - dayPatternPriority(b["Days"]);
-    return order !== 0 ? order : (a["Start"] || "").localeCompare(b["Start"] || "");
-  });
-}
-
-function groupByCourse(data) {
-  return groupBy(
-    flattenSections(data),
-    (row) => `${row["Subject"]} ${row["Number"]}`,
-    "(Unknown course)"
-  );
-}
-
-function groupByInstructor(data) {
-  return groupBy(flattenSections(data), (row) => row["Instructor"], "(No instructor)").map(
-    ([title, rows]) => [title, sortByDayThenTime(rows)]
-  );
-}
-
-// Building + Room combined -- shown anywhere a room needs to be human-
-// readable, since a bare room number ("269") is ambiguous across
-// buildings but "Corley 269" isn't.
-function roomLabel(row) {
-  return [row["Building"], row["Room"]].filter(Boolean).join(" ");
-}
-
-function groupByRoom(data) {
-  return groupBy(
-    flattenSections(data),
-    roomLabel,
-    "(Unassigned room / online)"
-  ).map(([title, rows]) => [title, sortByDayThenTime(rows)]);
-}
-
-// Total credit hours for an instructor's group. credit_hours is a
-// per-class (not per-section) value from the API, so a class with two
-// rows in the same group (FourCreditClass, HybridClass, ...) must only
-// be counted once -- dedupe by class_index before summing.
-function totalCreditHours(rows) {
-  const seen = new Set();
-  let total = 0;
-  for (const row of rows) {
-    if (seen.has(row.class_index)) continue;
-    seen.add(row.class_index);
-    total += row.credit_hours || 0;
-  }
-  return total;
-}
-
-const GROUP_COLUMNS = {
-  course: [
-    ["Section", (r) => r["Section"]],
-    ["Time Slot", (r) => r["Time Slot"]],
-    ["Room", (r) => roomLabel(r)],
-    ["Instructor", (r) => r["Instructor"]],
-  ],
-  instructor: [
-    ["Course", (r) => r.course_id],
-    ["Time Slot", (r) => r["Time Slot"]],
-    ["Room", (r) => roomLabel(r)],
-  ],
-  room: [
-    ["Course", (r) => r.course_id],
-    ["Time Slot", (r) => r["Time Slot"]],
-    ["Instructor", (r) => r["Instructor"]],
-  ],
-};
-
-function renderGroupedView(groups, mode) {
-  const columns = GROUP_COLUMNS[mode];
-  return groups
-    .map(([title, rows]) => {
-      const summary = mode === "instructor"
-        ? `Total credit hours: ${totalCreditHours(rows)}`
-        : null;
-      return renderGroupCard(title, rows, columns, summary);
-    })
-    .join("");
-}
-
-function renderGroupCard(title, rows, columns, summary) {
-  const head = columns.map(([label]) => `<th>${esc(label)}</th>`).join("");
-  const body = rows
-    .map(
-      (row) =>
-        `<tr>${columns.map(([, get]) => `<td>${esc(get(row))}</td>`).join("")}</tr>`
-    )
-    .join("");
-  const badges = `<span class="kind-badge">${rows.length} row(s)</span>`
-    + (summary ? `<span class="kind-badge">${esc(summary)}</span>` : "");
-  return `<article class="class-card">
-    <header><strong>${esc(title)}</strong>${badges}</header>
-    <table>
-      <thead><tr>${head}</tr></thead>
-      <tbody>${body}</tbody>
-    </table>
-  </article>`;
-}
-
-// Error rows can come straight from an unparsed upload row, so they show
-// the course identity columns too -- there is no class-card header to
-// carry that information the way a successful result has.
-function renderErrorRow(record) {
-  return `<tr>
-    <td>${esc(record["Subject"])}</td>
-    <td>${esc(record["Number"])}</td>
-    <td>${esc(record["Section"])}</td>
-    <td>${esc(record["Time Slot"])}</td>
-    <td>${esc(roomLabel(record))}</td>
-    <td>${esc(record["Instructor"])}</td>
-  </tr>`;
-}
-
-function showError(message, records) {
-  const box = $("#errorBox");
-  let html = `<p class="error-message">${esc(message)}</p>`;
-  if (records && records.length) {
-    html += `<table>
-      <thead><tr><th>Subject</th><th>Number</th><th>Section</th><th>Time Slot</th><th>Room</th><th>Instructor</th></tr></thead>
-      <tbody>${records.map(renderErrorRow).join("")}</tbody>
-    </table>`;
-  }
-  box.innerHTML = html;
-  box.classList.remove("hidden");
-}
-
-function hideError() {
-  $("#errorBox").classList.add("hidden");
-}
-
-function esc(value) {
-  return String(value ?? "—").replace(/[&<>"']/g, (c) => (
-    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
-  ));
-}
+function loads(){const contracts=data.assignment_options?.contract_loads||{},newTarget=+(data.assignment_options?.new_instructor_contract_load||15),map=new Map(Object.keys(contracts).filter(name=>!isNewInstructor(name)).map(name=>[name,0]));for(const item of data.classes){if(item.kind==="CoreqClass"){for(const row of item.sections){if(!row.Instructor)continue;const inferred=String(row.Number||"").match(/(\d)$/);const credits=row.Credits!==null&&row.Credits!==undefined&&row.Credits!==""?+row.Credits:+(inferred?.[1]||0);map.set(row.Instructor,(map.get(row.Instructor)||0)+credits);}}else{const names=[...new Set(item.sections.map(r=>r.Instructor).filter(Boolean))];for(const name of names)map.set(name,(map.get(name)||0)+(+item.credit_hours||0));}}return [...map.entries()].map(([name,hours])=>({name,hours,target:isNewInstructor(name)?newTarget:(Number.isFinite(+contracts[name])?+contracts[name]:null)})).sort((a,b)=>instructorLabel(a.name).localeCompare(instructorLabel(b.name),undefined,{sensitivity:"base",numeric:true}));}
+function formatCredits(value){return Number.isInteger(value)?String(value):String(Math.round(value*10)/10);}
+function loadState(hours,target){if(target===null)return {key:"unknown",label:"无合同目标"};const delta=hours-target;if(Math.abs(delta)<1e-9)return {key:"exact",label:"正好"};if(delta<0)return {key:"under",label:`不足 ${formatCredits(Math.abs(delta))}`};if(delta<=2)return {key:"over",label:`超出 ${formatCredits(delta)}`};return {key:"danger",label:`超出 ${formatCredits(delta)}`};}
+function renderWorkload(){const list=loads();$("#totalHours").textContent=`${list.length} 位教师`;$("#workloadList").innerHTML=list.map(({name,hours,target})=>{const state=loadState(hours,target),percent=target===null?0:(target<=0?(hours>0?100:0):Math.min(100,hours/target*100)),targetText=target===null?"—":target,label=instructorLabel(name);return `<div class="load-row load-${state.key}" title="${esc(label)}：${hours} / ${targetText} 学分"><div class="load-top"><strong>${esc(label)}</strong><span>${hours} / ${targetText} 学分</span></div><div class="load-bar"><i style="width:${percent}%"></i></div><div class="load-meta"><span>合同要求 ${targetText}</span><span class="load-status">${esc(state.label)}</span></div></div>`;}).join("");}
+function fourCreditIssues(){const issues=[];data.classes.forEach((item,classIndex)=>{if(item.kind!=="FourCreditClass")return;const primaryIndex=item.sections.findIndex(row=>daysOf(row)==="MWF"),partialIndex=item.sections.findIndex(row=>["T","R"].includes(daysOf(row)));if(primaryIndex<0||partialIndex<0)return;const primary=item.sections[primaryIndex],partial=item.sections[partialIndex],difference=Math.abs(startOf(primary)-startOf(partial));if(difference>90)issues.push({subject:courseId(primary),message:`MWF 与 ${daysOf(partial)} meeting 开始时间相差 ${difference} 分钟，最多允许 90 分钟`,ids:[`${classIndex}:${primaryIndex}`,`${classIndex}:${partialIndex}`],view:"instructor",resource:primary.Instructor,courses:[{label:courseId(primary),classIndex}]});});return issues;}
+function coreqIssues(){const issues=[];data.classes.forEach((item,classIndex)=>{if(item.kind!=="CoreqClass"||item.sections.length!==2)return;const [left,right]=item.sections,ids=[`${classIndex}:0`,`${classIndex}:1`],sameInstructor=left.Instructor===right.Instructor;const courseLinks=[left,right].map(row=>({label:courseId(row),classIndex,view:"instructor",resource:row.Instructor||"未分配"}));let message="";if(!sameInstructor)message=`Coreq 必须由同一教师授课；当前为 ${left.Instructor||"未分配"} / ${right.Instructor||"未分配"}`;else{const leftPhysical=startOf(left)!=null,rightPhysical=startOf(right)!=null;if(!leftPhysical&&!rightPhysical)return;if(leftPhysical!==rightPhysical)message="Coreq 不能只有一边具有实体 meeting";else{const leftStart=startOf(left),rightStart=startOf(right),leftEnd=leftStart+(+left.Duration||0),rightEnd=rightStart+(+right.Duration||0),shared=[...daysOf(left)].some(day=>daysOf(right).includes(day));if(shared){const gapA=rightStart-leftEnd,gapB=leftStart-rightEnd,b2b=(gapA>=0&&gapA<=15)||(gapB>=0&&gapB<=15);if(!b2b)message="Coreq 在共同上课日必须 back-to-back，间隔不得超过 15 分钟";else if(!left.Room||left.Room!==right.Room||(left.Building||"")!==(right.Building||""))message=`Coreq back-to-back 时必须使用同一非空教室；当前为 ${roomLabel(left)} / ${roomLabel(right)}`;}else{const difference=Math.abs(leftStart-rightStart);if(difference>30)message=`Coreq 使用不重叠的星期 pattern 时，开始时间必须相差不超过 30 分钟；当前相差 ${difference} 分钟`;}}}if(message)issues.push({subject:item.course_ids.join(" / "),message,ids,view:"instructor",resource:left.Instructor,courses:courseLinks});});return issues;}
+function localConflicts(){const rows=sections(),out=[];for(let i=0;i<rows.length;i++)for(let j=i+1;j<rows.length;j++){const a=rows[i],b=rows[j];if(a._classIndex===b._classIndex||!overlap(a,b))continue;let view="",resource="",subject="";if(a.Instructor&&a.Instructor===b.Instructor){view="instructor";resource=a.Instructor;subject=`教师 ${resource}`;}else if(roomLabel(a)!=="未分配"&&roomLabel(a)===roomLabel(b)){view="room";resource=roomLabel(a);subject=`教室 ${resource}`;}if(subject)out.push({subject,message:"时间重叠",view,resource,courses:[{label:a.course_id,classIndex:a._classIndex},{label:b.course_id,classIndex:b._classIndex}]});}return [...out,...fourCreditIssues(),...coreqIssues()];}
+function softIssue(item){const instructor=item.subject||"未分配",matches=[];data.classes.forEach((entry,classIndex)=>{if(!entry.sections.some(row=>row.Instructor===instructor))return;const mentioned=entry.course_ids.filter(id=>String(item.message||"").includes(id));mentioned.forEach(id=>matches.push({label:id,classIndex,view:"instructor",resource:instructor}));});if(matches.length)return {...item,view:"instructor",resource:instructor,courses:matches};const classIndex=data.classes.findIndex(entry=>entry.sections.some(row=>row.Instructor===instructor));return {...item,view:"instructor",resource:instructor,courses:[{label:instructor,classIndex:classIndex>=0?classIndex:"",view:"instructor",resource:instructor}]};}
+function renderIssueItem(item){if(!item.courses?.length)return esc(uiText(item.message));const links=item.courses.map(course=>`<a href="#" class="issue-course-link" data-view="${course.view||item.view}" data-resource="${esc(course.resource||item.resource)}" data-class="${course.classIndex}">${esc(course.label)}</a>`).join(" 与 ");return `${links}：${esc(uiText(item.message))}`;}
+function renderIssues(){const hard=localConflicts();const soft=(data.violations?.soft||[]).map(softIssue),orange=soft.filter(x=>x.severity==="orange"),yellow=soft.filter(x=>x.severity!=="orange");const total=hard.length+soft.length;$("#healthSummary").innerHTML=`<span class="health-badge ${hard.length?"bad":""}">${hard.length?`${hard.length} 个硬冲突`:`${total?soft.length+" 项待优化":"安排健康"}`}</span>`;const group=(level,title,items)=>`<div class="issue-group ${level}"><div class="issue-title"><i class="issue-dot"></i>${title} (${items.length})</div>${items.length?`<ul>${items.slice(0,8).map(x=>`<li>${renderIssueItem(x)}</li>`).join("")}</ul>`:'<ul><li>暂无</li></ul>'}</div>`;$("#violationsSummary").innerHTML=`<div class="violations">${group("red","当前冲突",hard)}${group("orange","应尽量满足",orange)}${group("yellow","偏好未满足",yellow)}</div>`;}
+$("#violationsSummary").addEventListener("click",event=>{const link=event.target.closest(".issue-course-link");if(!link)return;event.preventDefault();currentView=link.dataset.view;currentResource=link.dataset.resource;$$('.view-tab').forEach(tab=>tab.classList.toggle('active',tab.dataset.view===currentView));renderSchedule();requestAnimationFrame(()=>{if(link.dataset.class==="")return;const block=$(`.course-block[data-class="${link.dataset.class}"]`);if(!block)return;block.scrollIntoView({behavior:"smooth",block:"center",inline:"center"});const oldShadow=block.style.boxShadow;block.style.boxShadow="0 0 0 3px #e69a2d, 0 4px 14px rgba(0,0,0,.2)";setTimeout(()=>block.style.boxShadow=oldShadow,1800);});});

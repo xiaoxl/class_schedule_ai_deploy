@@ -15,10 +15,13 @@ versioned production publication remains in the CLI.
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import logging
 import math
+import re
 import tempfile
+from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -28,6 +31,9 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
 
 from . import solver as solver_module
+from .schedule_run import next_version
+from .version_publisher import publish_version, sha256
+from .new_instructors import NEW_INSTRUCTOR_MAX_LOAD
 from .schedule_model import (
     GroupingError,
     HardViolation,
@@ -110,6 +116,7 @@ def create_app() -> FastAPI:
         return {
             "count": len(schedule),
             "config_version": SOLVER_CONFIG.version,
+            "assignment_options": _assignment_options(SOLVER_CONFIG),
             "classes": _serialize_schedule(schedule),
             "violations": _evaluate_schedule(schedule),
             "excel": {
@@ -163,6 +170,7 @@ def create_app() -> FastAPI:
         return {
             "count": len(solved),
             "config_version": SOLVER_CONFIG.version,
+            "assignment_options": _assignment_options(SOLVER_CONFIG),
             "classes": _serialize_schedule(solved),
             "violations": violations,
             "changes": [_serialize_change(c) for c in changes],
@@ -181,6 +189,101 @@ def create_app() -> FastAPI:
             },
         }
 
+    @app.post("/api/save")
+    async def save_schedule_version(payload: dict):
+        """Publish browser edits through the same atomic verN publisher as solve."""
+        term = str(payload.get("term", "")).strip().upper()
+        if not re.fullmatch(r"[A-Z0-9_-]+", term):
+            raise HTTPException(400, "A valid term is required, for example 27S")
+        records = payload.get("records")
+        baseline_records = payload.get("baseline_records")
+        if not isinstance(records, list) or not isinstance(baseline_records, list):
+            raise HTTPException(400, "Current and baseline schedule records are required")
+        config = solver_module.SolverConfig.load(CONFIG_DIR, term=term)
+        try:
+            schedule = Schedule.from_records(records, persons=config.persons)
+            baseline = Schedule.from_records(baseline_records, persons=config.persons)
+        except (GroupingError, ValueError) as error:
+            raise HTTPException(400, str(error)) from error
+        evaluation = evaluate_schedule(
+            schedule, config.preferences, config.persons, config.global_rules,
+            config.meeting_patterns, config.constraint_rules,
+        )
+        if evaluation.hard_violations:
+            raise HTTPException(422, {
+                "message": "Resolve hard conflicts before saving a version",
+                "violations": [_serialize_hard(v) for v in evaluation.hard_violations],
+            })
+        output_root = Path("out")
+        version = next_version(output_root / term)
+        destination = output_root / term / version
+        baseline_bytes = baseline.to_dataframe().to_csv(index=False).encode("utf-8")
+        no_overrides = b"# Browser manual schedule publication; no override file applied.\n"
+        no_changes = b"# Browser publication used the imported schedule as its baseline.\n"
+        created_at = datetime.now(UTC).isoformat()
+        report = (
+            f"# {term} {version} manual schedule report\n\n"
+            f"Published from the schedule workbench at {created_at}.\n\n"
+            f"- Atomic classes: {len(schedule)}\n"
+            f"- Rows: {len(schedule.to_records())}\n"
+            f"- Hard violations: {len(evaluation.hard_violations)}\n"
+            f"- Soft penalty: {evaluation.soft_penalty:g}\n"
+            f"- Soft findings: {len(evaluation.soft_findings)}\n"
+        )
+        manifest = {
+            "schema_version": 4,
+            "term": term,
+            "version": version,
+            "parent": None,
+            "created_at": created_at,
+            "input": {"path": "web-upload", "sha256": hashlib.sha256(baseline_bytes).hexdigest()},
+            "initial_baseline": {
+                "path": "web-upload", "sha256": hashlib.sha256(baseline_bytes).hexdigest(),
+                "snapshot": "baseline.csv", "role": "initial",
+            },
+            "configuration": {
+                "version": config.version,
+                "files": [{"path": name, "sha256": sha256(Path(name))} for name in config.source_paths],
+            },
+            "term_changes": {
+                "path": None, "sha256": None, "scope": "cancel_courses",
+                "configured_cancels": [], "cancelled_course_validation": "passed",
+                "snapshot": "applied_changes.toml",
+            },
+            "applied_overrides_sha256": hashlib.sha256(no_overrides).hexdigest(),
+            "override_workspace": {"path": "overrides.toml", "mutable": True, "source_version": version},
+            "selected_attempt": 1,
+            "solver": {
+                "status": "manual", "objective": None, "best_bound": None,
+                "random_seed": None, "time_limit_seconds": 0,
+                "search_workers": 0, "attempts": 1,
+                "attempts_requested": 1, "attempts_run": 1,
+            },
+            "validation": {
+                "hard_violations": 0, "soft_penalty": evaluation.soft_penalty,
+                "worst_overload": None,
+            },
+        }
+        paths = publish_version(
+            term=term, version=version, destination=destination,
+            schedule=schedule, baseline=baseline, baseline_bytes=baseline_bytes,
+            attempts_rows=[{
+                "Attempt": 1, "Status": "manual", "Objective": None,
+                "BestBound": None, "SolveSeconds": 0, "CandidateCount": None,
+                "SearchWorkers": 0, "SoftPenalty": evaluation.soft_penalty,
+                "SoftFindings": len(evaluation.soft_findings),
+                "HardViolations": 0, "WorstOverload": None, "Error": None,
+            }],
+            report=report, manifest=manifest, applied_overrides=no_overrides,
+            applied_changes=no_changes,
+        )
+        logger.info("Published browser schedule as %s/%s", term, version)
+        return {
+            "term": term, "version": version,
+            "output_dir": str(paths.output_dir),
+            "schedule_path": str(paths.schedule_path),
+        }
+
     app.mount("/", _NoCacheStaticFiles(directory=PACKAGE_WEB, html=True), name="web")
     return app
 
@@ -193,6 +296,29 @@ def _excel_base64(schedule: Schedule, method_name: str) -> str:
         path = Path(folder) / "export.xlsx"
         getattr(schedule, method_name)(path)
         return base64.b64encode(path.read_bytes()).decode("ascii")
+
+
+def _assignment_options(config: solver_module.SolverConfig) -> dict:
+    """Configured resources offered by the browser's assignment menu."""
+    return {
+        "instructors": sorted(config.persons),
+        "contract_loads": {
+            name: person.max_load for name, person in sorted(config.persons.items())
+        },
+        "new_instructor_contract_load": NEW_INSTRUCTOR_MAX_LOAD,
+        "rooms": [
+            {"building": room.building, "room": room.room}
+            for room in config.rooms
+        ],
+        "meeting_patterns": [
+            {
+                "days": pattern.days,
+                "duration": pattern.duration_minutes,
+                "roles": sorted(pattern.roles),
+            }
+            for pattern in config.meeting_patterns
+        ],
+    }
 
 
 async def _read_and_group(schedule_file: UploadFile) -> tuple[str, Schedule]:

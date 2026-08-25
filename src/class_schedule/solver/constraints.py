@@ -24,6 +24,7 @@ from ..schedule_model import (
     PersonRecord,
     PreferenceRecord,
 )
+from ..instructor_identity import is_new_instructor
 from .candidates import apply_candidate
 from .types import SectionCandidate
 
@@ -327,6 +328,9 @@ def add_load_terms(
             continue
         total = sum(terms)
         target = int(round(person.max_load * scale))
+        if is_new_instructor(instructor):
+            model.add(total <= target)
+            continue
         limit = int(round((person.max_load + OVERLOAD_TOLERANCE) * scale))
         hard_cap = int(round((person.max_load + HARD_LOAD_CAP_TOLERANCE) * scale))
         model.add(total <= hard_cap)

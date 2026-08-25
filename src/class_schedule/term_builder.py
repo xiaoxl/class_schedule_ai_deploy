@@ -33,7 +33,7 @@ from . import record_utils
 from .class_model import Class
 from .schedule_model import Schedule
 
-DEFAULT_PLACEHOLDER_INSTRUCTOR = "Staff"
+DEFAULT_PLACEHOLDER_INSTRUCTOR = "new_instructor"
 
 
 @dataclass(frozen=True)

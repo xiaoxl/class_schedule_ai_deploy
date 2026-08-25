@@ -89,7 +89,7 @@ def load_overrides(path: str | Path) -> OverrideFile:
         edits.append(OverrideEdit(
             course_id=str(item["course_id"]),
             record=_record_number(item, f"unassign[{index}]"),
-            instructor=str(item.get("placeholder", "Staff")),
+            instructor=str(item.get("placeholder", "new_instructor")),
         ))
     locks: dict[tuple[str, int | None], frozenset[str]] = {}
     for index, item in enumerate(raw.get("locks", []), start=1):
@@ -164,7 +164,7 @@ def render_override_template(
         "",
         "# [[unassign]]",
         '# course_id = "STAT 2163-004"',
-        '# placeholder = "Staff"',
+        '# placeholder = "new_instructor"',
         "",
         "# Atomic-class record map. record is zero-based and is only needed",
         "# when an edit or lock should target one row of a two-row class.",
