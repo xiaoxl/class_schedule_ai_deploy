@@ -343,14 +343,19 @@ def add_load_terms(
             )
             model.add(excess >= total - limit)
             objective_terms.append((penalty / scale) * excess)
-            if preference.allow_overload:
-                far_limit = int(round(
-                    (person.max_load + policy.far_overload_threshold) * scale
-                ))
-                far_over = model.new_bool_var(f"overload_far_{instructor}")
-                model.add(total > far_limit).only_enforce_if(far_over)
-                model.add(total <= far_limit).only_enforce_if(far_over.Not())
-                objective_terms.append(policy.penalties.far_overload_extra * far_over)
+        if preference is not None and preference.allow_overload:
+            # Independent of the per-credit ``penalty`` above (which may be
+            # configured to 0) -- otherwise a zero permissive_overload_per_credit
+            # would silently drop the far-overload term from the solver's
+            # objective while schedule_model._overload_statuses still reports
+            # it, breaking the documented solver/evaluation parity.
+            far_limit = int(round(
+                (person.max_load + policy.far_overload_threshold) * scale
+            ))
+            far_over = model.new_bool_var(f"overload_far_{instructor}")
+            model.add(total > far_limit).only_enforce_if(far_over)
+            model.add(total <= far_limit).only_enforce_if(far_over.Not())
+            objective_terms.append(policy.penalties.far_overload_extra * far_over)
         deficit = model.new_int_var(0, target, f"under_load_{instructor}")
         model.add(deficit >= target - total)
         objective_terms.append(

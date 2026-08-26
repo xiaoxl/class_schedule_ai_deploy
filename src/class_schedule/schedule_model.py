@@ -252,6 +252,11 @@ def _group_records(
     remaining: list[Section] = []
     for row in records:
         normalized = record_utils.normalize_columns(row)
+        section_code = record_utils.text(
+            record_utils.value(normalized, "Section")
+        ).upper()
+        if section_code.startswith(_IGNORED_SECTION_PREFIXES):
+            continue
         subject = record_utils.text(record_utils.value(normalized, "Subject")).upper()
         number = record_utils.text(record_utils.value(normalized, "Number")).upper()
         catalog = catalog_by_id.get((subject, number))
@@ -287,11 +292,6 @@ def _group_records(
             resolved = resolve_person_name(instructor, persons, subject=subject)
             if resolved is not None:
                 normalized["Instructor"] = resolved
-        section_code = record_utils.text(
-            record_utils.value(normalized, "Section")
-        ).upper()
-        if section_code.startswith(_IGNORED_SECTION_PREFIXES):
-            continue
         try:
             remaining.append(Section.from_record(normalized))
         except ValueError as error:
