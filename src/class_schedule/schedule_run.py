@@ -17,6 +17,7 @@ from .schedule_model import (
     Schedule,
     SoftFinding,
     evaluate_schedule,
+    summarize_instructor_loads,
     teaching_loads,
 )
 from .schedule_io import read_schedule
@@ -430,6 +431,13 @@ def _report(
     )
     before_loads = baseline_evaluation.loads
     after_loads = teaching_loads(after)
+    load_rows = summarize_instructor_loads(
+        after_loads, config.persons,
+        new_instructor_target=config.new_instructor_policy.contract_load,
+        new_professor_target=config.new_professor_policy.contract_load,
+        overload_tolerance=config.workload_policy.overload_tolerance,
+    )
+    targets = {row.name: row.target for row in load_rows}
     changes = simplified_changes(baseline, after)
     unresolved = sorted(
         {s.instructor for item in after.classes for s in item.sections
@@ -512,7 +520,7 @@ def _report(
     ])
     names = sorted(set(before_loads) | set(after_loads) | set(config.persons))
     for name in names:
-        target = config.persons[name].max_load if name in config.persons else None
+        target = targets.get(name)
         left, right = before_loads.get(name, 0.0), after_loads.get(name, 0.0)
         lines.append(
             f"| {name} | {_fmt(target)} | {_fmt(left)} | {_fmt(right)} | "

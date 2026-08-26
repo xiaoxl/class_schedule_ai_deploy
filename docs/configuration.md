@@ -41,10 +41,10 @@ Packages are isolated and never inherit files from one another. A directory miss
 ## Selecting a package
 
 ```powershell
-uv run class-schedule --config config --package 27S solve 27S
+uv run class-schedule solve 27S
 ```
 
-`--config` is the package root and `--package` is the directory below that root. The Web interface discovers packages automatically. Changing Configuration reparses the imported file with the selected package.
+The CLI configuration root is always `config/`; the positional configuration name selects the directory below that root. The Web interface discovers packages automatically. Changing Configuration reparses the imported file with the selected package.
 
 Published manifests record the package ID, the hash of all seven files, and every resolved path. Final publication inherits its source version's package and rejects a mismatch.
 

@@ -19,23 +19,53 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Press `Ctrl+C` to stop the 
 2. Select a Configuration package before import, then switch between Instructor, Room, and Course views.
 3. Drag a class to change its meeting time. Moving between weekday columns can change supported MWF/TR patterns.
 4. Right-click a class to assign an instructor or room. Choose **New** to create another New Instructor identity.
+
+## Configuration editor
+
+Open the **Configuration** workspace tab to manage the selected package's seven
+TOML files. Select a file to edit it in place, then choose **Validate & Save**.
+You can also drop individual TOML files or a whole folder onto the upload area.
+Only the seven exact configuration filenames are read; unrelated files are
+ignored. Each upload is routed by its opening `# Configuration package: NAME`
+comment and restored to its required package location (for example,
+`locations.toml` is written under `basicinfo/`). Files uploaded later replace
+files with the same name in that package; all headers in one drop must agree.
+
+Packages may be assembled incrementally. A package missing files is **Draft**,
+a complete package with invalid syntax or cross-file references is **Invalid**,
+and only a **Ready** package can load or solve a schedule. Missing term files
+(`courses.toml`, `preferences.toml`, and `constraints.toml`) can be created from
+minimal templates. Individual files and entire packages can be deleted from the
+editor; deleted content is moved to `work/config-trash/` rather than erased.
+
+Each package may also keep one optional schedule template under
+`config/<package>/template/`. Its CSV/XLSX filename is unrestricted. A template
+drop always replaces the template in the currently managed package; TOMLs in
+the same drop still route by their package comments. Updating a template or
+`courses.toml` atomically rebuilds `work/<package>/initial/`. Without
+`courses.toml`, the template itself produces the working views while the
+package remains Draft. Without a template, a complete configuration produces a
+deterministic default using configured course order, qualifications, load
+limits, dynamic-position eligibility, meeting patterns, and available rooms.
 5. Review workloads and findings. Finding links open the relevant Instructor or Room view.
 6. Resolve hard conflicts and select **Save New Version**. The output namespace is locked to the selected package.
 
 Browser saves use the same version publisher as solver output and are written to `out/27S/verN/`.
+The three download buttons export the browser's current schedule, Instructor
+View, and Location View on demand. They work before or after solving and after
+manual edits; downloading does not create a new version.
 
 Complete packages live directly under `config/<package-name>/`. The included package is `27S`; copy the entire directory to create another package.
 
 ## Command-line workflow
 
 ```powershell
-uv run class-schedule --config config --package 27S initialize 27S inputs/27S/source.xlsx
-uv run class-schedule --config config --package 27S initial 27S work/27S/draft/draft.csv
-uv run class-schedule --config config --package 27S solve 27S
-uv run class-schedule --config config --package 27S final 27S ver10
+uv run class-schedule import-template 27S inputs/27S/source.xlsx
+uv run class-schedule solve 27S
+uv run class-schedule final 27S ver10
 ```
 
-`initialize` cleans the source and creates template views. `initial` makes the template exactly match `courses.toml`: extra sections are removed, missing sections are generated with New Instructor, and instructors absent from `persons.toml` are reassigned. The resulting differences are written to `reconciliation.toml`.
+`import-template` cleans the source, replaces the selected package's sole template, and rebuilds its working views as one transaction. `initial 27S` performs that same rebuild only when the table was placed in the package outside the importer. The sole CSV/XLSX filename is arbitrary, while zero or multiple table files are errors. Reconciliation makes the template exactly match `courses.toml`: extra sections are removed, missing sections are generated with a qualifying dynamic position, and instructors absent from `persons.toml` are reassigned. The resulting differences are written to `reconciliation.toml`.
 
 ## Documentation
 

@@ -8,12 +8,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from .data_cleaning import clean_file, initialize_input, publish_draft
-from .initial_builder import build_reconciled_initial
-from .schedule_io import read_schedule
+from .data_cleaning import clean_dataframe
+from .schedule_io import read_schedule, read_table
 from .schedule_model import evaluate_schedule
 from .schedule_run import create_override_template, publish_final, run_term
 from .solver import SolverConfig, diff_schedules
+from .template_workspace import rebuild_work_views, require_unique_template
+
+CONFIG_ROOT = Path("config")
 
 
 def _read_schedule(path: str | Path, config: SolverConfig):
@@ -25,70 +27,54 @@ def _read_schedule(path: str | Path, config: SolverConfig):
 
 
 def _load_config(args: argparse.Namespace) -> SolverConfig:
-    if args.term.upper() != args.package.upper():
-        raise ValueError(
-            f"Term/output namespace {args.term!r} must match configuration "
-            f"package {args.package!r}"
+    return SolverConfig.load(CONFIG_ROOT, package=args.config_name)
+
+
+def _import_template(args: argparse.Namespace) -> int:
+    config = _load_config(args)
+    source = Path(args.input)
+    result = clean_dataframe(
+        read_table(source), persons=config.persons,
+    )
+    if len(result.rejected) or result.warnings:
+        print(
+            f"Rejected template: {len(result.rejected)} invalid rows; "
+            f"{len(result.warnings)} grouping warnings",
+            file=sys.stderr,
         )
-    return SolverConfig.load(args.config, package=args.package)
-
-
-def _clean(args: argparse.Namespace) -> int:
-    config = _load_config(args)
-    output = Path(args.output or Path("work") / args.term / "normalized")
-    result = clean_file(
-        args.input, output, persons=config.persons,
-    )
-    print(f"Wrote {output}: {len(result.normalized)} accepted, {len(result.rejected)} rejected")
-    return 1 if len(result.rejected) or result.warnings else 0
-
-
-def _initialize(args: argparse.Namespace) -> int:
-    config = _load_config(args)
-    output = Path(args.output or Path("work") / args.term / "normalized")
-    result = initialize_input(
-        args.input, output, persons=config.persons, draft_path=args.draft_output,
-    )
-    cleaning = result.cleaning
-    print(
-        f"Wrote {output}: {len(cleaning.normalized)} accepted, "
-        f"{len(cleaning.rejected)} rejected"
-    )
-    if (
-        result.draft_path is None
-        or result.instructor_path is None
-        or result.room_path is None
-    ):
-        print("Skipped draft and pre-change Excel views because cleaning was not valid")
+        for warning in result.warnings:
+            print(f"ERROR: {warning}", file=sys.stderr)
+        if len(result.rejected):
+            print(result.rejected.to_string(index=False), file=sys.stderr)
         return 1
-    print(f"Wrote pre-change draft: {result.draft_path}")
-    print(f"Wrote pre-change instructor view: {result.instructor_path}")
-    print(f"Wrote pre-change room view: {result.room_path}")
-    return 0
-
-
-def _draft(args: argparse.Namespace) -> int:
-    config = _load_config(args)
-    schedule = _read_schedule(args.input, config)
-    output = Path(args.output or Path("work") / args.term / "draft" / "draft.csv")
-    publish_draft(schedule, output)
-    print(f"Wrote pre-change draft: {output}")
+    from .webapp import _apply_configuration_transaction
+    filename = f"{source.stem}.csv"
+    _apply_configuration_transaction({args.config_name: {
+        "template": (filename, result.normalized.to_csv(index=False).encode("utf-8")),
+        "rebuild": True,
+    }})
+    print(
+        f"Imported {len(result.normalized)} rows as "
+        f"config/{args.config_name}/template/{filename}"
+    )
     return 0
 
 
 def _initial(args: argparse.Namespace) -> int:
-    output = Path(args.output or Path("work") / args.term / "initial")
-    if output.exists():
-        raise FileExistsError(f"Refusing to overwrite initial result: {output}")
-    config = _load_config(args)
-    result = build_reconciled_initial(
-        args.input, config, output_dir=output, seed=args.seed,
+    package = args.config_name
+    package_root = CONFIG_ROOT / package
+    if not package_root.is_dir():
+        raise FileNotFoundError(f"Unknown configuration package: {package}")
+    require_unique_template(package_root)
+    SolverConfig.load(CONFIG_ROOT, package=package)
+    summary = rebuild_work_views(
+        package_root, config_root=CONFIG_ROOT, work_root=Path("work"),
     )
-    report = result["report"]
-    print(f"Removed: {len(report.removed)}")
-    print(f"Added: {len(report.added)}")
-    print(f"Reassigned to dynamic positions: {len(report.reassigned)}")
-    print(f"Wrote {output / 'initial.csv'} and {result['audit_path']}")
+    differences = (summary.get("work_views") or {}).get("differences", {})
+    print(f"Removed: {len(differences.get('removed', []))}")
+    print(f"Added: {len(differences.get('added', []))}")
+    print(f"Reassigned to dynamic positions: {len(differences.get('reassigned', []))}")
+    print(f"Rebuilt work/{package}/initial")
     return 0
 
 
@@ -100,25 +86,25 @@ def _print_bundle(bundle) -> int:
 
 def _solve(args: argparse.Namespace) -> int:
     return _print_bundle(run_term(
-        args.term, input_path=args.input, output_root=args.output_root,
-        config_dir=args.config, version=args.version, attempts=args.attempts,
+        args.config_name, input_path=args.input, output_root=args.output_root,
+        config_dir=CONFIG_ROOT, version=args.version, attempts=args.attempts,
         time_limit_seconds=args.seconds, overrides_path=args.overrides,
         initial_path=args.initial,
         parent=args.parent, baseline_path=args.baseline,
         historical_backfill=args.historical_backfill,
         search_workers=args.workers,
-        package=args.package,
+        package=args.config_name,
     ))
 
 
 def _final(args: argparse.Namespace) -> int:
     try:
         bundle = publish_final(
-            args.term, args.from_version,
-            output_root=args.output_root, config_dir=args.config,
+            args.config_name, args.from_version,
+            output_root=args.output_root, config_dir=CONFIG_ROOT,
             attempts=args.attempts, time_limit_seconds=args.seconds,
             search_workers=args.workers,
-            package=args.package,
+            package=args.config_name,
         )
     except (FileNotFoundError, IndexError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
@@ -128,9 +114,9 @@ def _final(args: argparse.Namespace) -> int:
 
 def _override_template(args: argparse.Namespace) -> int:
     destination = create_override_template(
-        args.term, args.from_version, output_path=args.output,
-        output_root=args.output_root, config_dir=args.config,
-        package=args.package,
+        args.config_name, args.from_version, output_path=args.output,
+        output_root=args.output_root, config_dir=CONFIG_ROOT,
+        package=args.config_name,
     )
     print(f"Wrote {destination}")
     return 0
@@ -175,49 +161,24 @@ def _diff(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="class-schedule")
-    parser.add_argument("--config", default="config", help="configuration root")
-    parser.add_argument(
-        "--package", default="27S",
-        help="self-contained package under CONFIG (default: 27S)",
-    )
     commands = parser.add_subparsers(dest="command", required=True)
 
-    initialize = commands.add_parser(
-        "initialize",
-        help="clean raw data and publish draft plus pre-change Excel views",
+    import_template = commands.add_parser(
+        "import-template",
+        help="clean, validate, and transactionally install a package template",
     )
-    initialize.add_argument("term")
-    initialize.add_argument("input")
-    initialize.add_argument("--output")
-    initialize.add_argument(
-        "--draft-output",
-        help="canonical pre-change draft (default: work/TERM/draft/draft.csv)",
-    )
-    initialize.set_defaults(handler=_initialize)
-
-    clean = commands.add_parser("clean", help="normalize a raw CSV/XLSX export")
-    clean.add_argument("term")
-    clean.add_argument("input")
-    clean.add_argument("--output")
-    clean.set_defaults(handler=_clean)
-
-    draft = commands.add_parser("draft", help="publish a cleaned Schedule as the pre-change draft")
-    draft.add_argument("term")
-    draft.add_argument("input")
-    draft.add_argument("--output")
-    draft.set_defaults(handler=_draft)
+    import_template.add_argument("config_name", help="configuration package name")
+    import_template.add_argument("input", help="source CSV/XLSX")
+    import_template.set_defaults(handler=_import_template)
 
     initial = commands.add_parser(
-        "initial", help="reconcile a template to courses.toml"
+        "initial", help="reconcile the config package's sole CSV/XLSX template"
     )
-    initial.add_argument("term")
-    initial.add_argument("input")
-    initial.add_argument("--output")
-    initial.add_argument("--seed", type=int)
+    initial.add_argument("config_name", help="configuration package name")
     initial.set_defaults(handler=_initial)
 
     solve = commands.add_parser("solve", help="solve and publish a versioned result bundle")
-    solve.add_argument("term")
+    solve.add_argument("config_name")
     solve.add_argument("--input")
     solve.add_argument("--output-root", default="out")
     solve.add_argument(
@@ -253,7 +214,7 @@ def build_parser() -> argparse.ArgumentParser:
         "final",
         help="apply a verN's embedded overrides and refresh out/TERM/final",
     )
-    final.add_argument("term")
+    final.add_argument("config_name")
     final.add_argument("from_version", help="published source version, for example ver10")
     final.add_argument("--output-root", default="out")
     final.add_argument("--attempts", type=int, default=5)
@@ -268,19 +229,19 @@ def build_parser() -> argparse.ArgumentParser:
         "override-template",
         help="generate a manual-revision TOML template from a published verN",
     )
-    template.add_argument("term")
+    template.add_argument("config_name")
     template.add_argument("from_version", help="published source version, for example ver10")
     template.add_argument("--output")
     template.add_argument("--output-root", default="out")
     template.set_defaults(handler=_override_template)
 
     validate = commands.add_parser("validate", help="evaluate a schedule without changing it")
-    validate.add_argument("term")
+    validate.add_argument("config_name")
     validate.add_argument("input")
     validate.set_defaults(handler=_validate)
 
     diff = commands.add_parser("diff", help="compare two schedule files")
-    diff.add_argument("term")
+    diff.add_argument("config_name")
     diff.add_argument("before")
     diff.add_argument("after")
     diff.add_argument("--output")

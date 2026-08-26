@@ -7,15 +7,12 @@ from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
-from openpyxl import load_workbook
 
 from class_schedule.class_model import HybridClass, NormalClass, Section
 from class_schedule.config_schema import CatalogCourseSchema, CatalogsFileSchema, CoursesFileSchema
 from class_schedule.data_cleaning import (
     NORMALIZED_COLUMNS,
     clean_dataframe,
-    clean_file,
-    initialize_input,
 )
 from class_schedule.overrides import (
     OverrideEdit,
@@ -56,77 +53,6 @@ class DataCleaningTests(unittest.TestCase):
         self.assertEqual(result.normalized.iloc[0]["CRN"], "12345")
         self.assertEqual(result.normalized.iloc[0]["Source Row"], 2)
         self.assertEqual(result.rejected.iloc[0]["Source Row"], 3)
-
-    def test_clean_file_writes_auditable_bundle(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "raw.csv"
-            pd.DataFrame([{
-                "Subject": "MATH", "Number": "1113", "Section": "001",
-                "Time Slot": "ONLINE", "Instructor": "Alice",
-            }]).to_csv(source, index=False)
-            destination = root / "normalized"
-            clean_file(source, destination)
-            self.assertTrue((destination / "sections.csv").is_file())
-            self.assertTrue((destination / "rejected_rows.csv").is_file())
-            self.assertTrue((destination / "validation.md").is_file())
-            self.assertTrue((destination / "source_manifest.json").is_file())
-
-    def test_initialize_writes_pre_change_views_beside_source(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "Course Schedule Report.csv"
-            pd.DataFrame([
-                {
-                    "Subject": "MATH", "Number": "1113", "Section": "001",
-                    "Time Slot": "MWF 9:00am", "Duration": "50",
-                    "Instructor": "Original Instructor", "Room": "101",
-                    "Building": "Corley",
-                },
-                {
-                    "Subject": "STAT", "Number": "2163", "Section": "001",
-                    "Time Slot": "ONLINE", "Instructor": "Online Instructor",
-                },
-            ]).to_csv(source, index=False)
-
-            result = initialize_input(source, root / "normalized")
-
-            self.assertEqual(result.draft_path, root / "draft" / "draft.csv")
-            self.assertTrue(result.draft_path.is_file())
-
-            instructor_path = root / "Course Schedule Report_instructor.xlsx"
-            room_path = root / "Course Schedule Report_room.xlsx"
-            self.assertEqual(result.instructor_path, instructor_path)
-            self.assertEqual(result.room_path, room_path)
-            workbook = load_workbook(instructor_path, read_only=True)
-            try:
-                self.assertEqual(
-                    set(workbook.sheetnames),
-                    {"Original Instructor", "Online Instructor"},
-                )
-            finally:
-                workbook.close()
-            workbook = load_workbook(room_path, read_only=True)
-            try:
-                self.assertEqual(workbook.sheetnames, ["Corley 101"])
-            finally:
-                workbook.close()
-
-    def test_initialize_skips_views_when_a_source_row_is_rejected(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "raw.csv"
-            pd.DataFrame([
-                {"Subject": "MATH", "Number": "", "Section": "001"},
-            ]).to_csv(source, index=False)
-
-            result = initialize_input(source, root / "normalized")
-
-            self.assertIsNone(result.instructor_path)
-            self.assertIsNone(result.room_path)
-            self.assertIsNone(result.draft_path)
-            self.assertFalse((root / "raw_instructor.xlsx").exists())
-            self.assertFalse((root / "raw_room.xlsx").exists())
 
     def test_known_cross_list_stays_unmarked_but_groups_during_validation(self):
         frame = pd.DataFrame([

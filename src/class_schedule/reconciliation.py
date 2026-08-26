@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Mapping
 
@@ -67,7 +68,7 @@ def _record(config: SolverConfig, identity: str, role: str, atomic: frozenset[st
         time_slot, duration, building, room = "ONLINE", None, "", ""
     else:
         pattern = _pattern(config, f"{subject} {number}", role, atomic)
-        location = config.rooms[0] if config.rooms else None
+        location = config.rooms[index % len(config.rooms)] if config.rooms else None
         time_slot, duration = _slot(pattern, index), pattern.duration_minutes
         building = location.building if location else ""
         room = location.room if location else ""
@@ -110,11 +111,24 @@ def _synthesize_relationship(config: SolverConfig, relationship) -> list[dict[st
         _record(config, member, role, atomic, index, placeholder)
         for index, (member, role) in enumerate(zip(relationship.members, roles))
     ]
+    if roles != ["coreq", "coreq"] and all(row["Time Slot"] != "ONLINE" for row in rows):
+        right_days = str(rows[1]["Time Slot"]).split(maxsplit=1)[0]
+        left_start = str(rows[0]["Time Slot"]).split(maxsplit=1)[1]
+        rows[1]["Time Slot"] = f"{right_days} {left_start}"
     # Equal-credit same-day coreqs need adjacent starts in the same room.
     if roles == ["coreq", "coreq"] and rows[0]["Time Slot"] != "ONLINE":
+        rows[1]["Building"] = rows[0]["Building"]
+        rows[1]["Room"] = rows[0]["Room"]
         pattern = _pattern(config, member_courses[1], "coreq", atomic)
         if len(pattern.starts) > 1:
             rows[1]["Time Slot"] = _slot(pattern, 1)
+        else:
+            start = pattern.starts[0]
+            minutes = start.hour * 60 + start.minute + pattern.duration_minutes + 10
+            adjacent = datetime.time((minutes // 60) % 24, minutes % 60)
+            rows[1]["Time Slot"] = (
+                f"{pattern.days} {adjacent.strftime('%I:%M%p').lstrip('0').lower()}"
+            )
     return rows
 
 
@@ -173,7 +187,9 @@ def reconcile_records(
             generated_relationships.add(relationship.id)
         else:
             course = " ".join(identity.split()[:2])
-            kept.append(_record(config, identity, "normal", frozenset({course})))
+            kept.append(_record(
+                config, identity, "normal", frozenset({course}), len(added),
+            ))
             added.add(identity)
 
     schedule = Schedule.from_records(

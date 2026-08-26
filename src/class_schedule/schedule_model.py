@@ -86,10 +86,14 @@ class Schedule:
         persons: Mapping[str, "PersonRecord"] | None = None,
         relationships: Iterable[CourseRelationshipSchema] = (),
         catalogs: Iterable[CatalogCourseSchema] = (),
+        infer_legacy_relationships: bool = True,
+        infer_marked_cross_lists: bool = False,
     ) -> "Schedule":
         """Group a complete table of CSV records into atomic classes."""
         return cls(_group_records(
             records, persons=persons, relationships=relationships, catalogs=catalogs,
+            infer_legacy_relationships=infer_legacy_relationships,
+            infer_marked_cross_lists=infer_marked_cross_lists,
         ))
 
     @classmethod
@@ -100,12 +104,16 @@ class Schedule:
         persons: Mapping[str, "PersonRecord"] | None = None,
         relationships: Iterable[CourseRelationshipSchema] = (),
         catalogs: Iterable[CatalogCourseSchema] = (),
+        infer_legacy_relationships: bool = True,
+        infer_marked_cross_lists: bool = False,
     ) -> "Schedule":
         """Group a complete DataFrame into atomic classes."""
         return cls.from_records(
             dataframe.to_dict(orient="records"), persons=persons,
             relationships=relationships,
             catalogs=catalogs,
+            infer_legacy_relationships=infer_legacy_relationships,
+            infer_marked_cross_lists=infer_marked_cross_lists,
         )
 
     # ---- export (Schedule -> CSV records/DataFrame) ----
@@ -229,6 +237,8 @@ def _group_records(
     persons: Mapping[str, "PersonRecord"] | None = None,
     relationships: Iterable[CourseRelationshipSchema] = (),
     catalogs: Iterable[CatalogCourseSchema] = (),
+    infer_legacy_relationships: bool = True,
+    infer_marked_cross_lists: bool = False,
 ) -> list[Class]:
     """Group raw CSV records into atomic classes.
 
@@ -302,10 +312,14 @@ def _group_records(
     )
     same_course, remaining = _take_same_course(remaining)
     result.extend(same_course)
-    cross_listed, remaining = _take_cross_listed(remaining)
-    result.extend(cross_listed)
-    coreqs, remaining = _take_coreqs(remaining)
-    result.extend(coreqs)
+    if infer_legacy_relationships:
+        cross_listed, remaining = _take_cross_listed(remaining)
+        result.extend(cross_listed)
+        coreqs, remaining = _take_coreqs(remaining)
+        result.extend(coreqs)
+    elif infer_marked_cross_lists:
+        cross_listed, remaining = _take_cross_list_column(remaining)
+        result.extend(cross_listed)
     result.extend(
         HybridClass((section,))
         if HybridClass.is_hybrid_physical(section)
@@ -928,6 +942,51 @@ def teaching_loads(schedule: "Schedule") -> dict[str, float]:
         for instructor in instructors:
             totals[instructor] = totals.get(instructor, 0.0) + item.credit_hours
     return totals
+
+
+@dataclass(frozen=True)
+class InstructorLoadSummary:
+    """One display/report row derived from authoritative atomic-class loads."""
+
+    name: str
+    hours: float
+    target: float | None
+    delta: float | None
+    state: str
+    position: str
+
+
+def summarize_instructor_loads(
+    loads: Mapping[str, float],
+    persons: Mapping[str, PersonRecord],
+    *,
+    new_instructor_target: float,
+    new_professor_target: float,
+    overload_tolerance: float,
+) -> tuple[InstructorLoadSummary, ...]:
+    """Attach configured targets and status to shared teaching-load totals."""
+    rows = []
+    for name in sorted(set(persons) | set(loads), key=lambda value: value.lower()):
+        if re.match(r"^(?:Staff|new_instructor)(?:\s|$)", name, re.I):
+            target, position = new_instructor_target, "new_instructor"
+        elif re.match(r"^new_professor(?:\s|$)", name, re.I):
+            target, position = new_professor_target, "new_professor"
+        else:
+            target = persons[name].max_load if name in persons else None
+            position = "instructor"
+        hours = loads.get(name, 0.0)
+        delta = hours - target if target is not None else None
+        state = (
+            "unknown" if target is None else
+            "exact" if abs(delta) < 1e-9 else
+            "under" if delta < 0 else
+            "over" if delta <= overload_tolerance else "danger"
+        )
+        rows.append(InstructorLoadSummary(
+            name=name, hours=hours, target=target, delta=delta,
+            state=state, position=position,
+        ))
+    return tuple(rows)
 
 
 def location_matches(building: str, room: str, locations: Iterable[str]) -> bool:

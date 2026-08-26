@@ -7,10 +7,10 @@ Every row needs subject, course number, and section. Course numbers remain text 
 Legacy instructor values `Staff` and `Staff N` are accepted at input and immediately converted to `new_instructor` and `new_instructor N`. All new output uses the canonical names.
 
 ```powershell
-uv run class-schedule --config config initialize 27S inputs/27S/source.xlsx
+uv run class-schedule import-template 27S inputs/27S/source.xlsx
 ```
 
-Initialization writes a cleaned, auditable working bundle. Rejected rows include their source location and reason. Instructor and room workbooks created here show the same pre-change draft; they are not solver output.
+Template import validates and normalizes the table, installs it as the package's sole CSV/XLSX file, and rebuilds the working views transactionally. Rejected rows include their source location and reason. If validation or rebuilding fails, neither the package template nor its existing working views are changed.
 
 Cleaning follows these rules:
 
@@ -20,4 +20,4 @@ Cleaning follows these rules:
 - Group through the domain model, not spreadsheet row position.
 - Count load by atomic class, not flattened rows.
 
-Run `initial` afterward to reconcile the cleaned template against `courses.toml`. Extra offerings are removed, missing offerings are generated, unknown instructors become New Instructor, and the generated audit is written to `reconciliation.toml`.
+The import already publishes the reconciled working schedule. Run `initial <configuration>` only when a template was placed into the configuration directory outside the importer and its working views need to be rebuilt. Extra offerings are removed, missing offerings are generated, unknown instructors become a qualifying dynamic position, and the generated audit is written to `reconciliation.toml`.

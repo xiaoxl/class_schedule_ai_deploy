@@ -11,20 +11,19 @@ uv run uvicorn class_schedule.webapp:app --host 127.0.0.1 --port 8000
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Select a package, import a starting CSV/XLSX schedule, edit it in Instructor, Room, or Course view, and select **Save New Version**. The package name is also the output namespace, for example `out/27S/verN/`.
 
-The Configuration selector discovers complete packages directly under `config/`. The included package is `config/27S/`; copy that directory to create another independent package. The CLI equivalent is `--package <package-name>`.
+The Configuration selector discovers complete packages directly under `config/`. The included package is `config/27S/`; copy that directory to create another independent package. CLI commands take that directory name as their single configuration argument.
 
 See [the documentation home](docs/index.md) for the complete UI workflow.
 
 ## Command-line workflow
 
 ```powershell
-uv run class-schedule --config config --package 27S initialize 27S inputs/27S/source.xlsx
-uv run class-schedule --config config --package 27S initial 27S work/27S/draft/draft.csv
-uv run class-schedule --config config --package 27S solve 27S
-uv run class-schedule --config config --package 27S final 27S ver10
+uv run class-schedule import-template 27S inputs/27S/source.xlsx
+uv run class-schedule solve 27S
+uv run class-schedule final 27S ver10
 ```
 
-`initialize` cleans the source and creates template instructor and room views. `initial` reconciles that template to `courses.toml`, generating `reconciliation.toml` as an audit rather than reading a hand-written change list. Each `solve` starts from the same initial schedule and creates a new immutable `verN`.
+`import-template` validates and normalizes the source, installs it as the package's sole CSV/XLSX template, reconciles it to `courses.toml`, and transactionally rebuilds the working views and `reconciliation.toml` audit. `initial 27S` performs the same rebuild when a template was placed into the configuration directory outside the importer. Missing or multiple table files are rejected. Each `solve` starts from the same initial schedule and creates a new immutable `verN`.
 
 Typical version contents include:
 

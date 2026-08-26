@@ -1,454 +1,59 @@
-"""Build a package initial by reconciling a cleaned schedule template.
-
-The production entry point is ``build_reconciled_initial``. It treats
-``courses.toml`` as desired state and writes a generated reconciliation audit.
-
-The older ``build_initial_schedules`` helpers remain only as a library-level
-reader for historical manifests/tests; no CLI, Web, package, or shipped input
-uses a hand-written changes.toml.
-
-Two outputs, both by ``build_initial_schedules``:
-
-  - **initial.csv** -- the complete result after departures
-    reassigned to a placeholder, cancelled courses dropped, new courses
-    from ``changes.new_sections`` appended);
-  - **initial_noadding.csv** -- the same cancellations, departures, and
-    new-hire placement, but without new-course additions. It isolates the
-    rollover from new offerings.
-
-On top of both, two more passes run in this order:
-
-1. **``place_new_hires``** -- ``changes.new_hires`` (see
-   ``term_builder.TermChanges``) are seated into open positions, each up
-   to their own ``persons.toml`` ``max_load``: first by taking over a
-   placeholder-assigned ("new_instructor") class they're qualified for, and --
-   only once no open, qualified, non-conflicting placeholder class is
-   left -- by taking a class from an instructor currently over their own
-   max_load (relieving that overload). If neither is available for a
-   given slot, placement simply stops there rather than forcing a bad
-   assignment; whatever's left unplaced stays open for the solver.
-2. **``recolor_placeholder``** -- every class still on the placeholder
-   after that is greedily assigned a placeholder identity
-   (``"new_instructor"``, ``"new_instructor 2"``, ...) so that no two classes
-   sharing one identity overlap in time. Two *different* open positions
-   landing at an overlapping time would otherwise read as a same-
-   instructor double-booking to ``check_conflicts`` -- not real, just an
-   artifact of sharing one placeholder label. Whatever count of distinct
-   identities this step still needs, after already-known hires are seated,
-   is an operational count for this greedy coloring, not a proven minimum
-   or a hiring requirement.
-
-Placement runs before recoloring, not after -- a real name only ever
-*removes* a class from the placeholder pool, so it can only shrink the
-conflict graph recoloring has to color, never complicate it.
-"""
+"""Normalize dynamic instructor identities before solving."""
 
 from __future__ import annotations
 
-import hashlib
-import json
 import random
-import shutil
-import uuid
-from collections.abc import Iterable
-from dataclasses import replace
-from pathlib import Path
 
 from .class_model import Class
-from .pattern_rules import (
-    MeetingPatternLike,
-    matches_configured_pattern,
-)
-from .schedule_io import read_schedule
-from .schedule_io import read_table
-from .reconciliation import reconcile_records, render_reconciliation
-from .schedule_model import (
-    PersonRecord,
-    Schedule,
-    load_persons,
-    overlaps_in_time,
-    teaching_loads,
-)
-from .instructor_identity import (
-    is_new_instructor,
-    new_instructor_name,
-    new_instructor_rank,
-)
-from .term_builder import (
-    DEFAULT_PLACEHOLDER_INSTRUCTOR,
-    InitialReport,
-    TermChanges,
-    build_initial_schedule,
-    load_changes,
-)
-
+from .instructor_identity import is_new_instructor, new_instructor_name, new_instructor_rank
+from .schedule_model import Schedule, overlaps_in_time
 
 def _classes_conflict(a: Class, b: Class) -> bool:
-    """True if any physical section of ``a`` overlaps in time with any
-    physical section of ``b``. Records without a meeting time never conflict here
-    (mirrors ``check_conflicts``'s own room-conflict scope -- no clock
-    time to overlap on)."""
     return any(
-        not sa.is_online and not sb.is_online and overlaps_in_time(sa, sb)
-        for sa in a.sections
-        for sb in b.sections
+        not left.is_online and not right.is_online and overlaps_in_time(left, right)
+        for left in a.sections for right in b.sections
     )
 
 
-def _conflicts_with_any(item: Class, others: list[Class]) -> bool:
-    return any(_classes_conflict(item, other) for other in others)
-
-
-def is_placeholder_instructor(
-    instructor: str, placeholder: str = DEFAULT_PLACEHOLDER_INSTRUCTOR
-) -> bool:
-    """Compatibility name for the canonical New Instructor predicate."""
+def is_placeholder_instructor(instructor: str) -> bool:
     return is_new_instructor(instructor)
 
 
-def _placeholder_rank(
-    instructor: str, placeholder: str = DEFAULT_PLACEHOLDER_INSTRUCTOR
-) -> int:
-    """Numeric order used by the solver's contiguous placeholder constraint."""
+def _placeholder_rank(instructor: str) -> int:
     return new_instructor_rank(instructor)
-
-
-def _qualifies(item: Class, person: PersonRecord) -> bool:
-    courses = {f"{s.subject} {s.number}" for s in item.sections}
-    return courses.issubset(person.courses)
-
-
-def place_new_hires(
-    schedule: Schedule,
-    hire_names: tuple[str, ...],
-    persons: dict[str, PersonRecord],
-    *,
-    placeholder: str = DEFAULT_PLACEHOLDER_INSTRUCTOR,
-) -> tuple[Schedule, dict[str, tuple[str, ...]]]:
-    """Seat each of ``hire_names`` (processed in the given order) into
-    ``schedule``, up to their own ``max_load``. See the module docstring
-    for the two-tier placement rule. A name not present in ``persons``
-    is skipped entirely -- there's no ``max_load``/``courses`` to place
-    them against.
-    """
-    result = Schedule(list(schedule.classes))
-    assignments: dict[str, tuple[str, ...]] = {}
-
-    for hire_name in hire_names:
-        person = persons.get(hire_name)
-        if person is None:
-            continue
-
-        assigned: list[Class] = []
-        load = 0.0
-        while load < person.max_load:
-            candidate = next(
-                (
-                    item for item in result.classes
-                    if any(
-                        is_placeholder_instructor(s.instructor, placeholder)
-                        for s in item.sections
-                    )
-                    and load + item.credit_hours <= person.max_load
-                    and _qualifies(item, person)
-                    and not _conflicts_with_any(item, assigned)
-                ),
-                None,
-            )
-            if candidate is None:
-                loads = teaching_loads(result)
-                candidate = next(
-                    (
-                        item for item in result.classes
-                        if (holder := persons.get(item.sections[0].instructor)) is not None
-                        and holder.name != hire_name
-                        and loads.get(holder.name, 0.0) > holder.max_load
-                        and load + item.credit_hours <= person.max_load
-                        and _qualifies(item, person)
-                        and not _conflicts_with_any(item, assigned)
-                    ),
-                    None,
-                )
-            if candidate is None:
-                break  # neither tier has anything left -- stop, don't force a bad fit
-            result.change_instructor(candidate.course_ids[0], hire_name)
-            assigned.append(candidate)
-            load += candidate.credit_hours
-
-        if assigned:
-            assignments[hire_name] = tuple(item.course_ids[0] for item in assigned)
-
-    return result, assignments
 
 
 def recolor_placeholder(
     schedule: Schedule,
     *,
-    placeholder: str = DEFAULT_PLACEHOLDER_INSTRUCTOR,
     seed: int | None = None,
 ) -> tuple[Schedule, dict[str, tuple[str, ...]]]:
-    """Normalize every ``placeholder``/``placeholder N`` class across as
-    few distinct placeholder identities as a greedy graph coloring finds,
-    such that no two classes sharing one identity ever overlap in time.
-    Returns the recolored ``Schedule`` and ``{identity: (course_ids...)}``
-    for every identity that ended up used (including plain ``placeholder``
-    itself, if anything kept it).
-
-    Not necessarily the *minimum* possible number of identities (that's
-    graph coloring in general, NP-hard) -- a greedy pass in shuffled
-    order, which is exact (a valid coloring, zero same-identity overlaps)
-    even though it isn't guaranteed optimal. In practice these conflict
-    graphs are sparse (most open positions don't overlap at all), so a
-    greedy pass tends to land close to the true minimum anyway.
-    """
-    placeholder_classes = [
+    """Split overlapping dynamic positions into numbered identities."""
+    classes = [
         item for item in schedule.classes
-        if any(
-            is_placeholder_instructor(s.instructor, placeholder)
-            for s in item.sections
-        )
+        if any(is_placeholder_instructor(s.instructor) for s in item.sections)
     ]
-
-    order = list(range(len(placeholder_classes)))
+    order = list(range(len(classes)))
     random.Random(seed).shuffle(order)
-
-    conflicts: dict[int, set[int]] = {i: set() for i in order}
-    for i in range(len(placeholder_classes)):
-        for j in range(i + 1, len(placeholder_classes)):
-            if _classes_conflict(placeholder_classes[i], placeholder_classes[j]):
-                conflicts[i].add(j)
-                conflicts[j].add(i)
-
-    color_of: dict[int, str] = {}
-    for i in order:
-        used = {color_of[n] for n in conflicts[i] if n in color_of}
+    conflicts: dict[int, set[int]] = {index: set() for index in order}
+    for left in range(len(classes)):
+        for right in range(left + 1, len(classes)):
+            if _classes_conflict(classes[left], classes[right]):
+                conflicts[left].add(right)
+                conflicts[right].add(left)
+    colors: dict[int, str] = {}
+    for index in order:
+        used = {colors[other] for other in conflicts[index] if other in colors}
         rank = 1
-        while True:
-            name = new_instructor_name(rank)
-            if name not in used:
-                color_of[i] = name
-                break
+        while new_instructor_name(rank) in used:
             rank += 1
+        colors[index] = new_instructor_name(rank)
 
     recolored = Schedule(list(schedule.classes))
     assignments: dict[str, list[str]] = {}
-    for i, item in enumerate(placeholder_classes):
-        name = color_of[i]
-        course_id = item.course_ids[0]
-        recolored.change_instructor(course_id, name)
-        assignments.setdefault(name, []).append(course_id)
-
-    ordered_names = sorted(
-        assignments, key=lambda name: _placeholder_rank(name, placeholder)
-    )
-    return recolored, {
-        name: tuple(assignments[name]) for name in ordered_names
-    }
-
-
-def build_initial_schedules(
-    draft_path: str | Path,
-    changes_path: str | Path,
-    persons_path: str | Path = "config/27S/basicinfo/persons.toml",
-    *,
-    output_dir: str | Path = ".",
-    placeholder_instructor: str = DEFAULT_PLACEHOLDER_INSTRUCTOR,
-    seed: int | None = None,
-    meeting_patterns: Iterable[MeetingPatternLike] | None = None,
-    configuration: dict[str, object] | None = None,
-) -> dict[str, dict[str, object]]:
-    """Build the initial schedule and its no-additions audit variant.
-
-    Returns ``{"initial": {...}, "initial_noadding": {...}}``, each
-    with ``schedule``, ``report`` (the underlying
-    ``term_builder.InitialReport``), ``hire_assignments``, and
-    ``placeholder_identities``. Both CSVs are written to
-    ``output_dir/initial.csv`` and ``output_dir/initial_noadding.csv``.
-    """
-    persons = load_persons(persons_path)
-    draft = read_schedule(draft_path, persons=persons)
-    changes = load_changes(changes_path)
-    destination = Path(output_dir)
-    if destination.exists():
-        raise FileExistsError(f"Refusing to overwrite initial result: {destination}")
-
-    patterns = None if meeting_patterns is None else tuple(meeting_patterns)
-    if patterns is not None and changes.new_sections:
-        additions = Schedule.from_records(changes.new_sections, persons=persons)
-        for item in additions:
-            for section in item.sections:
-                if section.is_online:
-                    continue
-                if not matches_configured_pattern(item, section, patterns):
-                    raise ValueError(
-                        f"New section {section.course_id} uses unconfigured meeting "
-                        f"{section.time_slot!r} ({section.duration} minutes)"
-                    )
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    staging = destination.parent / f".{destination.name}-staging-{uuid.uuid4().hex}"
-    staging.mkdir()
-    try:
-        results: dict[str, dict[str, object]] = {}
-        variants: tuple[tuple[str, TermChanges], ...] = (
-            ("initial", changes),
-            ("initial_noadding", replace(changes, new_sections=())),
-        )
-        for label, variant_changes in variants:
-            changed, report = build_initial_schedule(
-                draft, variant_changes, placeholder_instructor=placeholder_instructor,
-            )
-            placed, hire_assignments = place_new_hires(
-                changed, variant_changes.new_hires, persons,
-                placeholder=placeholder_instructor,
-            )
-            recolored, placeholder_identities = recolor_placeholder(
-                placed, placeholder=placeholder_instructor, seed=seed,
-            )
-            recolored.to_dataframe().to_csv(staging / f"{label}.csv", index=False)
-            results[label] = {
-                "schedule": recolored,
-                "report": report,
-                "hire_assignments": hire_assignments,
-                "placeholder_identities": placeholder_identities,
-            }
-        initial = results["initial"]["schedule"]
-        initial.to_instructor_excel(staging / "initial_instructor.xlsx")
-        initial.to_room_excel(staging / "initial_room.xlsx")
-        initial_path = staging / "initial.csv"
-        noadding_path = staging / "initial_noadding.csv"
-        instructor_path = staging / "initial_instructor.xlsx"
-        room_path = staging / "initial_room.xlsx"
-
-        def sha256(path: str | Path) -> str:
-            return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-        manifest = {
-            "schema_version": 1,
-            "role": "initial",
-            "configuration": configuration or {},
-            "draft": {"path": str(draft_path), "sha256": sha256(draft_path)},
-            "changes": {"path": str(changes_path), "sha256": sha256(changes_path)},
-            "initial": {"path": initial_path.name, "sha256": sha256(initial_path)},
-            "initial_noadding": {
-                "path": noadding_path.name,
-                "sha256": sha256(noadding_path),
-            },
-            "files": {
-                path.name: sha256(path)
-                for path in (
-                    initial_path, noadding_path, instructor_path, room_path
-                )
-            },
-        }
-        (staging / "manifest.json").write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=True) + "\n",
-            encoding="utf-8",
-        )
-        staging.replace(destination)
-        return results
-    finally:
-        if staging.exists():
-            shutil.rmtree(staging)
-
-
-def print_initial_result(label: str, result: dict[str, object]) -> None:
-    report: InitialReport = result["report"]
-    hire_assignments: dict[str, tuple[str, ...]] = result["hire_assignments"]
-    placeholder_identities: dict[str, tuple[str, ...]] = result["placeholder_identities"]
-
-    print(f"=== {label}.csv ===")
-    print(f"Cancelled ({len(report.cancelled)}): {', '.join(report.cancelled) or '-'}")
-    print(f"Reassigned from a departure ({len(report.reassigned)}): {', '.join(report.reassigned) or '-'}")
-    print(f"Added ({len(report.added)}): {', '.join(report.added) or '-'}")
-    if report.unmatched_cancels or report.departures_not_found:
-        print("Check for typos:")
-        for spec in report.unmatched_cancels:
-            print(f"  cancel spec matched nothing: {spec}")
-        for name in report.departures_not_found:
-            print(f"  departure never seen in the template: {name}")
-
-    print(f"New hires placed ({len(hire_assignments)}):")
-    for name, course_ids in hire_assignments.items():
-        print(f"  {name}: {', '.join(course_ids)}")
-
-    print(f"Placeholder identities remaining ({len(placeholder_identities)}):")
-    for name, course_ids in sorted(placeholder_identities.items()):
-        print(f"  {name}: {', '.join(course_ids)}")
-    if len(placeholder_identities) > 1:
-        print(
-            f"{len(placeholder_identities)} distinct identities were still needed "
-            "by the initial schedule's greedy conflict coloring. This is an operational "
-            "placeholder count, not a proven minimum or a hiring requirement; "
-            "run class-schedule solve against the qualified-instructor pool next."
-        )
-    print()
-
-
-def build_reconciled_initial(
-    template_path: str | Path,
-    config,
-    *,
-    output_dir: str | Path,
-    seed: int | None = None,
-) -> dict[str, object]:
-    """Build the sole production initial from courses.toml desired state."""
-    destination = Path(output_dir)
-    if destination.exists():
-        raise FileExistsError(f"Refusing to overwrite initial result: {destination}")
-    records = read_table(template_path).dropna(how="all").to_dict(orient="records")
-    reconciled, report = reconcile_records(records, config)
-    recolored, placeholder_identities = recolor_placeholder(reconciled, seed=seed)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    staging = destination.parent / f".{destination.name}-staging-{uuid.uuid4().hex}"
-    staging.mkdir()
-    try:
-        initial_path = staging / "initial.csv"
-        instructor_path = staging / "initial_instructor.xlsx"
-        room_path = staging / "initial_room.xlsx"
-        audit_path = staging / "reconciliation.toml"
-        recolored.to_dataframe().to_csv(initial_path, index=False)
-        recolored.to_instructor_excel(instructor_path)
-        recolored.to_room_excel(room_path)
-        audit_path.write_text(render_reconciliation(report), encoding="utf-8")
-
-        def digest(path: str | Path) -> str:
-            return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-        manifest = {
-            "schema_version": 2,
-            "role": "initial",
-            "configuration": {
-                "package_id": config.package_id,
-                "version": config.version,
-                "files": [
-                    {"path": path, "sha256": digest(path)}
-                    for path in config.source_paths
-                ],
-            },
-            "template": {"path": str(template_path), "sha256": digest(template_path)},
-            "reconciliation": {
-                "snapshot": audit_path.name,
-                "sha256": digest(audit_path),
-                "source": "courses.toml",
-            },
-            "initial": {"path": initial_path.name, "sha256": digest(initial_path)},
-            "files": {
-                path.name: digest(path)
-                for path in (initial_path, instructor_path, room_path, audit_path)
-            },
-        }
-        (staging / "manifest.json").write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=True) + "\n",
-            encoding="utf-8",
-        )
-        staging.replace(destination)
-        return {
-            "schedule": recolored,
-            "report": report,
-            "placeholder_identities": placeholder_identities,
-            "audit_path": destination / audit_path.name,
-        }
-    finally:
-        if staging.exists():
-            shutil.rmtree(staging)
+    for index, item in enumerate(classes):
+        name = colors[index]
+        recolored.change_instructor(item.course_ids[0], name)
+        assignments.setdefault(name, []).extend(item.course_ids)
+    ordered = sorted(assignments, key=_placeholder_rank)
+    return recolored, {name: tuple(assignments[name]) for name in ordered}

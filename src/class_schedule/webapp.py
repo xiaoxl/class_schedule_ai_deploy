@@ -14,33 +14,44 @@ versioned production publication remains in the CLI.
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import io
 import logging
 import math
 import os
 import re
+import shutil
 import tempfile
+import threading
+import tomllib
+import uuid
 from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import pandas as pd
 import psutil
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.staticfiles import StaticFiles
 
 from . import solver as solver_module
 from .schedule_run import next_version
 from .reconciliation import reconcile_records
 from .version_publisher import publish_version, sha256
+from .template_workspace import (
+    TEMPLATE_SUFFIXES,
+    find_template,
+    install_template,
+    rebuild_work_views,
+    template_summary,
+)
 from .schedule_model import (
     GroupingError,
     HardViolation,
     Schedule,
     SoftFinding,
     evaluate_schedule,
+    summarize_instructor_loads,
 )
 
 PACKAGE_WEB = Path(__file__).with_name("web")
@@ -50,7 +61,25 @@ CONFIG_DIR = Path(os.environ.get(
 ))
 ALLOWED_SUFFIXES = {".csv", ".xlsx"}
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+MAX_CONFIG_BYTES = 2 * 1024 * 1024
 LOG_PATH = Path("output/logs/webapp.log")
+CONFIG_FILES = {
+    "catalogs.toml": Path("basicinfo/catalogs.toml"),
+    "locations.toml": Path("basicinfo/locations.toml"),
+    "timeslot.toml": Path("basicinfo/timeslot.toml"),
+    "persons.toml": Path("basicinfo/persons.toml"),
+    "courses.toml": Path("courses.toml"),
+    "preferences.toml": Path("preferences.toml"),
+    "constraints.toml": Path("constraints.toml"),
+}
+PACKAGE_COMMENT = re.compile(
+    r"^\s*#\s*Configuration package:\s*([A-Za-z0-9][A-Za-z0-9_-]*)\s*$",
+    re.MULTILINE,
+)
+PACKAGE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_CONFIG_WRITE_LOCK = threading.Lock()
+CONFIG_TRASH = Path("work/config-trash")
+WORK_ROOT = Path("work")
 
 # A soft finding's penalty at or above this is rendered orange in the UI
 # (an under_load of at least one credit, a strict instructor's first credit
@@ -128,13 +157,108 @@ def create_app() -> FastAPI:
     async def configuration_packages():
         return {
             "configurations": [
-                {
-                    "id": package.id,
-                    "display_name": package.display_name,
-                }
-                for package in solver_module.list_config_packages(CONFIG_DIR)
+                _configuration_summary(path.name)
+                for path in sorted(CONFIG_DIR.iterdir(), key=lambda item: item.name.lower())
+                if path.is_dir() and PACKAGE_ID.fullmatch(path.name)
             ]
         }
+
+    @app.get("/api/configuration-files")
+    async def configuration_files(package: str = DEFAULT_PACKAGE):
+        return _configuration_file_payload(package)
+
+    @app.put("/api/configuration-files/{filename}")
+    async def update_configuration_file(filename: str, payload: dict):
+        package = str(payload.get("package", DEFAULT_PACKAGE)).strip()
+        content = payload.get("content")
+        if not isinstance(content, str):
+            raise HTTPException(400, "Configuration content must be text")
+        encoded = content.encode("utf-8")
+        commented_package = _package_name_from_comments({filename: encoded})
+        if commented_package != package:
+            raise HTTPException(
+                400, f"Header names package {commented_package}, not selected package {package}",
+            )
+        return _upsert_configuration_package({filename: encoded})
+
+    @app.post("/api/configuration-packages")
+    async def create_configuration_package(
+        config_files: list[UploadFile] = File(...),
+        current_package: str = Form(DEFAULT_PACKAGE),
+    ):
+        replacements: dict[str, bytes] = {}
+        uploaded_template: tuple[str, bytes] | None = None
+        for upload in config_files:
+            filename = Path(upload.filename or "").name
+            if Path(filename).suffix.lower() in TEMPLATE_SUFFIXES:
+                if uploaded_template is not None:
+                    raise HTTPException(400, "Upload at most one CSV/XLSX template")
+                content = await upload.read()
+                if not content:
+                    raise HTTPException(400, "Schedule template is empty")
+                if len(content) > MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, "Schedule template exceeds 50 MB")
+                uploaded_template = (filename, content)
+                continue
+            if filename not in CONFIG_FILES:
+                continue
+            if filename in replacements:
+                raise HTTPException(400, f"Folder contains more than one {filename}")
+            replacements[filename] = await upload.read()
+        if not replacements and uploaded_template is None:
+            raise HTTPException(400, "Upload configuration TOMLs or one CSV/XLSX template")
+        routed_package = (
+            _package_name_from_comments(replacements) if replacements else None
+        )
+        changes: dict[str, dict] = {}
+        if routed_package:
+            changes[routed_package] = {
+                "replacements": replacements, "rebuild": True,
+            }
+        if uploaded_template is not None:
+            current = changes.setdefault(current_package, {})
+            current["template"] = uploaded_template
+            current["rebuild"] = True
+        _apply_configuration_transaction(changes)
+        package_to_show = current_package if uploaded_template else routed_package
+        payload = _configuration_file_payload(package_to_show)
+        payload["uploaded_configuration_package"] = routed_package
+        return payload
+
+    @app.get("/api/configuration-packages/{package}/template")
+    async def get_configuration_template(package: str):
+        root = _package_root(package)
+        path = find_template(root)
+        if path is None:
+            raise HTTPException(404, "This configuration has no schedule template")
+        media = "text/csv" if path.suffix.lower() == ".csv" else (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        return Response(
+            content=path.read_bytes(), media_type=media,
+            headers={"Content-Disposition": f'attachment; filename="{path.name}"'},
+        )
+
+    @app.delete("/api/configuration-packages/{package}/template")
+    async def delete_configuration_template(package: str):
+        return _delete_package_template(package)
+
+    @app.post("/api/configuration-packages/{package}/rebuild-work-views")
+    async def rebuild_configuration_work_views(package: str):
+        return _rebuild_package_work_views(package)
+
+    @app.post("/api/configuration-packages/{package}/templates/{filename}")
+    async def generate_configuration_template(package: str, filename: str):
+        return _generate_configuration_template(package, filename)
+
+    @app.delete("/api/configuration-packages/{package}/files/{filename}")
+    async def delete_configuration_file(package: str, filename: str):
+        return _delete_configuration_file(package, filename)
+
+    @app.delete("/api/configuration-packages/{package}")
+    async def delete_configuration_package(package: str):
+        _delete_configuration_package(package)
+        return {"deleted": package}
 
     @app.post("/api/schedule")
     async def parse_schedule(
@@ -149,12 +273,7 @@ def create_app() -> FastAPI:
             "package_id": config.package_id,
             "assignment_options": _assignment_options(config),
             "classes": _serialize_schedule(schedule),
-            "violations": _evaluate_schedule(schedule, config),
-            "excel": {
-                "raw": _excel_base64(schedule, "to_raw_excel"),
-                "instructor": _excel_base64(schedule, "to_instructor_excel"),
-                "room": _excel_base64(schedule, "to_room_excel"),
-            },
+            "violations": _analysis_payload(schedule, config),
         }
 
     @app.post("/api/solve")
@@ -195,7 +314,7 @@ def create_app() -> FastAPI:
             )
             raise HTTPException(422, str(error)) from error
         changes = solver_module.diff_schedules(schedule, solved)
-        violations = _evaluate_schedule(solved, config)
+        violations = _analysis_payload(solved, config)
         logger.info(
             "Solved %r cleanly (%d classes, %d field change(s), RSS %.1f -> %.1f MB)",
             filename, len(solved), len(changes), rss_before, _rss_mb(),
@@ -216,12 +335,34 @@ def create_app() -> FastAPI:
                 "candidate_count": solve_result.candidate_count,
                 "config_version": solve_result.config_version,
             },
-            "excel": {
-                "raw": _excel_base64(solved, "to_raw_excel"),
-                "instructor": _excel_base64(solved, "to_instructor_excel"),
-                "room": _excel_base64(solved, "to_room_excel"),
-            },
         }
+
+    @app.post("/api/analyze")
+    async def analyze_current_schedule(payload: dict):
+        schedule, config = _schedule_from_payload(payload)
+        return _analysis_payload(schedule, config)
+
+    @app.post("/api/export/{view}")
+    async def export_current_schedule(view: str, payload: dict):
+        schedule, config = _schedule_from_payload(payload)
+        methods = {
+            "schedule": "to_raw_excel",
+            "instructor": "to_instructor_excel",
+            "location": "to_room_excel",
+        }
+        method = methods.get(view)
+        if method is None:
+            raise HTTPException(404, f"Unknown export view: {view}")
+        content = _excel_bytes(schedule, method)
+        filename = f"{config.package_id}_current_{view}.xlsx"
+        return Response(
+            content=content,
+            media_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     @app.post("/api/save")
     async def save_schedule_version(payload: dict):
@@ -337,14 +478,369 @@ def create_app() -> FastAPI:
     return app
 
 
-def _excel_base64(schedule: Schedule, method_name: str) -> str:
-    """Build one of Schedule's Excel exports and return it as base64, so
-    the frontend can offer it as a download without any server-side
-    session state -- the whole app is otherwise stateless per request."""
+def _package_root(package: str) -> Path:
+    clean_package = package.strip()
+    if not PACKAGE_ID.fullmatch(clean_package):
+        raise HTTPException(400, f"Invalid configuration package name: {clean_package!r}")
+    root = CONFIG_DIR / clean_package
+    if not root.is_dir():
+        raise HTTPException(404, f"Unknown configuration package: {clean_package}")
+    return root
+
+
+def _configuration_target(package: str, filename: str) -> tuple[Path, Path]:
+    clean_package = package.strip()
+    if filename not in CONFIG_FILES or Path(filename).name != filename:
+        raise HTTPException(400, f"Unknown configuration filename: {filename}")
+    package_root = _package_root(clean_package)
+    relative = CONFIG_FILES[filename]
+    target = (package_root / relative).resolve()
+    root = package_root.resolve()
+    if root not in target.parents:
+        raise HTTPException(400, "Invalid configuration path")
+    return target, relative
+
+
+def _configuration_file_payload(package: str) -> dict:
+    summary = _configuration_summary(package)
+    files = []
+    for filename, relative in CONFIG_FILES.items():
+        target, _ = _configuration_target(package, filename)
+        files.append({
+            "name": filename,
+            "path": relative.as_posix(),
+            "present": target.is_file(),
+            "updated_at": (
+                datetime.fromtimestamp(target.stat().st_mtime, UTC).isoformat()
+                if target.is_file() else None
+            ),
+            "content": target.read_text(encoding="utf-8") if target.is_file() else "",
+            "template_available": filename in {"courses.toml", "preferences.toml", "constraints.toml"},
+        })
+    return {
+        **summary, "package_id": package, "files": files,
+        "template": template_summary(_package_root(package), WORK_ROOT),
+    }
+
+
+def _configuration_summary(package: str) -> dict:
+    root = CONFIG_DIR / package
+    if not root.is_dir():
+        raise HTTPException(404, f"Unknown configuration package: {package}")
+    missing = [
+        filename for filename, relative in CONFIG_FILES.items()
+        if not (root / relative).is_file()
+    ]
+    errors: list[str] = []
+    for filename, relative in CONFIG_FILES.items():
+        path = root / relative
+        if not path.is_file():
+            continue
+        try:
+            tomllib.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
+            errors.append(f"{filename}: {error}")
+    version = ""
+    if not missing and not errors:
+        try:
+            version = solver_module.SolverConfig.load(CONFIG_DIR, package=package).version
+        except (FileNotFoundError, ValueError) as error:
+            errors.append(str(error))
+    status = "invalid" if errors else "draft" if missing else "ready"
+    return {
+        "id": package,
+        "display_name": package,
+        "status": status,
+        "missing": missing,
+        "errors": errors,
+        "config_version": version,
+    }
+
+
+def _replace_configuration_file(package: str, filename: str, content: bytes) -> dict:
+    return _replace_configuration_files(package, {filename: content})
+
+
+def _apply_configuration_transaction(changes: dict[str, dict]) -> None:
+    """Validate and rebuild staged packages before committing any upload."""
+    if not changes:
+        return
+    for package in changes:
+        if not PACKAGE_ID.fullmatch(package):
+            raise HTTPException(400, f"Invalid configuration package name: {package!r}")
+
+    CONFIG_DIR.parent.mkdir(parents=True, exist_ok=True)
+    with _CONFIG_WRITE_LOCK, tempfile.TemporaryDirectory(
+        dir=CONFIG_DIR.parent, prefix=".configuration-transaction-",
+    ) as folder:
+        transaction = Path(folder)
+        staged_config = transaction / "config"
+        staged_work = transaction / "work"
+        staged_config.mkdir()
+        staged_work.mkdir()
+
+        try:
+            for package, change in changes.items():
+                source = CONFIG_DIR / package
+                staged_package = staged_config / package
+                if source.is_dir():
+                    shutil.copytree(source, staged_package)
+                else:
+                    if change.get("template") is not None:
+                        raise HTTPException(
+                            404, f"Unknown configuration package: {package}",
+                        )
+                    staged_package.mkdir(parents=True)
+
+                for filename, content in change.get("replacements", {}).items():
+                    if filename not in CONFIG_FILES:
+                        continue
+                    target = staged_package / CONFIG_FILES[filename]
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(content)
+
+                template = change.get("template")
+                if template is not None:
+                    for old_table in staged_package.rglob("*"):
+                        if (
+                            old_table.is_file()
+                            and old_table.suffix.lower() in TEMPLATE_SUFFIXES
+                        ):
+                            old_table.unlink()
+                    install_template(staged_package, *template)
+
+                complete = all(
+                    (staged_package / relative).is_file()
+                    for relative in CONFIG_FILES.values()
+                )
+                if complete:
+                    solver_module.SolverConfig.load(staged_config, package=package)
+                if change.get("rebuild"):
+                    rebuild_work_views(
+                        staged_package,
+                        config_root=staged_config,
+                        work_root=staged_work,
+                    )
+        except HTTPException:
+            raise
+        except (OSError, UnicodeError, ValueError) as error:
+            logger.warning("Configuration transaction validation failed: %s", error)
+            raise HTTPException(
+                422, f"Upload rejected; working views could not be rebuilt: {error}",
+            ) from error
+
+        swaps: list[tuple[Path, Path | None]] = []
+        try:
+            for package in changes:
+                staged_package = staged_config / package
+                destination = CONFIG_DIR / package
+                backup = None
+                if destination.exists():
+                    backup = CONFIG_DIR / f".{package}.backup-{uuid.uuid4().hex}"
+                    destination.replace(backup)
+                swaps.append((destination, backup))
+                staged_package.replace(destination)
+
+                staged_initial = staged_work / package / "initial"
+                if staged_initial.is_dir():
+                    destination_initial = WORK_ROOT / package / "initial"
+                    destination_initial.parent.mkdir(parents=True, exist_ok=True)
+                    work_backup = None
+                    if destination_initial.exists():
+                        work_backup = destination_initial.parent / (
+                            f".initial.backup-{uuid.uuid4().hex}"
+                        )
+                        destination_initial.replace(work_backup)
+                    swaps.append((destination_initial, work_backup))
+                    staged_initial.replace(destination_initial)
+        except OSError as error:
+            for destination, backup in reversed(swaps):
+                if destination.exists():
+                    shutil.rmtree(destination)
+                if backup is not None and backup.exists():
+                    backup.replace(destination)
+            raise HTTPException(500, f"Could not commit configuration: {error}") from error
+        else:
+            for _, backup in swaps:
+                if backup is not None and backup.exists():
+                    shutil.rmtree(backup)
+
+
+def _replace_configuration_files(
+    package: str, replacements: dict[str, bytes],
+) -> dict:
+    targets: dict[str, tuple[Path, Path]] = {}
+    for filename, content in replacements.items():
+        target, relative = _configuration_target(package, filename)
+        if not content:
+            raise HTTPException(400, f"{filename} is empty")
+        if len(content) > MAX_CONFIG_BYTES:
+            raise HTTPException(413, f"{filename} exceeds 2 MB")
+        try:
+            content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise HTTPException(400, f"{filename} must use UTF-8") from error
+        targets[filename] = (target, relative)
+
+    _apply_configuration_transaction({package: {
+        "replacements": replacements,
+        "rebuild": True,
+    }})
+
+    logger.info(
+        "Updated configuration %s: %s", package,
+        ", ".join(targets[name][1].as_posix() for name in replacements),
+    )
+    return _configuration_file_payload(package)
+
+
+def _package_name_from_comments(replacements: dict[str, bytes]) -> str:
+    names: set[str] = set()
+    for filename, content in replacements.items():
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError as error:
+            raise HTTPException(400, f"{filename} must use UTF-8") from error
+        header = "\n".join(text.splitlines()[:8])
+        match = PACKAGE_COMMENT.search(header)
+        if match:
+            names.add(match.group(1))
+        try:
+            tomllib.loads(text)
+        except tomllib.TOMLDecodeError as error:
+            raise HTTPException(400, f"{filename} has invalid TOML: {error}") from error
+    if not names:
+        raise HTTPException(
+            400, "Add '# Configuration package: NAME' near the start of the files",
+        )
+    if len(names) != 1:
+        raise HTTPException(400, "Configuration package comments do not agree")
+    name = names.pop()
+    if not PACKAGE_ID.fullmatch(name):
+        raise HTTPException(400, f"Invalid configuration package name: {name!r}")
+    return name
+
+
+def _upsert_configuration_package(
+    replacements: dict[str, bytes], *, rebuild: bool = True,
+) -> dict:
+    if not replacements:
+        raise HTTPException(400, "No recognized configuration files were provided")
+    package = _package_name_from_comments(replacements)
+    for filename, content in replacements.items():
+        if not content:
+            raise HTTPException(400, f"{filename} is empty")
+        if len(content) > MAX_CONFIG_BYTES:
+            raise HTTPException(413, f"{filename} exceeds 2 MB")
+    _apply_configuration_transaction({package: {
+        "replacements": replacements,
+        "rebuild": rebuild,
+    }})
+    logger.info("Updated configuration package %s", package)
+    return _configuration_file_payload(package)
+
+
+def _configuration_template(package: str, filename: str) -> bytes:
+    if filename not in {"courses.toml", "preferences.toml", "constraints.toml"}:
+        raise HTTPException(400, f"No minimal template is available for {filename}")
+    title = {
+        "courses.toml": "# Add [[courses]] offerings and [[relationships]] here.\n",
+        "preferences.toml": "staff_count_weight = 10\nstaff_credit_weight = 5\n",
+        "constraints.toml": "# Default workload and dynamic-position policies apply.\n",
+    }[filename]
+    return (
+        f"# Configuration package: {package}\n"
+        "# Generated minimal template\n\n"
+        f"{title}"
+    ).encode("utf-8")
+
+
+def _generate_configuration_template(package: str, filename: str) -> dict:
+    target, _ = _configuration_target(package, filename)
+    if target.exists():
+        raise HTTPException(409, f"{filename} already exists")
+    return _upsert_configuration_package({filename: _configuration_template(package, filename)})
+
+
+def _trash_destination(package: str, filename: str | None = None) -> Path:
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    suffix = f"-{filename}" if filename else ""
+    return CONFIG_TRASH / f"{package}-{stamp}-{uuid.uuid4().hex[:8]}{suffix}"
+
+
+def _delete_configuration_file(package: str, filename: str) -> dict:
+    target, relative = _configuration_target(package, filename)
+    if not target.is_file():
+        raise HTTPException(404, f"{filename} does not exist in {package}")
+    trash = _trash_destination(package, filename)
+    trash.parent.mkdir(parents=True, exist_ok=True)
+    trash.mkdir()
+    shutil.move(str(target), str(trash / filename))
+    logger.info("Moved configuration file %s/%s to %s", package, relative, trash)
+    return _configuration_file_payload(package)
+
+
+def _delete_configuration_package(package: str) -> None:
+    if not PACKAGE_ID.fullmatch(package):
+        raise HTTPException(400, f"Invalid configuration package name: {package!r}")
+    source = CONFIG_DIR / package
+    if not source.is_dir():
+        raise HTTPException(404, f"Unknown configuration package: {package}")
+    trash = _trash_destination(package)
+    trash.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(source), str(trash))
+    logger.info("Moved configuration package %s to %s", package, trash)
+
+
+def _rebuild_package_work_views(package: str) -> dict:
+    root = _package_root(package)
+    try:
+        return rebuild_work_views(root, config_root=CONFIG_DIR, work_root=WORK_ROOT)
+    except (OSError, ValueError) as error:
+        logger.warning("Could not rebuild work views for %s: %s", package, error)
+        raise HTTPException(422, f"Could not rebuild work views: {error}") from error
+
+
+def _delete_package_template(package: str) -> dict:
+    root = _package_root(package)
+    template = find_template(root)
+    if template is None:
+        raise HTTPException(404, "This configuration has no schedule template")
+    trash = _trash_destination(package, template.name)
+    trash.parent.mkdir(parents=True, exist_ok=True)
+    trash.mkdir()
+    shutil.move(str(template), str(trash / template.name))
+    template.parent.rmdir()
+    logger.info("Moved schedule template %s/%s to %s", package, template.name, trash)
+    return _configuration_file_payload(package)
+
+
+def _excel_bytes(schedule: Schedule, method_name: str) -> bytes:
+    """Build one shared Schedule Excel view without persistent server state."""
     with tempfile.TemporaryDirectory() as folder:
         path = Path(folder) / "export.xlsx"
         getattr(schedule, method_name)(path)
-        return base64.b64encode(path.read_bytes()).decode("ascii")
+        return path.read_bytes()
+
+
+def _schedule_from_payload(
+    payload: dict,
+) -> tuple[Schedule, solver_module.SolverConfig]:
+    package = str(payload.get("package", DEFAULT_PACKAGE)).strip()
+    records = payload.get("records")
+    if not isinstance(records, list):
+        raise HTTPException(400, "Current schedule records are required")
+    config = _load_web_config(package)
+    try:
+        schedule = Schedule.from_records(
+            records,
+            persons=config.persons,
+            relationships=tuple(config.courses.relationships) if config.courses else (),
+            catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
+        )
+    except (GroupingError, ValueError) as error:
+        raise HTTPException(400, str(error)) from error
+    return schedule, config
 
 
 def _assignment_options(config: solver_module.SolverConfig) -> dict:
@@ -468,19 +964,39 @@ def _serialize_schedule(schedule: Schedule) -> list[dict]:
     ]
 
 
-def _evaluate_schedule(
+def _analysis_payload(
     schedule: Schedule, config: solver_module.SolverConfig,
 ) -> dict:
-    """Run both checks and shape them for the frontend's violations
-    summary: hard (red, room/instructor conflicts and constraints), soft
-    (orange/yellow by penalty threshold)."""
+    """Serialize the same deterministic evaluation used by CLI publication."""
     evaluation = evaluate_schedule(
         schedule, config.preferences, config.persons, config.global_rules,
         config.meeting_patterns,
         config.constraint_rules,
         config.workload_policy, config.back_to_back_policy,
     )
+    loads = [
+        {
+            "name": row.name, "hours": row.hours, "target": row.target,
+            "delta": row.delta, "state": row.state, "position": row.position,
+        }
+        for row in summarize_instructor_loads(
+            evaluation.loads, config.persons,
+            new_instructor_target=config.new_instructor_policy.contract_load,
+            new_professor_target=config.new_professor_policy.contract_load,
+            overload_tolerance=config.workload_policy.overload_tolerance,
+        )
+    ]
+    records = schedule.to_records()
+    locations = {
+        (str(row.get("Building") or ""), str(row.get("Room") or ""))
+        for row in records if row.get("Room")
+    }
     return {
+        "atomic_classes": evaluation.atomic_classes,
+        "row_count": evaluation.row_count,
+        "instructor_count": len({row["name"] for row in loads if row["hours"]}),
+        "location_count": len(locations),
+        "instructor_loads": loads,
         "hard": [_serialize_hard(v) for v in evaluation.hard_violations],
         "soft_total": evaluation.soft_penalty,
         "soft": [_serialize_soft(f) for f in evaluation.soft_findings],
