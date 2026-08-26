@@ -1,0 +1,5 @@
+# Generated reconciliation audit. Do not edit as configuration.
+
+removed = ["MATH 3203 001", "MATH 3203 H01", "MATH 4993 001"]
+added = ["MATH 0803 004", "MATH 1003 004", "MATH 1003 007", "MATH 4123 001", "MATH 4123 H01", "STAT 2163 004"]
+reassigned_to_new_instructor = ["MATH 0903 001", "MATH 0903 TC1", "MATH 1113 001", "MATH 1113 F01", "MATH 1113 TC1", "MATH 2924 001", "MATH 2934 001", "MATH 2934 002"]
