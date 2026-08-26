@@ -153,7 +153,7 @@ class RunTermTests(unittest.TestCase):
             self.assertTrue(bundle.manifest_path.exists())
             self.assertTrue(bundle.overrides_path.exists())
             self.assertTrue(bundle.applied_overrides_path.exists())
-            self.assertTrue(bundle.applied_changes_path.exists())
+            self.assertTrue(bundle.reconciliation_path.exists())
             manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["schema_version"], 4)
             self.assertEqual(manifest["configuration"]["package_id"], "27S")
@@ -167,7 +167,7 @@ class RunTermTests(unittest.TestCase):
             self.assertIn("TEST_ver1_instructor.xlsx", manifest["files"])
             self.assertIn("TEST_ver1_room.xlsx", manifest["files"])
             self.assertIn("applied_overrides.toml", manifest["files"])
-            self.assertIn("applied_changes.toml", manifest["files"])
+            self.assertIn("reconciliation.toml", manifest["files"])
             self.assertNotIn("overrides.toml", manifest["files"])
             self.assertTrue(manifest["override_workspace"]["mutable"])
             self.assertIn("source_version = \"ver1\"", bundle.overrides_path.read_text())
@@ -213,7 +213,7 @@ class RunTermTests(unittest.TestCase):
                     attempts=1, time_limit_seconds=5,
                 )
 
-    def test_solve_rejects_cancelled_course_instead_of_mutating_initial(self):
+    def test_solve_no_longer_accepts_a_parallel_changes_input(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             input_path = root / "previous_version.csv"
@@ -235,7 +235,7 @@ class RunTermTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(ValueError, "rebuild initial"):
+            with self.assertRaisesRegex(TypeError, "changes_path"):
                 run_term(
                     "TEST", input_path=input_path, baseline_path=input_path,
                     changes_path=changes_path, output_root=root / "out",

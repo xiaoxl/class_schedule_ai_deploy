@@ -33,8 +33,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import solver as solver_module
 from .schedule_run import next_version
+from .reconciliation import reconcile_records
 from .version_publisher import publish_version, sha256
-from .new_instructors import NEW_INSTRUCTOR_MAX_LOAD
 from .schedule_model import (
     GroupingError,
     HardViolation,
@@ -59,7 +59,7 @@ LOG_PATH = Path("output/logs/webapp.log")
 # yellow (back_to_back and mildly weighted preferences, a permissive
 # instructor's ordinary overload (10), and a mildly weighted
 # PreferenceRule). Every penalty in this system shares one 0-100 scale --
-# see the comment above schedule_model.OVERLOAD_TOLERANCE.
+# see the configured workload policy in constraints.toml.
 SOFT_SEVERITY_THRESHOLD = 20.0
 
 # This bounds CP-SAT search time per Web request; model construction happens
@@ -234,6 +234,10 @@ def create_app() -> FastAPI:
         if not isinstance(records, list) or not isinstance(baseline_records, list):
             raise HTTPException(400, "Current and baseline schedule records are required")
         package = str(payload.get("package", DEFAULT_PACKAGE)).strip()
+        if term != package.upper():
+            raise HTTPException(
+                400, "The output term must match the selected configuration package"
+            )
         config = _load_web_config(package)
         try:
             relationships = tuple(config.courses.relationships) if config.courses else ()
@@ -251,6 +255,7 @@ def create_app() -> FastAPI:
         evaluation = evaluate_schedule(
             schedule, config.preferences, config.persons, config.global_rules,
             config.meeting_patterns, config.constraint_rules,
+            config.workload_policy, config.back_to_back_policy,
         )
         if evaluation.hard_violations:
             raise HTTPException(422, {
@@ -262,7 +267,7 @@ def create_app() -> FastAPI:
         destination = output_root / term / version
         baseline_bytes = baseline.to_dataframe().to_csv(index=False).encode("utf-8")
         no_overrides = b"# Browser manual schedule publication; no override file applied.\n"
-        no_changes = b"# Browser publication used the imported schedule as its baseline.\n"
+        reconciliation = b"# Browser publication used the imported schedule as its baseline.\n"
         created_at = datetime.now(UTC).isoformat()
         report = (
             f"# {term} {version} manual schedule report\n\n"
@@ -289,10 +294,10 @@ def create_app() -> FastAPI:
                 "version": config.version,
                 "files": [{"path": name, "sha256": sha256(Path(name))} for name in config.source_paths],
             },
-            "term_changes": {
-                "path": None, "sha256": None, "scope": "cancel_courses",
-                "configured_cancels": [], "cancelled_course_validation": "passed",
-                "snapshot": "applied_changes.toml",
+            "reconciliation": {
+                "source": "web-upload",
+                "sha256": hashlib.sha256(reconciliation).hexdigest(),
+                "snapshot": "reconciliation.toml",
             },
             "applied_overrides_sha256": hashlib.sha256(no_overrides).hexdigest(),
             "override_workspace": {"path": "overrides.toml", "mutable": True, "source_version": version},
@@ -319,7 +324,7 @@ def create_app() -> FastAPI:
                 "HardViolations": 0, "WorstOverload": None, "Error": None,
             }],
             report=report, manifest=manifest, applied_overrides=no_overrides,
-            applied_changes=no_changes,
+            reconciliation=reconciliation,
         )
         logger.info("Published browser schedule as %s/%s", term, version)
         return {
@@ -349,7 +354,11 @@ def _assignment_options(config: solver_module.SolverConfig) -> dict:
         "contract_loads": {
             name: person.max_load for name, person in sorted(config.persons.items())
         },
-        "new_instructor_contract_load": NEW_INSTRUCTOR_MAX_LOAD,
+        "new_instructor_contract_load": config.new_instructor_policy.contract_load,
+        "workload_policy": {
+            "overload_tolerance": config.workload_policy.overload_tolerance,
+            "hard_load_cap_tolerance": config.workload_policy.hard_load_cap_tolerance,
+        },
         "rooms": [
             {"building": room.building, "room": room.room}
             for room in config.rooms
@@ -395,10 +404,8 @@ async def _read_and_group(
     del content  # no longer needed once parsed; drop it before the solve path holds `schedule`
 
     try:
-        schedule = Schedule.from_dataframe(
-            dataframe, persons=config.persons,
-            relationships=tuple(config.courses.relationships) if config.courses else (),
-            catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
+        schedule, _ = reconcile_records(
+            dataframe.to_dict(orient="records"), config,
         )
     except GroupingError as error:
         logger.warning(
@@ -470,6 +477,7 @@ def _evaluate_schedule(
         schedule, config.preferences, config.persons, config.global_rules,
         config.meeting_patterns,
         config.constraint_rules,
+        config.workload_policy, config.back_to_back_policy,
     )
     return {
         "hard": [_serialize_hard(v) for v in evaluation.hard_violations],

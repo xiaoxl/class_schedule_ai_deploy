@@ -9,14 +9,10 @@ from ortools.sat.python import cp_model
 from ..class_model import Section
 from ..overrides import LockMap, locks_for_section
 from ..schedule_model import Schedule
-from ..schedule_model import PersonRecord
+from ..schedule_model import PersonRecord, PreferenceRecord
 from ..initial_builder import is_placeholder_instructor, recolor_placeholder
 from ..instructor_identity import new_instructor_name, new_instructor_rank
-from ..new_instructors import (
-    NEW_INSTRUCTOR_MAX_LOAD,
-    required_by_concurrency,
-    required_by_load,
-)
+from ..new_instructors import required_by_concurrency, required_by_load
 from .candidates import (
     MAX_CANDIDATES_PAIRED_SECTION,
     MAX_CANDIDATES_SINGLE_SECTION,
@@ -83,8 +79,15 @@ def solve_detailed(
     )
     pool_size = max(
         existing_count,
-        required_by_load(class_list),
-        required_by_concurrency(class_list),
+        required_by_load(
+            class_list,
+            contract_load=config.new_instructor_policy.contract_load,
+            max_course_number_exclusive=config.new_instructor_policy.max_course_number_exclusive,
+        ),
+        required_by_concurrency(
+            class_list,
+            max_course_number_exclusive=config.new_instructor_policy.max_course_number_exclusive,
+        ),
     )
     placeholder_instructors = tuple(
         new_instructor_name(rank) for rank in range(1, pool_size + 1)
@@ -136,17 +139,28 @@ def solve_detailed(
         class_list, sections, sections_by_class, candidates, chosen, model
     )
     slots = build_slots(sections, owner, candidates)
+    effective_preferences = dict(config.preferences)
+    effective_preferences.update({
+        name: PreferenceRecord(
+            name=name,
+            allow_back_to_back=config.new_instructor_policy.allow_back_to_back,
+        ) for name in placeholder_instructors
+    })
     back_to_back_terms = add_scheduling_constraints(
-        slots, chosen, config.preferences, model
+        slots, chosen, effective_preferences, model,
+        back_to_back_penalty=config.back_to_back_policy.penalty,
     )
     effective_persons = dict(config.persons)
     effective_persons.update({
-        name: PersonRecord(name=name, max_load=NEW_INSTRUCTOR_MAX_LOAD)
+        name: PersonRecord(
+            name=name, max_load=config.new_instructor_policy.contract_load
+        )
         for name in placeholder_instructors
     })
     load_terms = add_load_terms(
         class_list, sections_by_class, candidates, chosen,
-        effective_persons, config.preferences, model,
+        effective_persons, effective_preferences, model,
+        workload_policy=config.workload_policy,
     )
     placeholder_terms = add_placeholder_count_terms(
         candidates, chosen, placeholder_instructors,

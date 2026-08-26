@@ -15,21 +15,14 @@ from ..class_model import (
     HybridClass,
     Section,
 )
+from ..config_schema import WorkloadPolicySchema
 from ..schedule_model import (
-    BACK_TO_BACK_PENALTY,
-    OVERLOAD_FAR_PENALTY,
-    OVERLOAD_FAR_THRESHOLD,
-    OVERLOAD_TOLERANCE,
-    UNDER_LOAD_PENALTY_PER_CREDIT,
     PersonRecord,
     PreferenceRecord,
 )
 from ..instructor_identity import is_new_instructor
 from .candidates import apply_candidate
 from .types import SectionCandidate
-
-
-HARD_LOAD_CAP_TOLERANCE = 6.0
 
 
 def add_placeholder_count_terms(
@@ -187,6 +180,7 @@ def add_scheduling_constraints(
     chosen: list[list],
     preferences: dict[str, PreferenceRecord],
     model: cp_model.CpModel,
+    *, back_to_back_penalty: float = 10.0,
 ) -> list:
     by_room_day: dict[tuple[str, str], list[int]] = {}
     by_instructor_day: dict[tuple[str, str], list[int]] = {}
@@ -272,7 +266,7 @@ def add_scheduling_constraints(
                         both >= chosen[left.section][left.candidate]
                         + chosen[right.section][right.candidate] - 1
                     )
-                    objective_terms.append(BACK_TO_BACK_PENALTY * both)
+                    objective_terms.append(back_to_back_penalty * both)
         elif preference.max_back_to_back is not None:
             length = preference.max_back_to_back + 1
             for index in indices:
@@ -296,7 +290,7 @@ def add_scheduling_constraints(
                     for variable in variables:
                         model.add(all_chosen <= variable)
                     model.add(all_chosen >= sum(variables) - (len(variables) - 1))
-                    objective_terms.append(BACK_TO_BACK_PENALTY * all_chosen)
+                    objective_terms.append(back_to_back_penalty * all_chosen)
     return objective_terms
 
 
@@ -308,7 +302,9 @@ def add_load_terms(
     persons: dict[str, PersonRecord],
     preferences: dict[str, PreferenceRecord],
     model: cp_model.CpModel,
+    *, workload_policy: WorkloadPolicySchema | None = None,
 ) -> list:
+    policy = workload_policy or WorkloadPolicySchema()
     scale = 10
     per_instructor: dict[str, list] = {}
     for class_index, item in enumerate(class_list):
@@ -331,11 +327,16 @@ def add_load_terms(
         if is_new_instructor(instructor):
             model.add(total <= target)
             continue
-        limit = int(round((person.max_load + OVERLOAD_TOLERANCE) * scale))
-        hard_cap = int(round((person.max_load + HARD_LOAD_CAP_TOLERANCE) * scale))
+        limit = int(round((person.max_load + policy.overload_tolerance) * scale))
+        hard_cap = int(round((person.max_load + policy.hard_load_cap_tolerance) * scale))
         model.add(total <= hard_cap)
         preference = preferences.get(instructor)
-        penalty = preference.overload_penalty if preference else 0.0
+        penalty = (
+            policy.penalties.permissive_overload_per_credit
+            if preference is not None and preference.allow_overload
+            else policy.penalties.strict_overload_per_credit
+            if preference is not None else 0.0
+        )
         if penalty:
             excess = model.new_int_var(
                 0, hard_cap - limit, f"overload_{instructor}"
@@ -344,15 +345,15 @@ def add_load_terms(
             objective_terms.append((penalty / scale) * excess)
             if preference.allow_overload:
                 far_limit = int(round(
-                    (person.max_load + OVERLOAD_FAR_THRESHOLD) * scale
+                    (person.max_load + policy.far_overload_threshold) * scale
                 ))
                 far_over = model.new_bool_var(f"overload_far_{instructor}")
                 model.add(total > far_limit).only_enforce_if(far_over)
                 model.add(total <= far_limit).only_enforce_if(far_over.Not())
-                objective_terms.append(OVERLOAD_FAR_PENALTY * far_over)
+                objective_terms.append(policy.penalties.far_overload_extra * far_over)
         deficit = model.new_int_var(0, target, f"under_load_{instructor}")
         model.add(deficit >= target - total)
         objective_terms.append(
-            (UNDER_LOAD_PENALTY_PER_CREDIT / scale) * deficit
+            (policy.penalties.underload_per_credit / scale) * deficit
         )
     return objective_terms

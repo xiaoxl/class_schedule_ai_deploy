@@ -9,13 +9,11 @@ from pathlib import Path
 import pandas as pd
 
 from .data_cleaning import clean_file, initialize_input, publish_draft
-from .initial_builder import build_initial_schedules, print_initial_result
+from .initial_builder import build_reconciled_initial
 from .schedule_io import read_schedule
 from .schedule_model import evaluate_schedule
 from .schedule_run import create_override_template, publish_final, run_term
 from .solver import SolverConfig, diff_schedules
-from .solver.config import resolve_config_paths
-from .term_builder import apply_cancellations, load_changes
 
 
 def _read_schedule(path: str | Path, config: SolverConfig):
@@ -27,6 +25,11 @@ def _read_schedule(path: str | Path, config: SolverConfig):
 
 
 def _load_config(args: argparse.Namespace) -> SolverConfig:
+    if args.term.upper() != args.package.upper():
+        raise ValueError(
+            f"Term/output namespace {args.term!r} must match configuration "
+            f"package {args.package!r}"
+        )
     return SolverConfig.load(args.config, package=args.package)
 
 
@@ -78,20 +81,14 @@ def _initial(args: argparse.Namespace) -> int:
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite initial result: {output}")
     config = _load_config(args)
-    persons_path = resolve_config_paths(
-        args.config, args.package
-    )["persons.toml"]
-    results = build_initial_schedules(
-        args.input, args.changes, persons_path, output_dir=output, seed=args.seed,
-        meeting_patterns=config.meeting_patterns,
-        configuration={
-            "package_id": config.package_id,
-            "version": config.version,
-        },
+    result = build_reconciled_initial(
+        args.input, config, output_dir=output, seed=args.seed,
     )
-    for label, result in results.items():
-        print_initial_result(label, result)
-    print(f"Wrote {output / 'initial.csv'} and {output / 'initial_noadding.csv'}")
+    report = result["report"]
+    print(f"Removed: {len(report.removed)}")
+    print(f"Added: {len(report.added)}")
+    print(f"Reassigned to New Instructor: {len(report.reassigned)}")
+    print(f"Wrote {output / 'initial.csv'} and {result['audit_path']}")
     return 0
 
 
@@ -106,7 +103,7 @@ def _solve(args: argparse.Namespace) -> int:
         args.term, input_path=args.input, output_root=args.output_root,
         config_dir=args.config, version=args.version, attempts=args.attempts,
         time_limit_seconds=args.seconds, overrides_path=args.overrides,
-        changes_path=args.changes, initial_path=args.initial,
+        initial_path=args.initial,
         parent=args.parent, baseline_path=args.baseline,
         historical_backfill=args.historical_backfill,
         search_workers=args.workers,
@@ -142,38 +139,23 @@ def _override_template(args: argparse.Namespace) -> int:
 def _validate(args: argparse.Namespace) -> int:
     config = _load_config(args)
     schedule = _read_schedule(args.input, config)
-    changes_path = (
-        Path(args.changes) if args.changes
-        else Path("inputs") / args.term / "changes.toml"
-    )
-    cancelled_course_ids: tuple[str, ...] = ()
-    if changes_path.is_file():
-        _, cancelled_course_ids, _ = apply_cancellations(
-            schedule, load_changes(changes_path).cancel
-        )
-    elif args.changes:
-        raise FileNotFoundError(f"Term changes file does not exist: {changes_path}")
     evaluation = evaluate_schedule(
         schedule, config.preferences, config.persons, config.global_rules,
         config.meeting_patterns, config.constraint_rules,
+        config.workload_policy, config.back_to_back_policy,
     )
     print(
         f"Atomic classes: {evaluation.atomic_classes}; "
         f"rows: {evaluation.row_count}"
     )
     print(
-        f"Hard violations: {len(evaluation.hard_violations) + len(cancelled_course_ids)}; "
+        f"Hard violations: {len(evaluation.hard_violations)}; "
         f"soft penalty: {evaluation.soft_penalty:g}; "
         f"soft findings: {len(evaluation.soft_findings)}"
     )
     for item in evaluation.hard_violations:
         print(f"HARD [{item.rule}] {item.message}")
-    for course_id in cancelled_course_ids:
-        print(
-            f"HARD [cancelled_course] {course_id}: remains present despite "
-            f"{changes_path}"
-        )
-    return 1 if evaluation.hard_violations or cancelled_course_ids else 0
+    return 1 if evaluation.hard_violations else 0
 
 
 def _diff(args: argparse.Namespace) -> int:
@@ -225,10 +207,11 @@ def build_parser() -> argparse.ArgumentParser:
     draft.add_argument("--output")
     draft.set_defaults(handler=_draft)
 
-    initial = commands.add_parser("initial", help="apply term changes to the draft")
+    initial = commands.add_parser(
+        "initial", help="reconcile a template to courses.toml"
+    )
     initial.add_argument("term")
     initial.add_argument("input")
-    initial.add_argument("changes")
     initial.add_argument("--output")
     initial.add_argument("--seed", type=int)
     initial.set_defaults(handler=_initial)
@@ -248,10 +231,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="parallel CP-SAT search workers; use 1 for deterministic search",
     )
     solve.add_argument("--overrides")
-    solve.add_argument(
-        "--changes",
-        help="must match the changes snapshot used to build initial",
-    )
     solve.add_argument(
         "--initial",
         help="initial schedule (default: work/TERM/initial/initial.csv)",
@@ -298,10 +277,6 @@ def build_parser() -> argparse.ArgumentParser:
     validate = commands.add_parser("validate", help="evaluate a schedule without changing it")
     validate.add_argument("term")
     validate.add_argument("input")
-    validate.add_argument(
-        "--changes",
-        help="term changes file (default: inputs/TERM/changes.toml when present)",
-    )
     validate.set_defaults(handler=_validate)
 
     diff = commands.add_parser("diff", help="compare two schedule files")
@@ -315,7 +290,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    raise SystemExit(args.handler(args))
+    try:
+        code = args.handler(args)
+    except (FileNotFoundError, ValueError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        code = 2
+    raise SystemExit(code)
 
 
 if __name__ == "__main__":

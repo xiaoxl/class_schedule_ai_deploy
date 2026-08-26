@@ -1,4 +1,11 @@
-"""Build a term's initial schedule from its cleaned pre-change draft.
+"""Build a package initial by reconciling a cleaned schedule template.
+
+The production entry point is ``build_reconciled_initial``. It treats
+``courses.toml`` as desired state and writes a generated reconciliation audit.
+
+The older ``build_initial_schedules`` helpers remain only as a library-level
+reader for historical manifests/tests; no CLI, Web, package, or shipped input
+uses a hand-written changes.toml.
 
 Two outputs, both by ``build_initial_schedules``:
 
@@ -53,6 +60,8 @@ from .pattern_rules import (
     matches_configured_pattern,
 )
 from .schedule_io import read_schedule
+from .schedule_io import read_table
+from .reconciliation import reconcile_records, render_reconciliation
 from .schedule_model import (
     PersonRecord,
     Schedule,
@@ -374,3 +383,72 @@ def print_initial_result(label: str, result: dict[str, object]) -> None:
             "run class-schedule solve against the qualified-instructor pool next."
         )
     print()
+
+
+def build_reconciled_initial(
+    template_path: str | Path,
+    config,
+    *,
+    output_dir: str | Path,
+    seed: int | None = None,
+) -> dict[str, object]:
+    """Build the sole production initial from courses.toml desired state."""
+    destination = Path(output_dir)
+    if destination.exists():
+        raise FileExistsError(f"Refusing to overwrite initial result: {destination}")
+    records = read_table(template_path).dropna(how="all").to_dict(orient="records")
+    reconciled, report = reconcile_records(records, config)
+    recolored, placeholder_identities = recolor_placeholder(reconciled, seed=seed)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = destination.parent / f".{destination.name}-staging-{uuid.uuid4().hex}"
+    staging.mkdir()
+    try:
+        initial_path = staging / "initial.csv"
+        instructor_path = staging / "initial_instructor.xlsx"
+        room_path = staging / "initial_room.xlsx"
+        audit_path = staging / "reconciliation.toml"
+        recolored.to_dataframe().to_csv(initial_path, index=False)
+        recolored.to_instructor_excel(instructor_path)
+        recolored.to_room_excel(room_path)
+        audit_path.write_text(render_reconciliation(report), encoding="utf-8")
+
+        def digest(path: str | Path) -> str:
+            return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+        manifest = {
+            "schema_version": 2,
+            "role": "initial",
+            "configuration": {
+                "package_id": config.package_id,
+                "version": config.version,
+                "files": [
+                    {"path": path, "sha256": digest(path)}
+                    for path in config.source_paths
+                ],
+            },
+            "template": {"path": str(template_path), "sha256": digest(template_path)},
+            "reconciliation": {
+                "snapshot": audit_path.name,
+                "sha256": digest(audit_path),
+                "source": "courses.toml",
+            },
+            "initial": {"path": initial_path.name, "sha256": digest(initial_path)},
+            "files": {
+                path.name: digest(path)
+                for path in (initial_path, instructor_path, room_path, audit_path)
+            },
+        }
+        (staging / "manifest.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+        staging.replace(destination)
+        return {
+            "schedule": recolored,
+            "report": report,
+            "placeholder_identities": placeholder_identities,
+            "audit_path": destination / audit_path.name,
+        }
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)

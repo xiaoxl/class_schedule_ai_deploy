@@ -14,7 +14,6 @@ import pandas as pd
 from .instructor_identity import is_new_instructor
 from .schedule_model import (
     HardViolation,
-    OVERLOAD_TOLERANCE,
     Schedule,
     SoftFinding,
     evaluate_schedule,
@@ -38,7 +37,6 @@ from .solver import (
     diff_schedules,
     solve_detailed,
 )
-from .term_builder import apply_cancellations, load_changes
 from .version_publisher import publish_version
 
 
@@ -78,7 +76,7 @@ class RunBundle:
     manifest_path: Path
     overrides_path: Path
     applied_overrides_path: Path
-    applied_changes_path: Path
+    reconciliation_path: Path
     best_attempt: Attempt
     attempts: tuple[Attempt, ...]
 
@@ -88,7 +86,8 @@ def worst_overload(schedule: Schedule, config: SolverConfig) -> float:
     return max(
         (max(
             0.0,
-            loads.get(name, 0.0) - person.max_load - OVERLOAD_TOLERANCE,
+            loads.get(name, 0.0) - person.max_load
+            - config.workload_policy.overload_tolerance,
         )
          for name, person in config.persons.items()),
         default=0.0,
@@ -317,7 +316,7 @@ def _load_json(path: Path) -> dict[str, object]:
 
 
 def _verified_initial(initial_path: Path) -> tuple[Path, dict[str, object]]:
-    """Verify an initial artifact and return its recorded changes source."""
+    """Verify an initial artifact and its generated reconciliation audit."""
     manifest = _load_json(initial_path.parent / "manifest.json")
     if manifest.get("role") != "initial":
         raise ValueError(f"Not an initial artifact manifest: {initial_path.parent}")
@@ -328,25 +327,20 @@ def _verified_initial(initial_path: Path) -> tuple[Path, dict[str, object]]:
         raise ValueError("Initial manifest points to a different schedule file")
     if initial_info.get("sha256") != _sha256(initial_path):
         raise ValueError(f"Initial schedule changed after publication: {initial_path}")
-    changes_info = manifest.get("changes", {})
-    if not isinstance(changes_info, dict) or not changes_info.get("path"):
-        raise ValueError("Initial manifest has no changes provenance")
-    recorded_changes = Path(str(changes_info["path"]))
-    if not recorded_changes.is_file():
-        raise FileNotFoundError(
-            f"Initial changes source does not exist: {recorded_changes}"
-        )
-    if changes_info.get("sha256") != _sha256(recorded_changes):
-        raise ValueError(
-            "changes.toml changed after initial was built; rebuild initial before solve"
-        )
-    return recorded_changes, manifest
+    audit_info = manifest.get("reconciliation", {})
+    audit = initial_path.parent / str(audit_info.get("snapshot", "reconciliation.toml"))
+    if not audit.is_file() or audit_info.get("sha256") != _sha256(audit):
+        legacy = manifest.get("changes", {})
+        audit = Path(str(legacy.get("path", "")))
+        if not audit.is_file() or legacy.get("sha256") != _sha256(audit):
+            raise ValueError("Initial reconciliation audit is missing or changed")
+    return audit, manifest
 
 
 def _verified_parent_baseline(
     term: str, parent: str, term_dir: Path,
 ) -> tuple[Path, Path]:
-    """Return the immutable initial baseline and changes snapshot of a parent ver."""
+    """Return the immutable initial baseline and reconciliation snapshot."""
     parent_dir = term_dir / parent
     manifest = _load_json(parent_dir / "manifest.json")
     baseline_info = manifest.get("initial_baseline", {})
@@ -361,18 +355,23 @@ def _verified_parent_baseline(
     files = manifest.get("files", {})
     if not isinstance(files, dict) or files.get(snapshot.name) != _sha256(snapshot):
         raise ValueError(f"Parent initial baseline snapshot failed hash verification: {snapshot}")
-    changes_snapshot = parent_dir / "applied_changes.toml"
-    if not changes_snapshot.is_file():
-        raise FileNotFoundError(
-            f"Parent version has no term changes snapshot: {changes_snapshot}"
-        )
-    return snapshot, changes_snapshot
+    reconciliation = parent_dir / "reconciliation.toml"
+    if not reconciliation.is_file():
+        legacy = parent_dir / "applied_changes.toml"
+        if legacy.is_file():
+            reconciliation = legacy
+        else:
+            raise FileNotFoundError(
+                f"Parent version has no reconciliation snapshot: {reconciliation}"
+            )
+    return snapshot, reconciliation
 
 
 def _evaluate_attempt(number: int, result: SolveResult, config: SolverConfig) -> Attempt:
     evaluation = evaluate_schedule(
         result.schedule, config.preferences, config.persons, config.global_rules,
         config.meeting_patterns, config.constraint_rules,
+        config.workload_policy, config.back_to_back_policy,
     )
     return Attempt(
         number=number,
@@ -416,7 +415,7 @@ def _report(
     solver_input: Schedule,
     baseline_path: Path,
     baseline: Schedule,
-    changes_path: Path | None,
+    reconciliation_path: Path | None,
     config: SolverConfig,
     attempts: tuple[Attempt, ...],
     best: Attempt,
@@ -427,6 +426,7 @@ def _report(
     baseline_evaluation = evaluate_schedule(
         baseline, config.preferences, config.persons, config.global_rules,
         config.meeting_patterns, config.constraint_rules,
+        config.workload_policy, config.back_to_back_policy,
     )
     before_loads = baseline_evaluation.loads
     after_loads = teaching_loads(after)
@@ -447,10 +447,9 @@ def _report(
         f"{len(baseline.to_records())} rows)",
         "",
         (
-            f"Term changes snapshot: `{changes_path.as_posix()}`; "
-            "cancelled-course validation passed"
-            if changes_path is not None
-            else "Term changes: none found; solve-time cancel guard was not applied"
+            f"Reconciliation snapshot: `{reconciliation_path.as_posix()}`"
+            if reconciliation_path is not None
+            else "Reconciliation snapshot: unavailable for historical backfill"
         ),
         "",
         f"Configuration version: `{config.version or 'unversioned'}`",
@@ -560,13 +559,16 @@ def run_term(
     time_limit_seconds: float = 45.0,
     search_workers: int = DEFAULT_SEARCH_WORKERS,
     overrides_path: str | Path | None = None,
-    changes_path: str | Path | None = None,
     initial_path: str | Path | None = None,
     parent: str | None = None,
     baseline_path: str | Path | None = None,
     historical_backfill: bool = False,
     replace_destination: bool = False,
 ) -> RunBundle:
+    if package is not None and term.upper() != package.upper():
+        raise ValueError(
+            f"Output namespace {term!r} must match configuration package {package!r}"
+        )
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
     if time_limit_seconds <= 0:
@@ -593,26 +595,20 @@ def run_term(
 
     if historical_backfill:
         baseline_path = Path(baseline_path) if baseline_path else input_path
-        if changes_path is None:
-            candidate = Path("inputs") / term / "changes.toml"
-            resolved_changes_path = candidate if candidate.is_file() else None
-        else:
-            resolved_changes_path = Path(changes_path)
+        reconciliation_path = None
     elif is_final:
         if parent is None:
             raise ValueError("final requires an explicit source verN")
         expected_input = version_schedule_path(term, parent, output_root=output_root)
         if input_path.resolve() != expected_input.resolve():
             raise ValueError(f"Parent {parent} does not match final input {input_path}")
-        inherited_baseline, inherited_changes = _verified_parent_baseline(
+        inherited_baseline, inherited_reconciliation = _verified_parent_baseline(
             term, parent, term_dir
         )
         if baseline_path is not None and Path(baseline_path).resolve() != inherited_baseline.resolve():
             raise ValueError("final baseline must be inherited from its source ver")
         baseline_path = inherited_baseline
-        resolved_changes_path = Path(changes_path) if changes_path else inherited_changes
-        if _sha256(resolved_changes_path) != _sha256(inherited_changes):
-            raise ValueError("final must inherit the source ver's initial changes snapshot")
+        reconciliation_path = inherited_reconciliation
     else:
         if parent is not None:
             raise ValueError(
@@ -629,7 +625,7 @@ def run_term(
                 "Every automatic ver must use the initial schedule as input; "
                 "use --historical-backfill only for explicit legacy reconstruction"
             )
-        recorded_changes, initial_manifest = _verified_initial(canonical_initial)
+        reconciliation_path, initial_manifest = _verified_initial(canonical_initial)
         initial_package = initial_manifest.get("configuration", {}).get("package_id")
         requested_package = package or initial_package or "27S"
         if initial_package and initial_package != requested_package:
@@ -639,17 +635,10 @@ def run_term(
             )
         package = requested_package
         baseline_path = canonical_initial
-        resolved_changes_path = Path(changes_path) if changes_path else recorded_changes
-        if _sha256(resolved_changes_path) != _sha256(recorded_changes):
-            raise ValueError("solve changes do not match the changes used to build initial")
     assert baseline_path is not None
     if not Path(baseline_path).is_file():
         raise FileNotFoundError(f"Initial baseline does not exist: {baseline_path}")
     baseline_path = Path(baseline_path)
-    if resolved_changes_path is not None and not resolved_changes_path.is_file():
-        raise FileNotFoundError(
-            f"Term changes file does not exist: {resolved_changes_path}"
-        )
     if (
         not historical_backfill and not is_final
         and baseline_path.resolve() != input_path.resolve()
@@ -663,17 +652,6 @@ def run_term(
         input_path, persons=config.persons, relationships=relationships,
         catalogs=catalogs,
     )
-    configured_cancels = ()
-    if resolved_changes_path is not None:
-        configured_cancels = load_changes(resolved_changes_path).cancel
-        _, cancelled_from_input, _ = apply_cancellations(
-            source_schedule, configured_cancels
-        )
-        if cancelled_from_input:
-            raise ValueError(
-                "Solver input still contains cancelled courses "
-                f"({', '.join(cancelled_from_input)}); rebuild initial before solve"
-            )
     baseline_schedule = (
         source_schedule if baseline_path.resolve() == input_path.resolve()
         else read_schedule(
@@ -726,9 +704,9 @@ def run_term(
         Path(overrides_path).read_bytes() if overrides_path
         else b"# No manual edits or locks were applied to this version.\n"
     )
-    applied_changes = (
-        resolved_changes_path.read_bytes() if resolved_changes_path is not None
-        else b"# No term changes file was found for this solve.\n"
+    reconciliation = (
+        reconciliation_path.read_bytes() if reconciliation_path is not None
+        else b"# Historical backfill has no package reconciliation audit.\n"
     )
     manifest = {
             "schema_version": 4,
@@ -751,23 +729,10 @@ def run_term(
                     for name in config.source_paths
                 ],
             },
-            "term_changes": {
-                "path": str(resolved_changes_path) if resolved_changes_path else None,
-                "sha256": (
-                    _sha256(resolved_changes_path)
-                    if resolved_changes_path is not None else None
-                ),
-                "scope": "cancel_courses",
-                "configured_cancels": [
-                    {
-                        "subject": spec.subject,
-                        "number": spec.number,
-                        "section": spec.section,
-                    }
-                    for spec in configured_cancels
-                ],
-                "cancelled_course_validation": "passed",
-                "snapshot": "applied_changes.toml",
+            "reconciliation": {
+                "source": "courses.toml",
+                "sha256": hashlib.sha256(reconciliation).hexdigest(),
+                "snapshot": "reconciliation.toml",
             },
             "applied_overrides_sha256": hashlib.sha256(applied_overrides).hexdigest(),
             "override_workspace": {
@@ -800,12 +765,12 @@ def run_term(
         attempts_rows=_attempt_rows(attempts_tuple),
         report=_report(
             term, version, input_path, source_schedule,
-            baseline_path, baseline_schedule, resolved_changes_path,
+            baseline_path, baseline_schedule, reconciliation_path,
             config, attempts_tuple, best, time_limit_seconds,
         ),
         manifest=manifest,
         applied_overrides=applied_overrides,
-        applied_changes=applied_changes,
+        reconciliation=reconciliation,
         final=is_final,
         replace_destination=replace_destination,
     )
@@ -824,7 +789,7 @@ def run_term(
         manifest_path=published.manifest_path,
         overrides_path=published.overrides_path,
         applied_overrides_path=published.applied_overrides_path,
-        applied_changes_path=published.applied_changes_path,
+        reconciliation_path=published.reconciliation_path,
         best_attempt=best,
         attempts=attempts_tuple,
     )

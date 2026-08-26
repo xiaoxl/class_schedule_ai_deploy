@@ -30,11 +30,13 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from . import record_utils
 from .config_schema import (
     CatalogCourseSchema,
+    BackToBackPolicySchema,
     CourseRelationshipSchema,
     FlatPreferenceRuleSchema,
     PersonsFileSchema,
     PreferencesFileSchema,
     TimeWindowSchema,
+    WorkloadPolicySchema,
 )
 from .class_model import (
     Class,
@@ -253,7 +255,27 @@ def _group_records(
         subject = record_utils.text(record_utils.value(normalized, "Subject")).upper()
         number = record_utils.text(record_utils.value(normalized, "Number")).upper()
         catalog = catalog_by_id.get((subject, number))
+        if catalog_by_id and catalog is None:
+            raise GroupingError(
+                f"{subject} {number} is missing from catalogs.toml",
+                [dict(normalized)],
+            )
         if catalog is not None:
+            raw_credits = record_utils.text(record_utils.value(normalized, "Credits"))
+            if raw_credits:
+                try:
+                    input_credits = float(raw_credits)
+                except ValueError as error:
+                    raise GroupingError(
+                        f"{subject} {number} has invalid input Credits={raw_credits!r}",
+                        [dict(normalized)],
+                    ) from error
+                if abs(input_credits - catalog.credits) > 1e-9:
+                    raise GroupingError(
+                        f"{subject} {number} has input Credits={input_credits:g}, "
+                        f"but catalogs.toml declares {catalog.credits:g}",
+                        [dict(normalized)],
+                    )
             normalized["Title"] = catalog.title
             normalized["Credits"] = catalog.credits
         if record_utils.text(normalized.get("Cross-List")).startswith("configured:"):
@@ -520,30 +542,8 @@ def _take_coreqs(
 # so invalid four-credit/Hybrid/cross-list/coreq combinations cannot become
 # a Schedule or a solved result.
 #
-# max_load is a per-instructor target from persons.toml, not just a ceiling.
-# Evaluation reports both over- and under-load as soft findings; the solver
-# separately enforces its absolute max_load + HARD_LOAD_CAP_TOLERANCE bound.
-# The reported/scored rules are:
-#   - within OVERLOAD_TOLERANCE credit hours over max_load: fine, not
-#     overload at all.
-#   - above that: ``preference.overload_penalty`` for every credit hour past
-#     the tolerance. For permissive instructors only, excess above
-#     OVERLOAD_FAR_THRESHOLD adds the second flat OVERLOAD_FAR_PENALTY.
-#     An instructor with no preferences.toml entry defaults to a penalty
-#     of 0 (no opinion on record).
-#   - under max_load: UNDER_LOAD_PENALTY_PER_CREDIT for each missing credit.
-OVERLOAD_TOLERANCE = 2.0
-# Same convention as OVERLOAD_TOLERANCE: the last credit-hour-over-max_load
-# value that does NOT trigger the extra penalty -- 4 is fine, 5 triggers
-# it (a strict "more than" comparison, exactly like OVERLOAD_TOLERANCE).
-# This is stacked on the per-credit permissive overload cost.
-OVERLOAD_FAR_THRESHOLD = 4
-OVERLOAD_FAR_PENALTY = 50.0
-
-# Every penalty in this system shares one 0-100 scale. Named preferences
-# carry their own weights; these constants cover separate scheduling policies.
-UNDER_LOAD_PENALTY_PER_CREDIT = 30.0
-BACK_TO_BACK_PENALTY = 10.0
+# max_load is a target, not just a ceiling. All workload thresholds and
+# penalties are supplied by constraints.toml through WorkloadPolicySchema.
 
 
 def weekday_time_overlap(
@@ -764,9 +764,8 @@ class PreferenceRecord:
 
     ``allow_overload`` is this instructor's overload tolerance: ``True``
     means fine with it, ``False`` means avoid it (still soft -- see the
-    module comment above OVERLOAD_TOLERANCE). ``overload_penalty`` is the
-    per-credit cost past the tolerance -- 10 when ``allow_overload`` is
-    ``True``, 100 when it's ``False``.
+    package workload policy). The per-credit costs are supplied by
+    constraints.toml.
 
     Flat named rules carry every selector-based preference and its weight.
 
@@ -778,7 +777,7 @@ class PreferenceRecord:
     that -- "no back-to-back at all" is a stricter statement than "no more
     than N in a row" ever needs to override. A run of exactly
     ``max_back_to_back`` meetings is fine; each meeting past that is its
-    own scored finding (``BACK_TO_BACK_PENALTY`` again), so a longer run
+    own scored finding using the configured back-to-back penalty, so a longer run
     costs more than a run of ``max_back_to_back + 1``.
     """
 
@@ -787,11 +786,6 @@ class PreferenceRecord:
     allow_back_to_back: bool = True
     max_back_to_back: int | None = None
     rules: tuple[PreferenceRule, ...] = ()
-
-    @property
-    def overload_penalty(self) -> float:
-        return 10.0 if self.allow_overload else 100.0
-
 
 def load_persons(path: str | Path) -> dict[str, PersonRecord]:
     """Parse ``persons.toml`` into ``{name: PersonRecord}``."""
@@ -954,7 +948,8 @@ _WEEKDAY_LETTERS = "MTWRF"
 
 
 def _capped_back_to_back_findings(
-    instructor: str, sections: list[Section], cap: int
+    instructor: str, sections: list[Section], cap: int,
+    penalty: float,
 ) -> list[SoftFinding]:
     """Flag every meeting past the ``cap``-th in an instructor's own
     consecutive same-day run.
@@ -966,7 +961,7 @@ def _capped_back_to_back_findings(
     A run of exactly ``cap`` is unflagged; the (cap+1)-th meeting is one
     finding, the (cap+2)-th is another, and so on -- so a longer run
     always scores strictly more than a shorter one, same as stacking
-    ``BACK_TO_BACK_PENALTY`` per over-cap join.
+    the configured penalty per over-cap join.
 
     A multi-day pattern like "MWF" walks the same run once per letter it
     spans (M, then W, then F) and finds the identical join each time --
@@ -998,7 +993,7 @@ def _capped_back_to_back_findings(
                     f"{instructor}: {run[-2].course_id} and "
                     f"{run[-1].course_id} extend a same-day run past "
                     f"the {cap}-in-a-row cap",
-                    BACK_TO_BACK_PENALTY,
+                    penalty,
                 ))
     return findings
 
@@ -1015,10 +1010,12 @@ def _overload_statuses(
     schedule: "Schedule",
     persons: dict[str, PersonRecord],
     preferences: dict[str, PreferenceRecord],
+    policy: WorkloadPolicySchema | None = None,
 ) -> list[_OverloadStatus]:
+    policy = policy or WorkloadPolicySchema()
     """The single source of truth for "is this instructor overloaded".
 
-    Anything within ``OVERLOAD_TOLERANCE`` credit hours of max_load isn't
+    Anything within the configured overload tolerance of max_load isn't
     included at all -- it doesn't count as overload, so it's never
     reported by ``check_soft_preferences``. Everything this returns *is*
     overload, always soft -- ``penalty`` is ``preference.overload_penalty``
@@ -1026,7 +1023,7 @@ def _overload_statuses(
     preference record), plus ``OVERLOAD_FAR_PENALTY`` on top when they're also more than
     ``OVERLOAD_FAR_THRESHOLD`` credit hours over their own max_load *and*
     ``allow_overload`` -- see the module comment above
-    ``OVERLOAD_TOLERANCE``. Mirrors ``solver/constraints.py``'s load model
+    the configured tolerance. Mirrors ``solver/constraints.py``'s load model
     exactly so the web UI's reported penalty matches what the solver
     actually optimized for.
     """
@@ -1036,15 +1033,22 @@ def _overload_statuses(
         if person is None:
             continue
         excess = load - person.max_load
-        if excess <= OVERLOAD_TOLERANCE:
+        if excess <= policy.overload_tolerance:
             continue
         preference = preferences.get(instructor)
         penalty = (
-            preference.overload_penalty * (excess - OVERLOAD_TOLERANCE)
+            (
+                policy.penalties.permissive_overload_per_credit
+                if preference.allow_overload
+                else policy.penalties.strict_overload_per_credit
+            ) * (excess - policy.overload_tolerance)
             if preference else 0.0
         )
-        if preference is not None and preference.allow_overload and excess > OVERLOAD_FAR_THRESHOLD:
-            penalty += OVERLOAD_FAR_PENALTY
+        if (
+            preference is not None and preference.allow_overload
+            and excess > policy.far_overload_threshold
+        ):
+            penalty += policy.penalties.far_overload_extra
         statuses.append(_OverloadStatus(
             instructor=instructor,
             load=load,
@@ -1072,7 +1076,7 @@ def check_conflicts(schedule: "Schedule") -> list[HardViolation]:
     *meant* to share room/time/instructor -- it's one physical meeting
     filed under two catalog numbers, not a double-booking. Coreq/
     four-credit/hybrid scheduling legality doesn't need its own check
-    here either -- see the module comment above ``OVERLOAD_TOLERANCE``.
+    here either; those values come from the workload policy.
     """
     entries = [
         (item, section)
@@ -1188,13 +1192,15 @@ def check_soft_preferences(
     preferences: dict[str, PreferenceRecord],
     persons: dict[str, PersonRecord],
     global_rules: tuple[PreferenceRule, ...] = (),
+    workload_policy: WorkloadPolicySchema | None = None,
+    back_to_back_policy: BackToBackPolicySchema | None = None,
 ) -> tuple[float, list[SoftFinding]]:
     """Score a schedule against preferences.toml.
 
     Returns ``(total_penalty, findings)`` -- 0 means every preference was
     honored, lower is always better. Every rule here is soft, including
-    ``max_load`` -- see the module comment above ``OVERLOAD_TOLERANCE`` for
-    the full over/under contract. Being outside a ``prefer`` rule is not
+    ``max_load`` according to the configured workload policy. Being outside
+    a ``prefer`` rule is not
     reported as a violation: matching candidates receive their configured
     weighted reward in the solver, while absence of a match adds no finding.
 
@@ -1205,6 +1211,8 @@ def check_soft_preferences(
     here, since a *satisfied* preference isn't a violation to surface
     next to everything else this function returns.
     """
+    workload_policy = workload_policy or WorkloadPolicySchema()
+    back_to_back_policy = back_to_back_policy or BackToBackPolicySchema()
     findings: list[SoftFinding] = [
         SoftFinding(
             "overload", status.instructor,
@@ -1212,7 +1220,9 @@ def check_soft_preferences(
             f"max_load {status.max_load:g}",
             status.penalty,
         )
-        for status in _overload_statuses(schedule, persons, preferences)
+        for status in _overload_statuses(
+            schedule, persons, preferences, workload_policy,
+        )
     ]
 
     loads = teaching_loads(schedule)
@@ -1224,7 +1234,7 @@ def check_soft_preferences(
                 "under_load", instructor,
                 f"{instructor}: {load:g} credit hours is under max_load "
                 f"{person.max_load:g}",
-                deficit * UNDER_LOAD_PENALTY_PER_CREDIT,
+                deficit * workload_policy.penalties.underload_per_credit,
             ))
 
     sections = [
@@ -1272,11 +1282,12 @@ def check_soft_preferences(
                             "back_to_back", instructor,
                             f"{instructor}: {left.course_id} and "
                             f"{right.course_id} are back-to-back",
-                            BACK_TO_BACK_PENALTY,
+                            back_to_back_policy.penalty,
                         ))
         elif preference.max_back_to_back is not None:
             findings.extend(_capped_back_to_back_findings(
-                instructor, instructor_sections, preference.max_back_to_back
+                instructor, instructor_sections, preference.max_back_to_back,
+                back_to_back_policy.penalty,
             ))
 
     total = sum(finding.penalty for finding in findings)
@@ -1302,10 +1313,13 @@ def evaluate_schedule(
     global_rules: tuple[PreferenceRule, ...] = (),
     meeting_patterns: Iterable[MeetingPatternLike] = (),
     constraint_rules: Iterable[ConstraintRule] = (),
+    workload_policy: WorkloadPolicySchema | None = None,
+    back_to_back_policy: BackToBackPolicySchema | None = None,
 ) -> ScheduleEvaluation:
     """Evaluate only domain objects; raw CSV rows are not accepted here."""
     soft_penalty, soft_findings = check_soft_preferences(
-        schedule, preferences, persons, global_rules
+        schedule, preferences, persons, global_rules,
+        workload_policy, back_to_back_policy,
     )
     return ScheduleEvaluation(
         atomic_classes=len(schedule),

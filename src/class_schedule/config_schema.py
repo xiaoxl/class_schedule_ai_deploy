@@ -188,7 +188,42 @@ class ConstraintRuleSchema(RuleSelectorSchema):
         return self
 
 
+class WorkloadPenaltiesSchema(StrictModel):
+    underload_per_credit: float = Field(default=30, ge=0)
+    permissive_overload_per_credit: float = Field(default=10, ge=0)
+    strict_overload_per_credit: float = Field(default=100, ge=0)
+    far_overload_extra: float = Field(default=50, ge=0)
+
+
+class WorkloadPolicySchema(StrictModel):
+    overload_tolerance: float = Field(default=2, ge=0)
+    hard_load_cap_tolerance: float = Field(default=6, ge=0)
+    far_overload_threshold: float = Field(default=4, ge=0)
+    penalties: WorkloadPenaltiesSchema = Field(default_factory=WorkloadPenaltiesSchema)
+
+    @model_validator(mode="after")
+    def validate_thresholds(self):
+        if self.far_overload_threshold < self.overload_tolerance:
+            raise ValueError("far_overload_threshold must be at least overload_tolerance")
+        if self.hard_load_cap_tolerance < self.far_overload_threshold:
+            raise ValueError("hard_load_cap_tolerance must be at least far_overload_threshold")
+        return self
+
+
+class BackToBackPolicySchema(StrictModel):
+    penalty: float = Field(default=10, ge=0)
+
+
+class NewInstructorPolicySchema(StrictModel):
+    contract_load: float = Field(default=15, gt=0)
+    max_course_number_exclusive: int = Field(default=2703, gt=0)
+    allow_back_to_back: bool = True
+
+
 class ConstraintsFileSchema(StrictModel):
+    workload: WorkloadPolicySchema = Field(default_factory=WorkloadPolicySchema)
+    back_to_back: BackToBackPolicySchema = Field(default_factory=BackToBackPolicySchema)
+    new_instructor: NewInstructorPolicySchema = Field(default_factory=NewInstructorPolicySchema)
     rules: list[ConstraintRuleSchema] = Field(default_factory=list)
 
 

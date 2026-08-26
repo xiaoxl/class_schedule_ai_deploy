@@ -103,8 +103,39 @@ The TOML declares only identity and relationship kind. Same-instructor, same-roo
 
 ## People, preferences, and constraints
 
-New Instructor identities are dynamic and need no person record. Each has a 15-credit contract, may teach numeric course numbers below `2703`, and may teach back-to-back.
+New Instructor identities are dynamic and need no person record. Their contract, numeric course limit, and back-to-back policy are defined in `constraints.toml`.
 
 Preference rules use course, section, section prefix, room, and time selectors. Positive weights reward matches and negative weights penalize them. Named rules apply to one instructor; unnamed rules are global.
 
 Constraints are hard rules using the same selectors without a weight. Unknown fields and invalid cross-file references are rejected so mistakes cannot silently alter solver behavior.
+
+The same file owns numeric scheduling policy:
+
+```toml
+[workload]
+overload_tolerance = 2
+hard_load_cap_tolerance = 6
+far_overload_threshold = 4
+
+[workload.penalties]
+underload_per_credit = 30
+permissive_overload_per_credit = 10
+strict_overload_per_credit = 100
+far_overload_extra = 50
+
+[back_to_back]
+penalty = 10
+
+[new_instructor]
+contract_load = 15
+max_course_number_exclusive = 2703
+allow_back_to_back = true
+```
+
+`catalogs.toml` is the sole credit authority in package workflows. A missing catalog course, invalid input credit, or input/catalog credit disagreement is an error. The course-number-last-digit inference remains only in the unconfigured low-level domain API.
+
+All course selectors are cross-validated. Instructor qualifications must reference catalog courses; preference and constraint sections must be offered; timeslot selectors must reference real courses. Package loading also verifies that every declared relationship has applicable meeting-pattern roles before the solver runs.
+
+`courses.toml` is the sole desired-offering source. The starting file contributes reusable instructor, time, and room assignments only. `initial` generates `reconciliation.toml`; there is no hand-written cancellation/addition file.
+
+The package name is also the normal work/output namespace. CLI commands reject a different positional term, and the Web output field is read-only and follows the selected package.

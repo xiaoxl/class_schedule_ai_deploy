@@ -3,13 +3,14 @@ from __future__ import annotations
 import tempfile
 import unittest
 import datetime
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
 from openpyxl import load_workbook
 
 from class_schedule.class_model import HybridClass, NormalClass, Section
-from class_schedule.config_schema import CatalogsFileSchema, CoursesFileSchema
+from class_schedule.config_schema import CatalogCourseSchema, CatalogsFileSchema, CoursesFileSchema
 from class_schedule.data_cleaning import (
     NORMALIZED_COLUMNS,
     clean_dataframe,
@@ -26,6 +27,8 @@ from class_schedule.overrides import (
 )
 from class_schedule.schedule_model import ConstraintRule, Schedule, TimeWindow
 from class_schedule.schedule_io import read_schedule
+from class_schedule.schedule_io import read_table
+from class_schedule.reconciliation import reconcile_records
 from class_schedule.solver import MeetingPattern, RoomRecord, SolverConfig, diff_schedules
 from class_schedule.solver.candidates import section_candidates
 from class_schedule.solver.config import (
@@ -396,6 +399,52 @@ class ConfigLayoutTests(unittest.TestCase):
             {"Subject": "MATH", "Number": "2004", "Section": "001", "Time Slot": "MWF 10:00am", "Duration": 50, "Building": "Corley", "Room": "101", "Instructor": "Alice"},
         ], relationships=relationships)
         self.assertEqual(type(schedule.classes[0]).__name__, "CoreqClass")
+
+    def test_package_catalog_is_required_and_credit_is_authoritative(self):
+        catalog = (CatalogCourseSchema(
+            subject="MATH", number="1113", title="College Algebra", credits=3,
+        ),)
+        base = {
+            "Subject": "MATH", "Number": "1113", "Section": "001",
+            "Time Slot": "ONLINE", "Instructor": "new_instructor",
+        }
+        with self.assertRaisesRegex(ValueError, "declares 3"):
+            Schedule.from_records([{**base, "Credits": 4}], catalogs=catalog)
+        with self.assertRaisesRegex(ValueError, "missing from catalogs.toml"):
+            Schedule.from_records([{
+                **base, "Number": "9993",
+            }], catalogs=catalog)
+
+    def test_production_policy_is_loaded_from_constraints(self):
+        config = SolverConfig.load(Path(__file__).parents[1] / "config", package="27S")
+        self.assertEqual(config.workload_policy.overload_tolerance, 2)
+        self.assertEqual(config.workload_policy.penalties.underload_per_credit, 30)
+        self.assertEqual(config.new_instructor_policy.contract_load, 15)
+        self.assertEqual(config.new_instructor_policy.max_course_number_exclusive, 2703)
+
+    def test_relationship_pattern_coverage_fails_during_config_validation(self):
+        config = SolverConfig.load(Path(__file__).parents[1] / "config", package="27S")
+        without_partial = replace(
+            config,
+            meeting_patterns=[
+                pattern for pattern in config.meeting_patterns
+                if "four_credit_partial" not in pattern.roles
+            ],
+        )
+        with self.assertRaisesRegex(ValueError, "four_credit_partial"):
+            without_partial.validate_references()
+
+    def test_courses_reconcile_the_real_starting_template(self):
+        root = Path(__file__).parents[1]
+        config = SolverConfig.load(root / "config", package="27S")
+        records = read_table(
+            root / "inputs" / "27S" / "Course Schedule Report_20260820_175924.csv"
+        ).dropna(how="all").to_dict(orient="records")
+        schedule, report = reconcile_records(records, config)
+        self.assertIn("MATH 3203 001", report.removed)
+        self.assertIn("MATH 4123 001", report.added)
+        self.assertNotIn("MATH 3203-001", schedule.course_ids)
+        self.assertIn("MATH 4123-001", schedule.course_ids)
 
 
 class CumulativeDiffTests(unittest.TestCase):

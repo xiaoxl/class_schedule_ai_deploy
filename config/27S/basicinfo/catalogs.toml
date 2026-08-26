@@ -164,3 +164,65 @@ subject = "STAT"
 number = "4173"
 title = "Advanced Biostatistics"
 credits = 3
+
+# Qualified but not offered in this package. Keeping them in the catalog makes
+# instructor qualification references explicit and validates spelling.
+[[courses]]
+subject = "MATH"
+number = "3203"
+title = "Introduction to Analysis"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "4033"
+title = "Abstract Algebra I"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "4273"
+title = "Complex Variables"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "4703"
+title = "Special Topics in Mathematics"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "4113"
+title = "Categorical Data Analysis"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "4163"
+title = "Mathematical Statistics"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "4383"
+title = "Machine Learning"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "5113"
+title = "Categorical Data Analysis"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "5173"
+title = "Advanced Biostatistics"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "5383"
+title = "Machine Learning"
+credits = 3

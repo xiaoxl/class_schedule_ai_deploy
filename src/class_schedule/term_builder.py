@@ -1,4 +1,7 @@
-"""Apply a term change list to a cleaned draft and produce the initial schedule.
+"""Legacy change-list reader for historical artifacts and compatibility tests.
+
+New package workflows use ``reconciliation.py`` and ``courses.toml`` instead.
+No current CLI or Web path calls this module.
 
 Two inputs feed ``build_initial_schedule``:
 
@@ -6,7 +9,7 @@ Two inputs feed ``build_initial_schedule``:
     through ``schedule_io.read_schedule``;
   - a ``TermChanges`` -- this term's departures, new hires, additions, and
     cancellations, loaded from a small TOML file via
-    ``load_changes``. See ``inputs/TEMPLATE/changes.toml`` for the file format
+    ``load_changes``. Historical deployments supplied this file externally
     and a full walkthrough.
 
 The result is an initial ``Schedule`` ready for the solve stage:
@@ -83,7 +86,7 @@ class InitialReport:
 
 
 def load_changes(path: str | Path) -> TermChanges:
-    """Parse a change-list TOML file (see ``inputs/TEMPLATE/changes.toml``)."""
+    """Parse a legacy change-list TOML file."""
     with open(path, "rb") as handle:
         raw = tomllib.load(handle)
     cancel = tuple(

@@ -30,10 +30,13 @@ def candidate_instructors(
     section: Section,
     persons: dict[str, PersonRecord],
     placeholder_instructors: tuple[str, ...] = (),
+    *, new_instructor_course_limit: int,
 ) -> list[str]:
     course = f"{section.subject} {section.number}"
     names = {name for name, person in persons.items() if course in person.courses}
-    eligible_for_new = can_new_instructor_teach(section)
+    eligible_for_new = can_new_instructor_teach(
+        section, max_course_number_exclusive=new_instructor_course_limit,
+    )
     if section.instructor and (
         not is_new_instructor(section.instructor) or eligible_for_new
     ):
@@ -120,7 +123,12 @@ def section_candidates(
         )
 
     instructors = (
-        candidate_instructors(section, config.persons, placeholder_instructors)
+        candidate_instructors(
+            section, config.persons, placeholder_instructors,
+            new_instructor_course_limit=(
+                config.new_instructor_policy.max_course_number_exclusive
+            ),
+        )
         or [section.instructor]
     )
     if section.is_online:

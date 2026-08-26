@@ -29,7 +29,7 @@ class PublishedPaths:
     manifest_path: Path
     overrides_path: Path
     applied_overrides_path: Path
-    applied_changes_path: Path
+    reconciliation_path: Path
 
 
 def sha256(path: Path) -> str:
@@ -48,7 +48,7 @@ def publish_version(
     report: str,
     manifest: dict[str, object],
     applied_overrides: bytes,
-    applied_changes: bytes,
+    reconciliation: bytes,
     final: bool = False,
     replace_destination: bool = False,
 ) -> PublishedPaths:
@@ -70,7 +70,7 @@ def publish_version(
         manifest_path = staging / "manifest.json"
         overrides_path = staging / "overrides.toml"
         applied_overrides_path = staging / "applied_overrides.toml"
-        applied_changes_path = staging / "applied_changes.toml"
+        reconciliation_path = staging / "reconciliation.toml"
 
         schedule.to_dataframe().to_csv(schedule_path, index=False)
         schedule.to_instructor_excel(instructor_path)
@@ -84,7 +84,7 @@ def publish_version(
             columns=("Course ID", "Field", "Before", "After"),
         ).to_csv(changes_path, index=False)
         applied_overrides_path.write_bytes(applied_overrides)
-        applied_changes_path.write_bytes(applied_changes)
+        reconciliation_path.write_bytes(reconciliation)
         if final:
             overrides_path.write_bytes(applied_overrides)
         else:
@@ -97,7 +97,7 @@ def publish_version(
         immutable = [
             schedule_path, instructor_path, room_path, report_path,
             attempts_path, changes_path, baseline_path,
-            applied_overrides_path, applied_changes_path,
+            applied_overrides_path, reconciliation_path,
         ]
         if final:
             immutable.append(overrides_path)
@@ -136,5 +136,5 @@ def publish_version(
         manifest_path=destination / "manifest.json",
         overrides_path=destination / "overrides.toml",
         applied_overrides_path=destination / "applied_overrides.toml",
-        applied_changes_path=destination / "applied_changes.toml",
+        reconciliation_path=destination / "reconciliation.toml",
     )

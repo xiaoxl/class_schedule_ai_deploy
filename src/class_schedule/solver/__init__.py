@@ -14,7 +14,6 @@ from .config import (
     load_meeting_patterns,
     load_rooms,
 )
-from .constraints import HARD_LOAD_CAP_TOLERANCE
 from .engine import DEFAULT_SEARCH_WORKERS, solve, solve_detailed
 from .result import diff_schedules
 from .types import (
@@ -30,7 +29,6 @@ from .types import (
 )
 
 __all__ = [
-    "HARD_LOAD_CAP_TOLERANCE",
     "ConfigPackage",
     "DEFAULT_SEARCH_WORKERS",
     "INSTRUCTOR_CHANGE_COST",

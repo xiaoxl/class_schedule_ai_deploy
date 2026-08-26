@@ -8,6 +8,25 @@
 # This file is hard and has no weight.  `direction = "+"` requires the whole
 # configured name/room/time combination; `direction = "-"` forbids it.
 
+[workload]
+overload_tolerance = 2
+hard_load_cap_tolerance = 6
+far_overload_threshold = 4
+
+[workload.penalties]
+underload_per_credit = 30
+permissive_overload_per_credit = 10
+strict_overload_per_credit = 100
+far_overload_extra = 50
+
+[back_to_back]
+penalty = 10
+
+[new_instructor]
+contract_load = 15
+max_course_number_exclusive = 2703
+allow_back_to_back = true
+
 [[rules]]
 direction = "+"
 course = "MATH 4123"

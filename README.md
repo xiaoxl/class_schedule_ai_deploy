@@ -1,6 +1,6 @@
 # Class Schedule
 
-An auditable class-scheduling system that cleans CSV/XLSX input, builds atomic classes, applies term changes and instructor preferences, solves with OR-Tools CP-SAT, and publishes immutable versions.
+An auditable class-scheduling system that reconciles CSV/XLSX templates to a declared course package, builds atomic classes, applies instructor preferences, solves with OR-Tools CP-SAT, and publishes immutable versions.
 
 ## Start the web interface
 
@@ -9,7 +9,7 @@ cd "D:\Codes\Projects\Projects 26\class_schedule_ai_deploy"
 uv run uvicorn class_schedule.webapp:app --host 127.0.0.1 --port 8000
 ```
 
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Import a starting CSV/XLSX schedule, edit it in Instructor, Room, or Course view, enter the term, and select **Save New Version**. Output is published to `out/<term>/verN/`.
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Select a package, import a starting CSV/XLSX schedule, edit it in Instructor, Room, or Course view, and select **Save New Version**. The package name is also the output namespace, for example `out/27S/verN/`.
 
 The Configuration selector discovers complete packages directly under `config/`. The included package is `config/27S/`; copy that directory to create another independent package. The CLI equivalent is `--package <package-name>`.
 
@@ -19,12 +19,12 @@ See [the documentation home](docs/index.md) for the complete UI workflow.
 
 ```powershell
 uv run class-schedule --config config --package 27S initialize 27S inputs/27S/source.xlsx
-uv run class-schedule --config config --package 27S initial 27S work/27S/draft/draft.csv inputs/27S/changes.toml
+uv run class-schedule --config config --package 27S initial 27S work/27S/draft/draft.csv
 uv run class-schedule --config config --package 27S solve 27S
 uv run class-schedule --config config --package 27S final 27S ver10
 ```
 
-`initialize` cleans the source and creates pre-change instructor and room views. `initial` applies the complete term changes. Each `solve` independently starts from the same initial schedule and creates a new immutable `verN`. `final` applies manual overrides to a selected version and refreshes a publishable final directory.
+`initialize` cleans the source and creates template instructor and room views. `initial` reconciles that template to `courses.toml`, generating `reconciliation.toml` as an audit rather than reading a hand-written change list. Each `solve` starts from the same initial schedule and creates a new immutable `verN`.
 
 Typical version contents include:
 
@@ -36,7 +36,7 @@ out/27S/ver10/
   schedule_room.xlsx
   changes.csv
   baseline.csv
-  applied_changes.toml
+  reconciliation.toml
   overrides.toml
   applied_overrides.toml
   report.md

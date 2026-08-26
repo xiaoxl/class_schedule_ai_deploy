@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import record_utils
@@ -13,9 +13,12 @@ from ..config_schema import (
     CatalogsFileSchema,
     ConstraintsFileSchema,
     CoursesFileSchema,
+    BackToBackPolicySchema,
     LocationsFileSchema,
     PreferencesFileSchema,
+    NewInstructorPolicySchema,
     TimeslotFileSchema,
+    WorkloadPolicySchema,
 )
 from ..schedule_model import (
     ConstraintRule,
@@ -154,6 +157,11 @@ def load_constraint_rules(path: str | Path) -> tuple[ConstraintRule, ...]:
     )
 
 
+def load_constraints(path: str | Path) -> ConstraintsFileSchema:
+    with open(path, "rb") as handle:
+        return ConstraintsFileSchema.model_validate(tomllib.load(handle))
+
+
 def load_staff_count_weight(path: str | Path) -> float:
     with open(path, "rb") as handle:
         raw = PreferencesFileSchema.model_validate(tomllib.load(handle))
@@ -182,6 +190,9 @@ class SolverConfig:
     package_root: str = ""
     catalogs: CatalogsFileSchema | None = None
     courses: CoursesFileSchema | None = None
+    workload_policy: WorkloadPolicySchema = field(default_factory=WorkloadPolicySchema)
+    back_to_back_policy: BackToBackPolicySchema = field(default_factory=BackToBackPolicySchema)
+    new_instructor_policy: NewInstructorPolicySchema = field(default_factory=NewInstructorPolicySchema)
 
     @classmethod
     def load(
@@ -192,6 +203,7 @@ class SolverConfig:
         paths = tuple(resolved[name] for name in _CONFIG_FILES)
         catalogs = load_catalogs(resolved["catalogs.toml"])
         courses = load_courses(resolved["courses.toml"])
+        constraints = load_constraints(resolved["constraints.toml"])
         config = cls(
             persons=load_persons(resolved["persons.toml"]),
             preferences=load_preferences(resolved["preferences.toml"]),
@@ -204,7 +216,15 @@ class SolverConfig:
             staff_credit_weight=load_staff_credit_weight(
                 resolved["preferences.toml"]
             ),
-            constraint_rules=load_constraint_rules(resolved["constraints.toml"]),
+            constraint_rules=tuple(
+                ConstraintRule(
+                    direction=entry.direction, name=entry.name,
+                    course=entry.course, section=entry.section,
+                    section_prefix=entry.section_prefix,
+                    room=(None if entry.room is None else (entry.room,) if isinstance(entry.room, str) else tuple(entry.room)),
+                    time=parse_rule_time(entry.time) if entry.time is not None else None,
+                ) for entry in constraints.rules
+            ),
             version=hashlib.sha256(
                 b"\0".join(path.read_bytes() for path in paths)
             ).hexdigest()[:12],
@@ -213,6 +233,9 @@ class SolverConfig:
             package_root=str(package_info.root),
             catalogs=catalogs,
             courses=courses,
+            workload_policy=constraints.workload,
+            back_to_back_policy=constraints.back_to_back,
+            new_instructor_policy=constraints.new_instructor,
         )
         config.validate_references()
         return config
@@ -224,6 +247,21 @@ class SolverConfig:
         missing_catalog = sorted(offered_ids - catalog_ids)
         if missing_catalog:
             raise ValueError(f"Offered courses are missing from catalogs.toml: {missing_catalog}")
+        catalog_names = {f"{subject} {number}" for subject, number in catalog_ids}
+        offered_names = {f"{subject} {number}" for subject, number in offered_ids}
+        offered_sections = {
+            (f"{item.subject} {item.number}", section)
+            for item in self.courses.courses for section in item.sections
+        }
+        invalid_qualifications = sorted({
+            course for person in self.persons.values() for course in person.courses
+            if course not in catalog_names
+        })
+        if invalid_qualifications:
+            raise ValueError(
+                "persons.toml qualifications reference unknown catalog courses: "
+                f"{invalid_qualifications}"
+            )
         unknown = sorted(set(self.preferences) - set(self.persons))
         if unknown:
             raise ValueError(f"Preferences reference unknown instructors: {unknown}")
@@ -253,6 +291,38 @@ class SolverConfig:
                 f"Constraint rules reference unknown rooms: "
                 f"{invalid_constraints}"
             )
+        preference_rules = tuple(
+            rule for preference in self.preferences.values()
+            for rule in preference.rules
+        ) + self.global_rules
+        self._validate_rule_course_references(
+            preference_rules, catalog_names, offered_names,
+            offered_sections, "preferences.toml"
+        )
+        self._validate_rule_course_references(
+            self.constraint_rules, catalog_names, offered_names,
+            offered_sections, "constraints.toml"
+        )
+        invalid_pattern_courses = sorted({
+            course for pattern in self.meeting_patterns
+            for course in pattern.courses | pattern.atomic_courses
+            if course not in catalog_names
+        })
+        if invalid_pattern_courses:
+            raise ValueError(
+                "timeslot.toml references unknown catalog courses: "
+                f"{invalid_pattern_courses}"
+            )
+        unused_pattern_courses = sorted({
+            course for pattern in self.meeting_patterns for course in pattern.courses
+            if course not in offered_names
+        })
+        if unused_pattern_courses:
+            raise ValueError(
+                "timeslot.toml course selectors match no offered course: "
+                f"{unused_pattern_courses}"
+            )
+        self._validate_pattern_coverage()
         for rule in self.constraint_rules:
             if rule.name is None:
                 continue
@@ -294,6 +364,90 @@ class SolverConfig:
                         f"{left.course or 'matching sections'}: {left.name} and "
                         f"{right.name}"
                     )
+
+    @staticmethod
+    def _validate_rule_course_references(
+        rules, catalog_names: set[str], offered_names: set[str],
+        offered_sections: set[tuple[str, str]],
+        filename: str,
+    ) -> None:
+        for rule in rules:
+            if rule.course is not None and rule.course not in catalog_names:
+                raise ValueError(
+                    f"{filename} references unknown catalog course: {rule.course}"
+                )
+            if rule.course is not None and rule.course not in offered_names:
+                raise ValueError(
+                    f"{filename} references an unoffered course: {rule.course}"
+                )
+            if (
+                rule.course is not None and rule.section is not None
+                and (rule.course, rule.section) not in offered_sections
+            ):
+                raise ValueError(
+                    f"{filename} references an unoffered section: "
+                    f"{rule.course} {rule.section}"
+                )
+            if rule.section_prefix is not None and not any(
+                (rule.course is None or course == rule.course)
+                and
+                section.upper().startswith(rule.section_prefix.upper())
+                for course, section in offered_sections
+            ):
+                raise ValueError(
+                    f"{filename} section_prefix matches no offered section: "
+                    f"{rule.section_prefix}"
+                )
+
+    def _validate_pattern_coverage(self) -> None:
+        assert self.catalogs is not None and self.courses is not None
+        credits = {
+            f"{item.subject} {item.number}": item.credits
+            for item in self.catalogs.courses
+        }
+        relationships = self.courses.relationships
+        related = {member for relation in relationships for member in relation.members}
+        requirements: list[tuple[str, str, frozenset[str]]] = []
+        for relation in relationships:
+            atomic = frozenset(" ".join(member.split()[:2]) for member in relation.members)
+            if relation.kind == "four_credit":
+                course = " ".join(relation.members[0].split()[:2])
+                requirements.extend((course, role, atomic) for role in (
+                    "four_credit_primary", "four_credit_partial",
+                ))
+            elif relation.kind == "hybrid":
+                course = " ".join(relation.members[0].split()[:2])
+                requirements.append((course, "hybrid_physical", atomic))
+            elif relation.kind == "cross_listing":
+                requirements.extend(
+                    (" ".join(member.split()[:2]), "cross_listing", atomic)
+                    for member in relation.members
+                )
+            else:
+                member_courses = [" ".join(member.split()[:2]) for member in relation.members]
+                values = [credits[course] for course in member_courses]
+                for course, value in zip(member_courses, values):
+                    role = "coreq_supplement" if min(values) < max(values) and value == min(values) else "coreq"
+                    requirements.append((course, role, atomic))
+        for offering in self.courses.courses:
+            course = f"{offering.subject} {offering.number}"
+            for section in offering.sections:
+                if f"{course} {section}" not in related:
+                    requirements.append((course, "normal", frozenset({course})))
+        missing = []
+        for course, role, atomic in requirements:
+            if not any(
+                role in pattern.roles
+                and (not pattern.courses or course in pattern.courses)
+                and (not pattern.atomic_courses or pattern.atomic_courses == atomic)
+                for pattern in self.meeting_patterns
+            ):
+                missing.append(f"{course} ({role}; atomic={','.join(sorted(atomic))})")
+        if missing:
+            raise ValueError(
+                "timeslot.toml has no applicable meeting pattern for: "
+                + "; ".join(sorted(set(missing)))
+            )
 
     def constraints_for(
         self, course: str, section: str,

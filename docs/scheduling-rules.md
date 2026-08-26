@@ -22,7 +22,7 @@ Corequisites may both be online, be back-to-back with the same instructor and ex
 
 ## New Instructor
 
-The scalable pool uses `new_instructor`, `new_instructor 2`, and so on. The solver creates enough identities for load and concurrency, enforces 15 credits per identity, allows back-to-back, and limits eligibility to numeric course numbers below `2703`.
+The scalable pool uses `new_instructor`, `new_instructor 2`, and so on. Contract load, course-number eligibility, and back-to-back policy come from `[new_instructor]` in `constraints.toml`; no production policy number is hard-coded in the solver.
 
 ## Soft objectives and validation
 

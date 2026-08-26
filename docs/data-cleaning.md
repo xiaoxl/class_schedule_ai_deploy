@@ -20,4 +20,4 @@ Cleaning follows these rules:
 - Group through the domain model, not spreadsheet row position.
 - Count load by atomic class, not flattened rows.
 
-Run `initial` afterward to apply cancellations, departures, new courses, and other term changes.
+Run `initial` afterward to reconcile the cleaned template against `courses.toml`. Extra offerings are removed, missing offerings are generated, unknown instructors become New Instructor, and the generated audit is written to `reconciliation.toml`.

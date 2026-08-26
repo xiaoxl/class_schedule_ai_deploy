@@ -6,30 +6,41 @@ import math
 
 from .class_model import Class, Section
 
-NEW_INSTRUCTOR_MAX_LOAD = 15.0
-NEW_INSTRUCTOR_COURSE_LIMIT = 2703
-
-
-def can_new_instructor_teach(section: Section) -> bool:
-    """New instructors may teach any numeric course strictly below 2703."""
+def can_new_instructor_teach(
+    section: Section, *, max_course_number_exclusive: int,
+) -> bool:
+    """Apply the package-configured exclusive numeric course limit."""
     try:
-        return int(section.number) < NEW_INSTRUCTOR_COURSE_LIMIT
+        return int(section.number) < max_course_number_exclusive
     except ValueError:
         return False
 
 
-def class_is_eligible(item: Class) -> bool:
-    return all(can_new_instructor_teach(section) for section in item.sections)
+def class_is_eligible(
+    item: Class, *, max_course_number_exclusive: int,
+) -> bool:
+    return all(can_new_instructor_teach(
+        section, max_course_number_exclusive=max_course_number_exclusive,
+    ) for section in item.sections)
 
 
-def required_by_load(classes: list[Class]) -> int:
-    credits = sum(item.credit_hours for item in classes if class_is_eligible(item))
-    return math.ceil(credits / NEW_INSTRUCTOR_MAX_LOAD) if credits else 0
+def required_by_load(
+    classes: list[Class], *, contract_load: float,
+    max_course_number_exclusive: int,
+) -> int:
+    credits = sum(item.credit_hours for item in classes if class_is_eligible(
+        item, max_course_number_exclusive=max_course_number_exclusive,
+    ))
+    return math.ceil(credits / contract_load) if credits else 0
 
 
-def required_by_concurrency(classes: list[Class]) -> int:
+def required_by_concurrency(
+    classes: list[Class], *, max_course_number_exclusive: int,
+) -> int:
     """Current-grid peak eligible concurrency, counted by atomic class."""
-    eligible = [item for item in classes if class_is_eligible(item)]
+    eligible = [item for item in classes if class_is_eligible(
+        item, max_course_number_exclusive=max_course_number_exclusive,
+    )]
     peak = 0
     for day in "MTWRF":
         boundaries = sorted({
