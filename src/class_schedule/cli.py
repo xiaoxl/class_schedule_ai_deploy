@@ -87,7 +87,7 @@ def _initial(args: argparse.Namespace) -> int:
     report = result["report"]
     print(f"Removed: {len(report.removed)}")
     print(f"Added: {len(report.added)}")
-    print(f"Reassigned to New Instructor: {len(report.reassigned)}")
+    print(f"Reassigned to dynamic positions: {len(report.reassigned)}")
     print(f"Wrote {output / 'initial.csv'} and {result['audit_path']}")
     return 0
 

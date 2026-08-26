@@ -7,8 +7,8 @@ from dataclasses import replace
 
 from .. import record_utils
 from ..class_model import Class, Section
-from ..new_instructors import can_new_instructor_teach
-from ..instructor_identity import is_new_instructor
+from ..new_instructors import can_new_instructor_teach, can_new_professor_teach
+from ..instructor_identity import is_new_instructor, is_new_professor
 from ..pattern_rules import pattern_applies, section_pattern_role
 from ..schedule_model import (
     PersonRecord,
@@ -30,7 +30,9 @@ def candidate_instructors(
     section: Section,
     persons: dict[str, PersonRecord],
     placeholder_instructors: tuple[str, ...] = (),
+    new_professors: tuple[str, ...] = (),
     *, new_instructor_course_limit: int,
+    new_professor_course_minimum: int,
 ) -> list[str]:
     course = f"{section.subject} {section.number}"
     names = {name for name, person in persons.items() if course in person.courses}
@@ -38,11 +40,21 @@ def candidate_instructors(
         section, max_course_number_exclusive=new_instructor_course_limit,
     )
     if section.instructor and (
-        not is_new_instructor(section.instructor) or eligible_for_new
+        not is_new_instructor(section.instructor)
+        and not is_new_professor(section.instructor)
     ):
+        names.add(section.instructor)
+    if section.instructor and is_new_instructor(section.instructor) and eligible_for_new:
         names.add(section.instructor)
     if eligible_for_new:
         names.update(placeholder_instructors)
+    eligible_for_professor = can_new_professor_teach(
+        section, min_course_number_inclusive=new_professor_course_minimum,
+    )
+    if section.instructor and is_new_professor(section.instructor) and eligible_for_professor:
+        names.add(section.instructor)
+    if eligible_for_professor:
+        names.update(new_professors)
     return sorted(names)
 
 
@@ -89,6 +101,7 @@ def section_candidates(
     max_candidates: int,
     locked_fields: frozenset[str] = frozenset(),
     placeholder_instructors: tuple[str, ...] = (),
+    new_professors: tuple[str, ...] = (),
 ) -> list[SectionCandidate]:
     course = f"{section.subject} {section.number}"
     current = SectionCandidate(
@@ -124,9 +137,12 @@ def section_candidates(
 
     instructors = (
         candidate_instructors(
-            section, config.persons, placeholder_instructors,
+            section, config.persons, placeholder_instructors, new_professors,
             new_instructor_course_limit=(
                 config.new_instructor_policy.max_course_number_exclusive
+            ),
+            new_professor_course_minimum=(
+                config.new_professor_policy.min_course_number_inclusive
             ),
         )
         or [section.instructor]
@@ -143,7 +159,7 @@ def section_candidates(
                 room=section.room,
                 building=section.building,
                 cost=instructor_change_cost(
-                    section.instructor, instructor, placeholder_instructors
+                    section.instructor, instructor, placeholder_instructors + new_professors
                 )
                 + preference_cost(
                     instructor, None, None, None, section.building, section.room,
@@ -168,6 +184,8 @@ def section_candidates(
         if pattern.duration_minutes == section.duration
     ]
     current_is_allowed = (
+        section.instructor in instructors
+        and
         (
             not config.meeting_patterns
             or section.start is not None
@@ -200,7 +218,7 @@ def section_candidates(
                 for room in rooms:
                     cost = (
                         instructor_change_cost(
-                            section.instructor, instructor, placeholder_instructors
+                            section.instructor, instructor, placeholder_instructors + new_professors
                         )
                         + (TIME_CHANGE_COST if time_slot != section.time_slot else 0.0)
                         + (ROOM_CHANGE_COST if (room.building, room.room) != (

@@ -17,6 +17,7 @@ from ..config_schema import (
     LocationsFileSchema,
     PreferencesFileSchema,
     NewInstructorPolicySchema,
+    NewProfessorPolicySchema,
     TimeslotFileSchema,
     WorkloadPolicySchema,
 )
@@ -193,6 +194,7 @@ class SolverConfig:
     workload_policy: WorkloadPolicySchema = field(default_factory=WorkloadPolicySchema)
     back_to_back_policy: BackToBackPolicySchema = field(default_factory=BackToBackPolicySchema)
     new_instructor_policy: NewInstructorPolicySchema = field(default_factory=NewInstructorPolicySchema)
+    new_professor_policy: NewProfessorPolicySchema = field(default_factory=NewProfessorPolicySchema)
 
     @classmethod
     def load(
@@ -236,6 +238,7 @@ class SolverConfig:
             workload_policy=constraints.workload,
             back_to_back_policy=constraints.back_to_back,
             new_instructor_policy=constraints.new_instructor,
+            new_professor_policy=constraints.new_professor,
         )
         config.validate_references()
         return config

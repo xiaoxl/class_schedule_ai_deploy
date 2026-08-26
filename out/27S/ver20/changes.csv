@@ -1,0 +1,35 @@
+Course ID,Field,Before,After
+MATH 1914-001,instructor,"Cox, Allie M.","Jordan, Susan M."
+MATH 1914-001,time,MWF 8:00am,MWF 11:00am
+MATH 1914-003,room,Corley 102,Corley 104
+MATH 2914-003,instructor,new_instructor,"Jordan, Susan M."
+MATH 2924-001,instructor,new_professor,"Yousuf, Marium"
+MATH 2924-002,time,MWF 12:00pm,MWF 1:00pm
+MATH 2934-001,instructor,new_professor,"Yousuf, Marium"
+MATH 2934-001,time,MWF 10:00am,MWF 8:00am
+MATH 2934-002,instructor,new_professor,"Overduin, Matthew D."
+MATH 2934-002,room,Corley 101,Corley 268
+MATH 4123-001,instructor,new_professor,"Limperis, Thomas G."
+MATH 4123-001,time,MWF 8:00am,MWF 9:00am
+MATH 4123-001,room,Corley 101,Rothwell 312
+MATH 4123-H01,instructor,new_professor,"Limperis, Thomas G."
+MATH 4123-H01,time,MWF 8:00am,MWF 9:00am
+MATH 4123-H01,room,Corley 101,Rothwell 312
+MATH 0803-004,instructor,new_instructor 2,new_instructor
+MATH 0803-004,room,Corley 101,Corley 267
+MATH 1003-004,instructor,new_instructor 2,new_instructor
+MATH 1003-004,room,Corley 101,Corley 267
+MATH 0903-001,instructor,new_instructor,"Growns, Landon C."
+MATH 1113-001,instructor,new_instructor,"Growns, Landon C."
+MATH 0903-002,time,MWF 8:00am,MWF 2:00pm
+MATH 1113-002,time,TR 8:00am,TR 2:30pm
+MATH 1113-006,room,Corley 104,Corley 102
+MATH 1113-TC2,instructor,"Ballard, Kasey L.","Cox, Allie M."
+MATH 2703-001,instructor,"Jordan, Susan M.","Yousuf, Marium"
+MATH 2703-TC1,instructor,"Jordan, Susan M.","Yousuf, Marium"
+MATH 3243-002,instructor,"Limperis, Thomas G.","Xiao, Xinli"
+MATH 3243-002,time,MWF 9:00am,MWF 2:00pm
+STAT 2163-TC2,instructor,"Bain, Leslie M.","Yousuf, Marium"
+MATH 1003-007,instructor,new_instructor 3,"Ballard, Kasey L."
+STAT 2163-004,instructor,new_instructor,"Bain, Leslie M."
+STAT 2163-004,room,Corley 101,Rothwell 221

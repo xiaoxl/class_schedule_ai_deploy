@@ -9,6 +9,10 @@ from class_schedule.class_model import (
     NormalClass,
     Section,
 )
+from class_schedule.config_schema import (
+    NewInstructorPolicySchema,
+    NewProfessorPolicySchema,
+)
 from class_schedule.schedule_model import (
     ConstraintRule,
     PersonRecord,
@@ -315,6 +319,66 @@ class ConstraintRuleTests(unittest.TestCase):
 
 
 class SolveAdjustsPlaceholderCountTests(unittest.TestCase):
+    def test_zero_allowed_professors_disables_that_pool(self):
+        item = NormalClass((make_section(
+            number="2914", instructor="Staff", credits=4,
+        ),))
+        config = empty_config(
+            persons={"Bob": PersonRecord(
+                name="Bob", max_load=12, courses=("MATH 2914",),
+            )},
+            new_professor_policy=NewProfessorPolicySchema(allowed_counts=[0]),
+        )
+
+        solved = solve(Schedule([item]), config, time_limit_seconds=10.0)
+
+        self.assertEqual(solved.classes[0].sections[0].instructor, "Bob")
+
+    def test_one_allowed_professor_requires_exactly_one(self):
+        item = NormalClass((make_section(
+            number="2914", instructor="Bob", credits=4,
+        ),))
+        config = empty_config(
+            persons={"Bob": PersonRecord(
+                name="Bob", max_load=12, courses=("MATH 2914",),
+            )},
+            new_instructor_policy=NewInstructorPolicySchema(allowed_counts=[0]),
+            new_professor_policy=NewProfessorPolicySchema(allowed_counts=[1]),
+        )
+
+        solved = solve(Schedule([item]), config, time_limit_seconds=10.0)
+
+        self.assertEqual(solved.classes[0].sections[0].instructor, "new_professor")
+
+    def test_uses_dynamic_professor_for_course_above_instructor_limit(self):
+        item = NormalClass((make_section(
+            number="2914", instructor="Staff", credits=4,
+        ),))
+
+        solved = solve(Schedule([item]), empty_config(), time_limit_seconds=10.0)
+
+        self.assertEqual(
+            solved.get("MATH 2914-001").sections[0].instructor,
+            "new_professor",
+        )
+
+    def test_adds_and_numbers_professors_only_when_concurrency_requires_it(self):
+        a = NormalClass((make_section(
+            number="2914", section="001", instructor="Staff", room="101",
+            credits=4,
+        ),))
+        b = NormalClass((make_section(
+            number="2924", section="002", instructor="Staff", room="102",
+            credits=4,
+        ),))
+
+        solved = solve(Schedule([a, b]), empty_config(), time_limit_seconds=10.0)
+
+        self.assertEqual(
+            {s.instructor for item in solved.classes for s in item.sections},
+            {"new_professor", "new_professor 2"},
+        )
+
     def test_staff_credit_cost_assigns_a_qualified_named_instructor(self):
         item = NormalClass((make_section(
             number="1113", instructor="Staff",

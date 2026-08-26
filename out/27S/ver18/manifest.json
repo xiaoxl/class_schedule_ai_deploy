@@ -1,0 +1,90 @@
+{
+  "schema_version": 4,
+  "term": "27S",
+  "version": "ver18",
+  "parent": null,
+  "created_at": "2026-08-26T19:19:18.487533+00:00",
+  "input": {
+    "path": "work\\27S\\initial-dynamic-pools\\initial.csv",
+    "sha256": "c4fe561c1a4b39c3fa6b3df0873523383b94b3cfbfe9c715d77a5551e0ac6fc5"
+  },
+  "initial_baseline": {
+    "path": "work\\27S\\initial-dynamic-pools\\initial.csv",
+    "sha256": "c4fe561c1a4b39c3fa6b3df0873523383b94b3cfbfe9c715d77a5551e0ac6fc5",
+    "snapshot": "baseline.csv",
+    "role": "initial"
+  },
+  "configuration": {
+    "package_id": "27S",
+    "version": "527f958b7377",
+    "files": [
+      {
+        "path": "config\\27S\\basicinfo\\catalogs.toml",
+        "sha256": "840565e266c5df19cb7aee9d14f16438646af1cb64cbf85f52fe4e7eb1acd836"
+      },
+      {
+        "path": "config\\27S\\basicinfo\\locations.toml",
+        "sha256": "6a626a2c5276077ae34c19828ecc7af10b708a323f5b690698393394470e3d71"
+      },
+      {
+        "path": "config\\27S\\basicinfo\\timeslot.toml",
+        "sha256": "7cd4e1ea9e9d15d89aa591bad9563dc3d4dd8e7eb25d07baf819be448567da28"
+      },
+      {
+        "path": "config\\27S\\basicinfo\\persons.toml",
+        "sha256": "1214aac7aa39463e19afcd26dfcda4237f0f148b07af97405fd2f62dfcee3715"
+      },
+      {
+        "path": "config\\27S\\courses.toml",
+        "sha256": "6dcc219c78c9f39be8e257253462cad39f11e8903eff5d8e919338b1575c151f"
+      },
+      {
+        "path": "config\\27S\\preferences.toml",
+        "sha256": "1ef247dedfd8596e05f33a7ae319f2b3e9b15821ef82899179c21d8c981decdc"
+      },
+      {
+        "path": "config\\27S\\constraints.toml",
+        "sha256": "4890b060ba35969f3ec5a5f4c4cb644668fc6ea839fa28488b010edf3a4a183a"
+      }
+    ]
+  },
+  "reconciliation": {
+    "source": "courses.toml",
+    "sha256": "e30563c1e93030174a47ca0440caf79b0985dd73a27ff6a0f082c1496eb6dbf5",
+    "snapshot": "reconciliation.toml"
+  },
+  "applied_overrides_sha256": "dc7e1e8c9b2b7248062f7d71fc6ec4515f3e1c76df2f3b661fbf3919f4b13e55",
+  "override_workspace": {
+    "path": "overrides.toml",
+    "mutable": true,
+    "source_version": "ver18"
+  },
+  "selected_attempt": 3,
+  "solver": {
+    "status": "feasible",
+    "objective": -835.0,
+    "best_bound": -1219.0,
+    "random_seed": 2083589870,
+    "time_limit_seconds": 45.0,
+    "search_workers": 8,
+    "attempts": 5,
+    "attempts_requested": 5,
+    "attempts_run": 5
+  },
+  "validation": {
+    "hard_violations": 0,
+    "soft_penalty": 110.0,
+    "worst_overload": 0.0
+  },
+  "files": {
+    "27S_ver18.csv": "e055e90373c3d23aad0b4ed8364d871c489571e6972dc1812a37e96fe0c5a261",
+    "27S_ver18_instructor.xlsx": "9ff044fb68188e648f819c687683b574de96ead7507dda02d9196847a9679c63",
+    "27S_ver18_room.xlsx": "0585d668b08064b2f07a86e653253654c37f169b17373eb9d1fc5659b3f24db5",
+    "report.md": "b55d75035d3ace1ee7c89866756cef70e40ac9bc6e4ff45cff1c33d6d6084686",
+    "attempts.csv": "992c1284078c147ca2174371f39c08b7fb8eea1bc277cddff09823bf30f29bb1",
+    "changes.csv": "27888b432cb6c7e68bddbb6f50200d9f8e52fcf4e5c987be31a6ef6ed77433e7",
+    "baseline.csv": "c4fe561c1a4b39c3fa6b3df0873523383b94b3cfbfe9c715d77a5551e0ac6fc5",
+    "applied_overrides.toml": "dc7e1e8c9b2b7248062f7d71fc6ec4515f3e1c76df2f3b661fbf3919f4b13e55",
+    "reconciliation.toml": "e30563c1e93030174a47ca0440caf79b0985dd73a27ff6a0f082c1496eb6dbf5"
+  }
+}

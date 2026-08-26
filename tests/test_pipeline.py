@@ -420,7 +420,8 @@ class ConfigLayoutTests(unittest.TestCase):
         self.assertEqual(config.workload_policy.overload_tolerance, 2)
         self.assertEqual(config.workload_policy.penalties.underload_per_credit, 30)
         self.assertEqual(config.new_instructor_policy.contract_load, 15)
-        self.assertEqual(config.new_instructor_policy.max_course_number_exclusive, 2703)
+        self.assertEqual(config.new_instructor_policy.max_course_number_exclusive, 2300)
+        self.assertEqual(config.new_professor_policy.contract_load, 12)
 
     def test_relationship_pattern_coverage_fails_during_config_validation(self):
         config = SolverConfig.load(Path(__file__).parents[1] / "config", package="27S")

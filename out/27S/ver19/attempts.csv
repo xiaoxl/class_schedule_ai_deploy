@@ -1,0 +1,6 @@
+Attempt,Status,Objective,BestBound,SolveSeconds,CandidateCount,SearchWorkers,SoftPenalty,SoftFindings,HardViolations,WorstOverload,Error
+1,feasible,-840.0,-1207.0,46.907870300000006,25215,8,285.0,4,0,2.0,
+2,feasible,-740.0,-1226.0,48.310850900000005,25215,8,75.0,4,0,1.0,
+3,feasible,-885.0,-1221.0,48.6296437,25215,8,180.0,7,0,1.0,
+4,feasible,-640.0,-1219.0,48.3217828,25215,8,95.0,8,0,1.0,
+5,feasible,-725.0,-1226.0,47.4121615,25215,8,85.0,6,0,1.0,

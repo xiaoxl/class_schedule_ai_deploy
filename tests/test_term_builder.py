@@ -74,6 +74,28 @@ class CancelTests(unittest.TestCase):
 
 
 class DepartureReassignmentTests(unittest.TestCase):
+    def test_overlap_course_defaults_to_new_instructor(self):
+        template = Schedule.from_records([make_record(
+            Number="2243", Instructor="Departed Professor",
+        )])
+
+        draft, _ = build_initial_schedule(
+            template, TermChanges(departures=("Departed Professor",)),
+        )
+
+        self.assertEqual(draft.classes[0].sections[0].instructor, "new_instructor")
+
+    def test_upper_course_uses_new_professor(self):
+        template = Schedule.from_records([make_record(
+            Number="2914", Instructor="Departed Professor",
+        )])
+
+        draft, _ = build_initial_schedule(
+            template, TermChanges(departures=("Departed Professor",)),
+        )
+
+        self.assertEqual(draft.classes[0].sections[0].instructor, "new_professor")
+
     def test_normal_class_instructor_replaced_with_placeholder(self):
         template = Schedule.from_records([make_record(Instructor="Bain, Leslie M.")])
         changes = TermChanges(departures=("Bain, Leslie M.",))
@@ -109,6 +131,16 @@ class DepartureReassignmentTests(unittest.TestCase):
 
 
 class NewCourseTests(unittest.TestCase):
+    def test_new_upper_course_added_with_professor_placeholder(self):
+        template = Schedule([])
+        changes = TermChanges(new_sections=(
+            make_record(Number="2914", Instructor=""),
+        ))
+
+        draft, _ = build_initial_schedule(template, changes)
+
+        self.assertEqual(draft.classes[0].sections[0].instructor, "new_professor")
+
     def test_new_normal_course_added_with_placeholder_instructor(self):
         template = Schedule([])
         changes = TermChanges(new_sections=(make_record(Number="1013", Instructor=""),))

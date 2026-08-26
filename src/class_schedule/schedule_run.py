@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .instructor_identity import is_new_instructor
+from .instructor_identity import is_new_instructor, is_new_professor
 from .schedule_model import (
     HardViolation,
     Schedule,
@@ -433,7 +433,7 @@ def _report(
     changes = simplified_changes(baseline, after)
     unresolved = sorted(
         {s.instructor for item in after.classes for s in item.sections
-         if is_new_instructor(s.instructor)}
+         if is_new_instructor(s.instructor) or is_new_professor(s.instructor)}
     )
 
     lines = [

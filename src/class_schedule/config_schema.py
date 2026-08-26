@@ -216,14 +216,41 @@ class BackToBackPolicySchema(StrictModel):
 
 class NewInstructorPolicySchema(StrictModel):
     contract_load: float = Field(default=15, gt=0)
-    max_course_number_exclusive: int = Field(default=2703, gt=0)
+    max_course_number_exclusive: int = Field(default=2300, gt=0)
     allow_back_to_back: bool = True
+    allowed_counts: list[int] = Field(default_factory=lambda: [0, 1, 2], min_length=1)
+
+    @field_validator("allowed_counts")
+    @classmethod
+    def validate_allowed_counts(cls, values: list[int]) -> list[int]:
+        if any(value < 0 for value in values):
+            raise ValueError("allowed_counts cannot contain negative values")
+        if values != sorted(set(values)):
+            raise ValueError("allowed_counts must be sorted with no duplicates")
+        return values
+
+
+class NewProfessorPolicySchema(StrictModel):
+    contract_load: float = Field(default=12, gt=0)
+    min_course_number_inclusive: int = Field(default=1914, gt=0)
+    allow_back_to_back: bool = True
+    allowed_counts: list[int] = Field(default_factory=lambda: [0, 1, 2], min_length=1)
+
+    @field_validator("allowed_counts")
+    @classmethod
+    def validate_allowed_counts(cls, values: list[int]) -> list[int]:
+        if any(value < 0 for value in values):
+            raise ValueError("allowed_counts cannot contain negative values")
+        if values != sorted(set(values)):
+            raise ValueError("allowed_counts must be sorted with no duplicates")
+        return values
 
 
 class ConstraintsFileSchema(StrictModel):
     workload: WorkloadPolicySchema = Field(default_factory=WorkloadPolicySchema)
     back_to_back: BackToBackPolicySchema = Field(default_factory=BackToBackPolicySchema)
     new_instructor: NewInstructorPolicySchema = Field(default_factory=NewInstructorPolicySchema)
+    new_professor: NewProfessorPolicySchema = Field(default_factory=NewProfessorPolicySchema)
     rules: list[ConstraintRuleSchema] = Field(default_factory=list)
 
 

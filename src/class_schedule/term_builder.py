@@ -39,6 +39,18 @@ from .schedule_model import Schedule
 DEFAULT_PLACEHOLDER_INSTRUCTOR = "new_instructor"
 
 
+def placeholder_for_number(
+    number: object, *, instructor_max_exclusive: int = 2300,
+    professor_min_inclusive: int = 1914,
+) -> str:
+    value = int(record_utils.text(number))
+    if value < instructor_max_exclusive:
+        return "new_instructor"
+    if value >= professor_min_inclusive:
+        return "new_professor"
+    raise ValueError(f"No dynamic position is eligible for course number {value}")
+
+
 @dataclass(frozen=True)
 class CancelSpec:
     """One course to drop from the draft. ``section`` omitted cancels
@@ -120,13 +132,15 @@ def _cancels(item: Class, spec: CancelSpec) -> bool:
 
 
 def _with_placeholder(
-    records: Iterable[Mapping[str, object]], placeholder: str
+    records: Iterable[Mapping[str, object]], placeholder: str | None
 ) -> list[dict[str, object]]:
     result = []
     for row in records:
         normalized = record_utils.normalize_columns(row)
         if not record_utils.text(normalized.get("Instructor")):
-            normalized["Instructor"] = placeholder
+            normalized["Instructor"] = placeholder or placeholder_for_number(
+                record_utils.value(normalized, "Number")
+            )
         result.append(normalized)
     return result
 
@@ -167,7 +181,7 @@ def build_initial_schedule(
     draft: Schedule,
     changes: TermChanges,
     *,
-    placeholder_instructor: str = DEFAULT_PLACEHOLDER_INSTRUCTOR,
+    placeholder_instructor: str | None = None,
 ) -> tuple[Schedule, InitialReport]:
     """Apply ``changes`` on top of ``draft``; return the initial Schedule and a
     report of what actually happened.
@@ -204,12 +218,23 @@ def build_initial_schedule(
         course_id = item.course_ids[0]
         for index in matches:
             try:
-                initial.change_instructor(course_id, placeholder_instructor, record=index)
+                replacement = placeholder_instructor or placeholder_for_number(
+                    item.sections[index].number
+                )
+                initial.change_instructor(course_id, replacement, record=index)
             except ValueError:
                 # Paired kind requires both rows to share one instructor
                 # (FourCreditClass, CoreqClass) -- replacing only one row
                 # would leave the pair invalid, so replace both.
-                initial.change_instructor(course_id, placeholder_instructor)
+                replacements = {
+                    placeholder_instructor or placeholder_for_number(section.number)
+                    for section in item.sections
+                }
+                replacement = (
+                    "new_instructor" if replacements == {"new_instructor"}
+                    else "new_professor"
+                )
+                initial.change_instructor(course_id, replacement)
                 break
         reassigned.append(course_id)
 

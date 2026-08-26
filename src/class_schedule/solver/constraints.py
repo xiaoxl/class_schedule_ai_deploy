@@ -20,7 +20,7 @@ from ..schedule_model import (
     PersonRecord,
     PreferenceRecord,
 )
-from ..instructor_identity import is_new_instructor
+from ..instructor_identity import is_new_instructor, is_new_professor
 from .candidates import apply_candidate
 from .types import SectionCandidate
 
@@ -33,6 +33,8 @@ def add_placeholder_count_terms(
     model: cp_model.CpModel,
     *,
     enforce_contiguous: bool = True,
+    variable_prefix: str = "placeholder",
+    allowed_counts: tuple[int, ...] | None = None,
 ) -> list[cp_model.LinearExpr]:
     """Penalize each distinct placeholder identity selected anywhere."""
     objective_terms: list[cp_model.LinearExpr] = []
@@ -44,17 +46,22 @@ def add_placeholder_count_terms(
             for candidate_index, candidate in enumerate(section_candidates)
             if candidate.instructor == instructor
         ]
-        if not selected:
-            continue
-        used = model.new_bool_var(f"placeholder_{rank}_used")
-        for variable in selected:
-            model.add(variable <= used)
-        model.add(used <= sum(selected))
+        used = model.new_bool_var(f"{variable_prefix}_{rank}_used")
+        if selected:
+            for variable in selected:
+                model.add(variable <= used)
+            model.add(used <= sum(selected))
+        else:
+            model.add(used == 0)
         used_variables.append(used)
         objective_terms.append(weight * used)
     if enforce_contiguous:
         for previous, current in zip(used_variables, used_variables[1:]):
             model.add(previous >= current)
+    if allowed_counts is not None:
+        count = model.new_int_var(0, len(used_variables), f"{variable_prefix}_count")
+        model.add(count == sum(used_variables))
+        model.add_allowed_assignments([count], [[value] for value in allowed_counts])
     return objective_terms
 
 
@@ -324,7 +331,7 @@ def add_load_terms(
             continue
         total = sum(terms)
         target = int(round(person.max_load * scale))
-        if is_new_instructor(instructor):
+        if is_new_instructor(instructor) or is_new_professor(instructor):
             model.add(total <= target)
             continue
         limit = int(round((person.max_load + policy.overload_tolerance) * scale))

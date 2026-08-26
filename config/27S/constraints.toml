@@ -23,8 +23,15 @@ far_overload_extra = 50
 penalty = 10
 
 [new_instructor]
+allowed_counts = [0, 1, 2]
 contract_load = 15
-max_course_number_exclusive = 2703
+max_course_number_exclusive = 2300
+allow_back_to_back = true
+
+[new_professor]
+allowed_counts = [0]
+contract_load = 12
+min_course_number_inclusive = 1914
 allow_back_to_back = true
 
 [[rules]]

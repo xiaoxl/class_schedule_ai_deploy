@@ -355,6 +355,7 @@ def _assignment_options(config: solver_module.SolverConfig) -> dict:
             name: person.max_load for name, person in sorted(config.persons.items())
         },
         "new_instructor_contract_load": config.new_instructor_policy.contract_load,
+        "new_professor_contract_load": config.new_professor_policy.contract_load,
         "workload_policy": {
             "overload_tolerance": config.workload_policy.overload_tolerance,
             "hard_load_cap_tolerance": config.workload_policy.hard_load_cap_tolerance,

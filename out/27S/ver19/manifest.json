@@ -1,0 +1,90 @@
+{
+  "schema_version": 4,
+  "term": "27S",
+  "version": "ver19",
+  "parent": null,
+  "created_at": "2026-08-26T19:51:35.908344+00:00",
+  "input": {
+    "path": "work\\27S\\initial-dynamic-pools-2300\\initial.csv",
+    "sha256": "7dd2ede3900aa69af05354b404a6e6a75c18109ef750dbccc6138c69f081e77a"
+  },
+  "initial_baseline": {
+    "path": "work\\27S\\initial-dynamic-pools-2300\\initial.csv",
+    "sha256": "7dd2ede3900aa69af05354b404a6e6a75c18109ef750dbccc6138c69f081e77a",
+    "snapshot": "baseline.csv",
+    "role": "initial"
+  },
+  "configuration": {
+    "package_id": "27S",
+    "version": "c09c98626acf",
+    "files": [
+      {
+        "path": "config\\27S\\basicinfo\\catalogs.toml",
+        "sha256": "840565e266c5df19cb7aee9d14f16438646af1cb64cbf85f52fe4e7eb1acd836"
+      },
+      {
+        "path": "config\\27S\\basicinfo\\locations.toml",
+        "sha256": "6a626a2c5276077ae34c19828ecc7af10b708a323f5b690698393394470e3d71"
+      },
+      {
+        "path": "config\\27S\\basicinfo\\timeslot.toml",
+        "sha256": "7cd4e1ea9e9d15d89aa591bad9563dc3d4dd8e7eb25d07baf819be448567da28"
+      },
+      {
+        "path": "config\\27S\\basicinfo\\persons.toml",
+        "sha256": "1214aac7aa39463e19afcd26dfcda4237f0f148b07af97405fd2f62dfcee3715"
+      },
+      {
+        "path": "config\\27S\\courses.toml",
+        "sha256": "6dcc219c78c9f39be8e257253462cad39f11e8903eff5d8e919338b1575c151f"
+      },
+      {
+        "path": "config\\27S\\preferences.toml",
+        "sha256": "1ef247dedfd8596e05f33a7ae319f2b3e9b15821ef82899179c21d8c981decdc"
+      },
+      {
+        "path": "config\\27S\\constraints.toml",
+        "sha256": "7565df91831daa61635189cd86c92b25c51d65d7921777ef45422209d84727d9"
+      }
+    ]
+  },
+  "reconciliation": {
+    "source": "courses.toml",
+    "sha256": "e30563c1e93030174a47ca0440caf79b0985dd73a27ff6a0f082c1496eb6dbf5",
+    "snapshot": "reconciliation.toml"
+  },
+  "applied_overrides_sha256": "dc7e1e8c9b2b7248062f7d71fc6ec4515f3e1c76df2f3b661fbf3919f4b13e55",
+  "override_workspace": {
+    "path": "overrides.toml",
+    "mutable": true,
+    "source_version": "ver19"
+  },
+  "selected_attempt": 3,
+  "solver": {
+    "status": "feasible",
+    "objective": -885.0,
+    "best_bound": -1221.0,
+    "random_seed": 1514268216,
+    "time_limit_seconds": 45.0,
+    "search_workers": 8,
+    "attempts": 5,
+    "attempts_requested": 5,
+    "attempts_run": 5
+  },
+  "validation": {
+    "hard_violations": 0,
+    "soft_penalty": 180.0,
+    "worst_overload": 1.0
+  },
+  "files": {
+    "27S_ver19.csv": "ef0a5ebd4d92e4646eb9d88fadefdcc2b79f8bf1e064e1213dcf8f8e95ef26dd",
+    "27S_ver19_instructor.xlsx": "680d466edaf65ccdc727a02050630bca0820ffc1f54494465f2914d201d66554",
+    "27S_ver19_room.xlsx": "62e6bf1a2dce07546c92eac00d0bf2f9fe0d84d022d6abf20a071b8a0140635d",
+    "report.md": "9e3460be7436a73676c2e3df4d25d4241b850db9922cd19b463773878f96c767",
+    "attempts.csv": "d65a15520d05c71024b4fa007e83692593be3d785f61044b1d9a2558c11b1143",
+    "changes.csv": "63e840cb351e032d8ee86bec3ec8c793b2d6e3e749cbd5f89e8756be78b04e09",
+    "baseline.csv": "7dd2ede3900aa69af05354b404a6e6a75c18109ef750dbccc6138c69f081e77a",
+    "applied_overrides.toml": "dc7e1e8c9b2b7248062f7d71fc6ec4515f3e1c76df2f3b661fbf3919f4b13e55",
+    "reconciliation.toml": "e30563c1e93030174a47ca0440caf79b0985dd73a27ff6a0f082c1496eb6dbf5"
+  }
+}

@@ -11,8 +11,10 @@ from ..overrides import LockMap, locks_for_section
 from ..schedule_model import Schedule
 from ..schedule_model import PersonRecord, PreferenceRecord
 from ..initial_builder import is_placeholder_instructor, recolor_placeholder
-from ..instructor_identity import new_instructor_name, new_instructor_rank
-from ..new_instructors import required_by_concurrency, required_by_load
+from ..instructor_identity import (
+    is_new_professor, new_instructor_name, new_instructor_rank,
+    new_professor_name, new_professor_rank,
+)
 from .candidates import (
     MAX_CANDIDATES_PAIRED_SECTION,
     MAX_CANDIDATES_SINGLE_SECTION,
@@ -79,18 +81,22 @@ def solve_detailed(
     )
     pool_size = max(
         existing_count,
-        required_by_load(
-            class_list,
-            contract_load=config.new_instructor_policy.contract_load,
-            max_course_number_exclusive=config.new_instructor_policy.max_course_number_exclusive,
-        ),
-        required_by_concurrency(
-            class_list,
-            max_course_number_exclusive=config.new_instructor_policy.max_course_number_exclusive,
-        ),
+        max(config.new_instructor_policy.allowed_counts),
     )
     placeholder_instructors = tuple(
         new_instructor_name(rank) for rank in range(1, pool_size + 1)
+    )
+    existing_professor_count = max((
+        new_professor_rank(section.instructor)
+        for item in class_list for section in item.sections
+        if is_new_professor(section.instructor)
+    ), default=0)
+    professor_pool_size = max(
+        existing_professor_count,
+        max(config.new_professor_policy.allowed_counts),
+    )
+    new_professors = tuple(
+        new_professor_name(rank) for rank in range(1, professor_pool_size + 1)
     )
     sections: list[Section] = []
     owner: list[int] = []
@@ -114,6 +120,7 @@ def solve_detailed(
             if len(item.sections) == 1 else MAX_CANDIDATES_PAIRED_SECTION,
             locks_for_section(locks, item.course_ids, record),
             placeholder_instructors,
+            new_professors,
         ))
     empty = [
         sections[index].course_id
@@ -146,6 +153,12 @@ def solve_detailed(
             allow_back_to_back=config.new_instructor_policy.allow_back_to_back,
         ) for name in placeholder_instructors
     })
+    effective_preferences.update({
+        name: PreferenceRecord(
+            name=name,
+            allow_back_to_back=config.new_professor_policy.allow_back_to_back,
+        ) for name in new_professors
+    })
     back_to_back_terms = add_scheduling_constraints(
         slots, chosen, effective_preferences, model,
         back_to_back_penalty=config.back_to_back_policy.penalty,
@@ -157,6 +170,12 @@ def solve_detailed(
         )
         for name in placeholder_instructors
     })
+    effective_persons.update({
+        name: PersonRecord(
+            name=name, max_load=config.new_professor_policy.contract_load
+        )
+        for name in new_professors
+    })
     load_terms = add_load_terms(
         class_list, sections_by_class, candidates, chosen,
         effective_persons, effective_preferences, model,
@@ -166,10 +185,21 @@ def solve_detailed(
         candidates, chosen, placeholder_instructors,
         config.staff_count_weight, model,
         enforce_contiguous=not placeholder_lock,
+        allowed_counts=tuple(config.new_instructor_policy.allowed_counts),
     )
     placeholder_terms.extend(add_placeholder_load_terms(
         class_list, sections_by_class, candidates, chosen,
         placeholder_instructors, config.staff_credit_weight,
+    ))
+    placeholder_terms.extend(add_placeholder_count_terms(
+        candidates, chosen, new_professors,
+        config.staff_count_weight, model,
+        variable_prefix="new_professor",
+        allowed_counts=tuple(config.new_professor_policy.allowed_counts),
+    ))
+    placeholder_terms.extend(add_placeholder_load_terms(
+        class_list, sections_by_class, candidates, chosen,
+        new_professors, config.staff_credit_weight,
     ))
     candidate_terms = [
         candidate.cost * chosen[section_index][candidate_index]

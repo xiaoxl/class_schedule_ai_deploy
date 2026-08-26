@@ -22,7 +22,12 @@ Corequisites may both be online, be back-to-back with the same instructor and ex
 
 ## New Instructor
 
-The scalable pool uses `new_instructor`, `new_instructor 2`, and so on. Contract load, course-number eligibility, and back-to-back policy come from `[new_instructor]` in `constraints.toml`; no production policy number is hard-coded in the solver.
+Two scalable pools grow and shrink with the schedule:
+
+- `new_instructor`, `new_instructor 2`, and so on teach through the configured maximum course number.
+- `new_professor`, `new_professor 2`, and so on teach from the configured minimum course number upward.
+
+Contract load, course-number eligibility, and back-to-back policy come from the corresponding `[new_instructor]` and `[new_professor]` sections in `constraints.toml`; no production policy number is hard-coded in the solver.
 
 ## Soft objectives and validation
 

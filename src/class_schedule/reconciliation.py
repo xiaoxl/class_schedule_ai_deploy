@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Mapping
 
 from . import record_utils
-from .instructor_identity import is_new_instructor
+from .instructor_identity import is_new_instructor, is_new_professor
 from .schedule_model import Schedule
 if TYPE_CHECKING:
     from .solver.config import SolverConfig
@@ -32,6 +32,22 @@ def _slot(pattern, index: int = 0) -> str:
     return f"{pattern.days} {start.strftime('%I:%M%p').lstrip('0').lower()}"
 
 
+def _placeholder(config: SolverConfig, identities: tuple[str, ...] | list[str]) -> str:
+    """Choose the lower-cost initial pool; the overlap defaults to instructor."""
+    numbers = [int(identity.split()[1]) for identity in identities]
+    if all(
+        number < config.new_instructor_policy.max_course_number_exclusive
+        for number in numbers
+    ):
+        return "new_instructor"
+    if all(
+        number >= config.new_professor_policy.min_course_number_inclusive
+        for number in numbers
+    ):
+        return "new_professor"
+    raise ValueError(f"No dynamic position is eligible for: {', '.join(identities)}")
+
+
 def _pattern(config: SolverConfig, course: str, role: str, atomic: frozenset[str]):
     return next(
         pattern for pattern in config.meeting_patterns
@@ -41,7 +57,7 @@ def _pattern(config: SolverConfig, course: str, role: str, atomic: frozenset[str
     )
 
 
-def _record(config: SolverConfig, identity: str, role: str, atomic: frozenset[str], index: int = 0) -> dict[str, object]:
+def _record(config: SolverConfig, identity: str, role: str, atomic: frozenset[str], index: int = 0, placeholder: str | None = None) -> dict[str, object]:
     subject, number, section = identity.split(maxsplit=2)
     catalog = next(
         item for item in config.catalogs.courses
@@ -59,23 +75,25 @@ def _record(config: SolverConfig, identity: str, role: str, atomic: frozenset[st
         "Subject": subject, "Number": number, "Section": section,
         "Type": "Lecture", "Title": catalog.title, "Credits": catalog.credits,
         "Time Slot": time_slot, "Duration": duration,
-        "Building": building, "Room": room, "Instructor": "new_instructor",
+        "Building": building, "Room": room,
+        "Instructor": placeholder or _placeholder(config, [identity]),
     }
 
 
 def _synthesize_relationship(config: SolverConfig, relationship) -> list[dict[str, object]]:
     atomic = frozenset(" ".join(member.split()[:2]) for member in relationship.members)
+    placeholder = _placeholder(config, relationship.members)
     if relationship.kind == "hybrid":
-        return [_record(config, relationship.members[0], "hybrid_physical", atomic)]
+        return [_record(config, relationship.members[0], "hybrid_physical", atomic, placeholder=placeholder)]
     if relationship.kind == "four_credit":
         member = relationship.members[0]
         return [
-            _record(config, member, "four_credit_primary", atomic),
-            _record(config, member, "four_credit_partial", atomic),
+            _record(config, member, "four_credit_primary", atomic, placeholder=placeholder),
+            _record(config, member, "four_credit_partial", atomic, placeholder=placeholder),
         ]
     if relationship.kind == "cross_listing":
         return [
-            _record(config, member, "cross_listing", atomic)
+            _record(config, member, "cross_listing", atomic, placeholder=placeholder)
             for member in relationship.members
         ]
     credits = {
@@ -89,7 +107,7 @@ def _synthesize_relationship(config: SolverConfig, relationship) -> list[dict[st
         else "coreq" for value in values
     ]
     rows = [
-        _record(config, member, role, atomic, index)
+        _record(config, member, role, atomic, index, placeholder)
         for index, (member, role) in enumerate(zip(relationship.members, roles))
     ]
     # Equal-credit same-day coreqs need adjacent starts in the same room.
@@ -112,6 +130,11 @@ def reconcile_records(
     removed: set[str] = set()
     reassigned: set[str] = set()
     present: set[str] = set()
+    relationship_by_member = {
+        member: relationship
+        for relationship in config.courses.relationships
+        for member in relationship.members
+    }
     for raw in records:
         row = record_utils.normalize_columns(raw)
         identity = _identity(row)
@@ -120,18 +143,19 @@ def reconcile_records(
                 removed.add(identity)
             continue
         instructor = record_utils.text(record_utils.value(row, "Instructor"))
-        if instructor and instructor not in config.persons and not is_new_instructor(instructor):
-            row["Instructor"] = "new_instructor"
+        if (
+            instructor and instructor not in config.persons
+            and not is_new_instructor(instructor)
+            and not is_new_professor(instructor)
+        ):
+            relationship = relationship_by_member.get(identity)
+            identities = relationship.members if relationship is not None else [identity]
+            row["Instructor"] = _placeholder(config, identities)
             reassigned.add(identity)
         kept.append(row)
         present.add(identity)
 
     missing = desired - present
-    relationship_by_member = {
-        member: relationship
-        for relationship in config.courses.relationships
-        for member in relationship.members
-    }
     generated_relationships: set[str] = set()
     added: set[str] = set()
     for identity in sorted(missing):
@@ -170,7 +194,7 @@ def render_reconciliation(report: ReconciliationReport) -> str:
     ]
     for action, values in (
         ("removed", report.removed), ("added", report.added),
-        ("reassigned_to_new_instructor", report.reassigned),
+        ("reassigned_to_dynamic_position", report.reassigned),
     ):
         rendered = ", ".join(f'"{value}"' for value in values)
         lines.append(f"{action} = [{rendered}]")
