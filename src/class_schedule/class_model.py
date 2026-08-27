@@ -760,6 +760,25 @@ class CrossListingClass(SpecialClass):
         # had matching stays linked, one that didn't stays independent.
         return (0, 1) if field in self.synced_fields else (record_index,)
 
+    def apply_edit(
+        self, field: str, record_index: int, **changes: object,
+    ) -> "CrossListingClass":
+        # NormalClass.apply_edit ends in replace(self, sections=...), which
+        # reruns __post_init__ -- and __post_init__ always *auto-detects*
+        # synced_fields from the (now-edited) rows. Left alone, that would
+        # silently override this instance's real synced_fields (whatever
+        # from_configured_sections was given, or whatever construction
+        # auto-detected) with a fresh guess from the post-edit values --
+        # exactly the "re-guessed every time" failure mode synced_fields
+        # exists to prevent (see docs/codes.md). synced_fields is a fixed,
+        # per-instance decision for the life of the instance; only a fresh
+        # load (from_configured_sections) is allowed to set it.
+        updated = super(CrossListingClass, self).apply_edit(
+            field, record_index, **changes,
+        )
+        updated.synced_fields = self.synced_fields
+        return updated
+
     @staticmethod
     def is_honors_pair(left: Section, right: Section) -> bool:
         """Same course, one regular section and one 'H'-prefixed honors

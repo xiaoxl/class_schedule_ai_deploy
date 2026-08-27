@@ -708,3 +708,100 @@ Tested by a new `tests/test_edit_api.py` case
 (`test_view_payload_carries_linked_fields_from_edit_targets`), asserting a
 disjoint-weekday Coreq pair's `linked_fields` comes back as
 `{"instructor": True, "room": False, "time": False}`.
+
+## Addendum, 2026-08-27: a real bug found in review -- `apply_edit` was silently discarding `CrossListingClass.synced_fields`
+
+A review of the `/api/edit` work above caught a real, high-severity bug:
+`NormalClass.apply_edit` (the base every kind's override calls into)
+ends in `replace(self, sections=updated)`. For a regular dataclass,
+`replace()` builds the new instance by calling `__init__` again, which for
+`CrossListingClass` reruns `__post_init__` -- and `__post_init__`
+*unconditionally* auto-detects `synced_fields` from whatever the rows look
+like *after* the edit:
+
+```python
+def __post_init__(self) -> None:
+    ...
+    self.synced_fields = self._synced_fields(left, right)
+```
+
+So every `CrossListingClass` edit -- not just room edits, any edit --
+silently replaced the instance's real `synced_fields` (whether it came
+from auto-detection at load time or from an explicit `courses.toml`
+`synced_fields = [...]`) with a fresh guess from the post-edit rows.
+Concretely: a pair recorded as `["instructor", "time"]` (independent
+rooms) where one row's room happened to get edited to equal the other's
+would come back as `["instructor", "room", "time"]` -- a coincidence
+permanently promoted to a locked rule, and a configured `synced_fields`
+silently overwritten the first time either row was edited at all. This is
+exactly the "re-guessed every time" failure mode `synced_fields` was
+built to prevent (see the "persisted config setting" addendum above) --
+un-done by the very code meant to use it.
+
+Fixed with a `CrossListingClass.apply_edit` override that calls the base
+behavior for the actual field mutation, then restores the original
+instance's `synced_fields` (a fixed, per-instance decision that only a
+fresh load -- `from_configured_sections` -- is allowed to set):
+
+```python
+def apply_edit(
+    self, field: str, record_index: int, **changes: object,
+) -> "CrossListingClass":
+    updated = super(CrossListingClass, self).apply_edit(
+        field, record_index, **changes,
+    )
+    updated.synced_fields = self.synced_fields
+    return updated
+```
+
+(Note the explicit `super(CrossListingClass, self)` form, not bare
+`super()` -- this codebase's `@dataclass(slots=True)` classes rebuild the
+class object, so the zero-arg form's implicit `__class__` cell resolves
+to a stale class and raises `TypeError: super(type, obj): obj is not an
+instance or subtype of type`. Every other override in this hierarchy
+already uses the explicit form for the same reason; this one had to
+follow suit.)
+
+Regression test:
+`tests/test_class_model.py::CrossListingClassTests::test_apply_edit_keeps_the_original_synced_fields_even_when_rows_coincidentally_match`
+-- edits one row's room to coincidentally match the other's and asserts
+`synced_fields` is unchanged.
+
+### Also from that review: two smaller, confirmed issues fixed alongside it
+
+- **The context menu still offered "Assign room" on online/arranged
+  rows.** `/api/edit` has always rejected a `room` (or `time`) edit on a
+  row where `section.is_online` (see the `edit_schedule_class` handler
+  above) -- but `openContextMenu()` populated and enabled `#contextRoom`/
+  `#assignRoom` unconditionally, so clicking them on an online chip could
+  only ever end in a 400 toast. Fixed: both are now `disabled` when the
+  clicked row isn't `in_person`, and `contextHintText()` (now taking the
+  clicked `row` as well as `item`) says so instead of describing a
+  linking rule that was never going to get the chance to apply.
+- **`tests/test_edit_api.py` depended on an undeclared package.**
+  `fastapi.testclient.TestClient` requires `httpx`, which was importable
+  only because this development environment happened to have it
+  installed already -- it was in neither `pyproject.toml` nor `uv.lock`,
+  so `uv run python -m unittest discover -s tests` on a clean checkout
+  would fail to even collect that file. Fixed with `uv add --dev
+  "httpx>=0.27"`, which added a `[dependency-groups] dev` entry to
+  `pyproject.toml` and resolved it into `uv.lock`. Verified by running the
+  full suite through `uv run` specifically (not the ad hoc venv used
+  earlier in this session), which is the reproducible path the project's
+  own docs (`docs/index.md`'s "Tests" section) tell a user to take.
+
+### Raised, not yet acted on: `class_index`/`record_index` as the sole identity `/api/edit` trusts
+
+The same review flagged that `/api/edit` locates the target class/row
+purely by re-grouping the posted flat `records` into a `Schedule` and
+indexing into it -- there is currently no defect (grouping order is a
+deterministic function of each row's own identity fields, none of which
+`/api/edit` can edit), but nothing would catch it if a future change to
+grouping ever made the order data-dependent in a new way, silently
+mis-targeting a different class. A cheap hardening would be having the
+frontend also send the target class's `course_ids` and the target row's
+own `Subject`/`Number`/`Section`, and having the handler verify those
+against what it actually indexed to before applying anything. Not
+implemented yet -- raised for a decision, not acted on unprompted, since
+today it would be defensive code against a hypothetical, not a fix for an
+observed failure.

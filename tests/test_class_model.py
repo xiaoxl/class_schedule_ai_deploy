@@ -324,6 +324,30 @@ class CrossListingClassTests(unittest.TestCase):
         self.assertEqual(item.edit_targets("time", 1), (0, 1))
         self.assertEqual(item.edit_targets("room", 0), (0,))
 
+    def test_apply_edit_keeps_the_original_synced_fields_even_when_rows_coincidentally_match(self):
+        # Regression: NormalClass.apply_edit ends in replace(self,
+        # sections=...), which reruns __post_init__ -- and __post_init__
+        # always auto-detects synced_fields from the (possibly just-edited)
+        # rows. Without CrossListingClass's own apply_edit override, an
+        # edit that happens to make two independent rooms equal would
+        # silently promote "room" to synced (and, for a
+        # from_configured_sections instance, would silently discard
+        # whatever courses.toml actually declared).
+        left = make_section(
+            subject="MATH", number="1113", cross_list="XL1",
+            instructor="Alice", room="101", time_slot="MWF 9:00am",
+        )
+        right = make_section(
+            subject="STAT", number="2103", cross_list="XL1",
+            instructor="Alice", room="205", time_slot="MWF 9:00am",
+        )
+        item = CrossListingClass((left, right))
+        self.assertEqual(item.synced_fields, frozenset({"instructor", "time"}))
+        updated = item.apply_edit("room", 1, building="Corley", room="101")
+        self.assertEqual(updated.sections[0].room, "101")
+        self.assertEqual(updated.sections[1].room, "101")
+        self.assertEqual(updated.synced_fields, frozenset({"instructor", "time"}))
+
     def test_two_honors_sections_is_not_honors_pair(self):
         left = make_section(section="H01", instructor="Alice", room="101")
         right = make_section(section="H02", instructor="Alice", room="101")
