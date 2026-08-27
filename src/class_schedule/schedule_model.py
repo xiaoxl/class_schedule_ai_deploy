@@ -1166,14 +1166,23 @@ def check_conflicts(schedule: "Schedule") -> list[HardViolation]:
 
 
 def check_atomic_class_rules(schedule: "Schedule") -> list[HardViolation]:
-    """Report nonfatal construction issues that adjustment must repair."""
+    """Report nonfatal construction issues that adjustment must repair.
+
+    Sourced from each class's own ``schedule_issues``/``schedule_issue_rule``
+    (FourCreditClass, HybridClass, CoreqClass -- see docs/codes.md) rather
+    than a separate per-kind mapping kept here: any kind that carries
+    ``schedule_issues`` is reported the same way, with no per-kind branch
+    to remember to add.
+    """
     violations: list[HardViolation] = []
     for item in schedule:
-        if not isinstance(item, FourCreditClass):
+        issues = getattr(item, "schedule_issues", ())
+        if not issues:
             continue
+        rule = item.schedule_issue_rule
         violations.extend(
-            HardViolation("four_credit_time_gap", item.course_ids[0], message)
-            for message in item.schedule_issues
+            HardViolation(rule, item.course_ids[0], message)
+            for message in issues
         )
     return violations
 

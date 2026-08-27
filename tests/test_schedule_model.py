@@ -148,6 +148,25 @@ class EvaluateFourCreditTests(unittest.TestCase):
         )
 
 
+class EvaluateHybridShapeTests(unittest.TestCase):
+    def test_two_physical_rows_is_a_nonfatal_construction_violation(self):
+        # Reachable via a courses.toml "hybrid" relationship whose declared
+        # member no longer looks like a physical+companion pair (see
+        # docs/codes.md) -- construction must not raise, and the solver
+        # must not be asked to enforce is_hybrid on it (that would make
+        # solving infeasible instead of just reporting the problem).
+        item = HybridClass((
+            make_section(Section="M01", **{"Time Slot": "MWF 8:00am"}),
+            make_section(Section="M01", **{"Time Slot": "MWF 9:00am"}),
+        ))
+
+        self.assertIsNone(item.pairwise_predicate())
+        evaluation = evaluate_schedule(Schedule([item]), {}, {})
+
+        self.assertEqual(len(evaluation.hard_violations), 1)
+        self.assertEqual(evaluation.hard_violations[0].rule, "hybrid_shape")
+
+
 class EvaluateRequiredRoomTests(unittest.TestCase):
     def test_nonphysical_hybrid_companion_does_not_require_a_room(self):
         online = make_section(

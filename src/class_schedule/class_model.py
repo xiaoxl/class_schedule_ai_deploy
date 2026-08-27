@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import datetime
 from enum import StrEnum
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import ClassVar
 
@@ -274,6 +274,22 @@ class NormalClass:
         """Return one or two dictionaries ready for ``csv.DictWriter``."""
         return [section.to_record() for section in self.sections]
 
+    # ---- solver integration ----
+
+    def pairwise_predicate(self) -> Callable[[Section, Section], bool] | None:
+        """The two-row legality check ``validate`` also enforces, if any.
+
+        An instance method (not a classmethod) because a subclass -- see
+        ``CrossListingClass`` -- may need per-instance state to decide the
+        rule, not just its type. ``solver/constraints.py`` compiles
+        whatever this returns into CP-SAT constraints ahead of the search,
+        once per candidate pair -- it is the one place besides ``validate``
+        that needs this rule, and it
+        gets it from here rather than keeping a second, separately
+        maintained mapping of kind -> predicate.
+        """
+        return None
+
     # ---- modification (subclasses may enforce kind-specific behavior) ----
 
     def change_time(
@@ -321,6 +337,7 @@ class FourCreditClass(SpecialClass):
     """Two same-course rows: one MWF, one T or R, same instructor."""
 
     MAX_START_DIFFERENCE_MINUTES: ClassVar[int] = 90
+    schedule_issue_rule: ClassVar[str] = "four_credit_time_gap"
     schedule_issues: tuple[str, ...] = field(init=False, default=())
 
     def __post_init__(self) -> None:
@@ -375,6 +392,9 @@ class FourCreditClass(SpecialClass):
             <= cls.MAX_START_DIFFERENCE_MINUTES
         )
 
+    def pairwise_predicate(self) -> Callable[[Section, Section], bool] | None:
+        return self.is_valid_schedule
+
     def change_time(
         self, time_slot: str, *, record: int | None = None
     ) -> "FourCreditClass":
@@ -401,6 +421,9 @@ class HybridClass(SpecialClass):
     The normalized atomic object and its flattened export both contain two rows.
     """
 
+    schedule_issue_rule: ClassVar[str] = "hybrid_shape"
+    schedule_issues: tuple[str, ...] = field(init=False, default=())
+
     def __post_init__(self) -> None:
         physical = [section for section in self.sections if section.has_meeting_time]
         if len(physical) == 1 and len(self.sections) in (1, 2):
@@ -414,6 +437,12 @@ class HybridClass(SpecialClass):
                     for section in self.sections
                 )
         super(HybridClass, self).__post_init__()
+        left, right = self.sections
+        self.schedule_issues = () if self.is_hybrid(left, right) else (
+            f"{left.course_id} rows do not form a valid hybrid pairing: "
+            "need one M- or F-prefixed physical meeting with a room and a "
+            "companion without one",
+        )
 
     @staticmethod
     def _online_companion(physical: Section) -> Section:
@@ -428,15 +457,25 @@ class HybridClass(SpecialClass):
 
     @property
     def physical_section(self) -> Section:
-        return next(
-            section for section in self.sections if section.has_meeting_time
-        )
+        """The row with a real meeting time, if any.
+
+        Falls back to the first row rather than raising when neither (or
+        both) rows qualify -- ``is_hybrid`` no longer guarantees exactly
+        one match (see ``schedule_issues``), but this class must stay
+        readable/exportable regardless.
+        """
+        for section in self.sections:
+            if section.has_meeting_time:
+                return section
+        return self.sections[0]
 
     @property
     def online_section(self) -> Section:
-        return next(
-            section for section in self.sections if not section.has_meeting_time
-        )
+        """The row without a real meeting time, if any -- see ``physical_section``."""
+        for section in self.sections:
+            if not section.has_meeting_time:
+                return section
+        return self.sections[1]
 
     @property
     def building(self) -> str:
@@ -458,16 +497,14 @@ class HybridClass(SpecialClass):
                 f"{type(self).__name__} requires two records for the same "
                 f"course ({left.course_id} / {right.course_id})"
             )
-        if not self.is_hybrid(left, right):
-            raise ValueError(
-                "Hybrid requires an M- or F-prefixed section with one "
-                "physical record having a room and one ONLINE/TBA/blank "
-                "record without a room "
-                f"({left.course_id})"
-            )
+        # is_hybrid is no longer enforced here -- a pairing that doesn't
+        # look like a valid hybrid still constructs, flagged in
+        # ``schedule_issues`` instead of blocking the whole schedule.
 
     @staticmethod
     def is_hybrid(left: Section, right: Section) -> bool:
+        if left.instructor != right.instructor:
+            return False
         physical = left if left.has_meeting_time else right
         if not HybridClass.is_hybrid_physical(physical):
             return False
@@ -487,6 +524,19 @@ class HybridClass(SpecialClass):
             and section.has_meeting_time
             and bool(section.room)
         )
+
+    def pairwise_predicate(self) -> Callable[[Section, Section], bool] | None:
+        if self.schedule_issues:
+            # Already not a valid hybrid pairing -- unlike a four-credit
+            # start gap or a coreq adjacency gap, this isn't something
+            # candidate selection can adjust (a section's online/physical
+            # shape isn't a solver-controlled field), so asking the solver
+            # to enforce is_hybrid here would make solving outright
+            # infeasible instead of just imperfect. Leave the two rows
+            # unconstrained relative to each other and keep reporting the
+            # problem via schedule_issues.
+            return None
+        return self.is_hybrid
 
     def to_records(self) -> list[dict[str, object]]:
         """Flatten with an ONLINE row regenerated from the physical row."""
@@ -517,6 +567,32 @@ class CrossListingClass(SpecialClass):
     COURSE_PAIRS: ClassVar[list[set[str]]] = [
         {"MATH 5173", "STAT 4173"},
     ]
+    synced_fields: frozenset[str] = field(init=False, default=frozenset())
+
+    def __post_init__(self) -> None:
+        super(CrossListingClass, self).__post_init__()
+        left, right = self.sections
+        self.synced_fields = self._synced_fields(left, right)
+
+    @staticmethod
+    def _synced_fields(left: Section, right: Section) -> frozenset[str]:
+        """Which of {instructor, room, time} this specific pair's source
+        data already had matching -- decided once at construction and
+        fixed for the life of the instance (see docs/codes.md). Only
+        locked fields are enforced (by ``pairwise_predicate``, hence by
+        the solver); an unlocked field is free to diverge independently.
+        A field with no evidence either way (both sides simply equal,
+        e.g. two freshly synthesized rows) still counts as locked --
+        "no information" defaults to "must match", never to "may differ".
+        """
+        locked = set()
+        if left.instructor == right.instructor:
+            locked.add("instructor")
+        if left.room == right.room and left.building == right.building:
+            locked.add("room")
+        if left.time_slot == right.time_slot and left.duration == right.duration:
+            locked.add("time")
+        return frozenset(locked)
 
     @classmethod
     def from_configured_sections(
@@ -529,8 +605,7 @@ class CrossListingClass(SpecialClass):
         left, right = sections
         if left.identity == right.identity:
             raise ValueError("Configured cross-listing requires different identities")
-        if not cls.is_shared_meeting(left, right):
-            raise ValueError("Configured cross-listing rows must share one meeting")
+        item.synced_fields = cls._synced_fields(left, right)
         return item
 
     def validate(self) -> None:
@@ -545,8 +620,7 @@ class CrossListingClass(SpecialClass):
             raise ValueError(
                 "Cross-listing rows require the same non-empty Cross-List "
                 "value, a known course pair with the same section, or an "
-                "honors-section pair (e.g. '001'/'H01') with the same "
-                "instructor, room, and time "
+                "honors-section pair (e.g. '001'/'H01') "
                 f"({left.course_id} / {right.course_id})"
             )
 
@@ -572,7 +646,12 @@ class CrossListingClass(SpecialClass):
 
     @staticmethod
     def is_shared_meeting(left: Section, right: Section) -> bool:
-        """Whether two cross-listed records describe one physical meeting."""
+        """Whether two cross-listed records currently describe one physical
+        meeting -- true exactly when all of ``synced_fields``' fields
+        would be, i.e. instructor, time, duration, room, and building all
+        match. Purely descriptive; ``synced_fields``/``pairwise_predicate``
+        are what actually get enforced (see ``docs/codes.md``).
+        """
         return (
             left.instructor == right.instructor
             and left.time_slot == right.time_slot
@@ -581,24 +660,50 @@ class CrossListingClass(SpecialClass):
             and left.building == right.building
         )
 
+    def pairwise_predicate(self) -> Callable[[Section, Section], bool] | None:
+        """Enforce only the fields this specific pair started out sharing.
+
+        Unlike the other two-row kinds, this isn't one fixed rule for the
+        whole type -- ``synced_fields`` was decided per instance at
+        construction (see ``docs/codes.md``), so a pair that started
+        matching stays matching, while a pair that started independent
+        (e.g. two different rooms) stays free to diverge further, with no
+        pairwise constraint at all between them if nothing was ever synced.
+        """
+        locked = self.synced_fields
+        if not locked:
+            return None
+
+        def _locked_fields_match(left: Section, right: Section) -> bool:
+            if "instructor" in locked and left.instructor != right.instructor:
+                return False
+            if "room" in locked and (
+                left.room != right.room or left.building != right.building
+            ):
+                return False
+            if "time" in locked and (
+                left.time_slot != right.time_slot or left.duration != right.duration
+            ):
+                return False
+            return True
+
+        return _locked_fields_match
+
     @staticmethod
     def is_honors_pair(left: Section, right: Section) -> bool:
         """Same course, one regular section and one 'H'-prefixed honors
-        section with the same trailing digits (e.g. '001' / 'H01'),
-        meeting at the same time, room, and instructor."""
+        section with the same trailing digits (e.g. '001' / 'H01').
+
+        Recognition is purely structural -- it does not require the two
+        rows to share an instructor/room/time; see ``is_shared_meeting``.
+        """
         if left.subject != right.subject or left.number != right.number:
             return False
         a, b = left.section.upper(), right.section.upper()
         honors, regular = (a, b) if a.startswith("H") else (b, a)
         if not honors.startswith("H") or regular.startswith("H"):
             return False
-        if honors[1:] != regular[1:]:
-            return False
-        return (
-            left.instructor == right.instructor
-            and left.room == right.room
-            and left.time_slot == right.time_slot
-        )
+        return honors[1:] == regular[1:]
 
 
 @dataclass(slots=True)
@@ -610,6 +715,13 @@ class CoreqClass(SpecialClass):
         {"MATH 1113", "MATH 0903"},
         {"MATH 1113", "MATH 1110"},
     ]
+    schedule_issue_rule: ClassVar[str] = "coreq_adjacency_gap"
+    schedule_issues: tuple[str, ...] = field(init=False, default=())
+
+    def __post_init__(self) -> None:
+        super(CoreqClass, self).__post_init__()
+        left, right = self.sections
+        self.schedule_issues = self._adjacency_issues(left, right)
 
     @classmethod
     def from_configured_sections(
@@ -622,10 +734,11 @@ class CoreqClass(SpecialClass):
         left, right = sections
         if left.identity == right.identity:
             raise ValueError("Configured coreq requires two different courses")
-        if not cls.is_valid_schedule(left, right):
+        if not cls.is_coreq_compatible(left, right):
             raise ValueError(
                 "Configured coreq does not satisfy the CoreqClass schedule rules"
             )
+        item.schedule_issues = cls._adjacency_issues(left, right)
         return item
 
     def validate(self) -> None:
@@ -636,13 +749,11 @@ class CoreqClass(SpecialClass):
                 "Unsupported coreq course pair "
                 f"({left.course_id} / {right.course_id})"
             )
-        if not self.is_valid_schedule(left, right):
+        if not self.is_coreq_compatible(left, right):
             raise ValueError(
-                "Coreq meetings must share an instructor, and (unless "
-                "both lack a physical meeting) be either back-to-back with a gap of "
-                "15 minutes or less in the same non-empty building/room "
-                "on a shared weekday, or start within 30 minutes of each "
-                "other on disjoint weekdays "
+                "Coreq meetings must share an instructor, and either both "
+                "lack a physical meeting or both have one that does not "
+                "outright conflict on a shared weekday "
                 f"({left.course_id} / {right.course_id})"
             )
 
@@ -674,6 +785,56 @@ class CoreqClass(SpecialClass):
         return left.section == right.section and course_ids in cls.COURSE_PAIRS
 
     @staticmethod
+    def is_coreq_compatible(left: Section, right: Section) -> bool:
+        """Structural prerequisite for a coreq pairing -- construction
+        requires this much (see ``validate``). Same instructor, and a
+        meeting shape that can even be compared: either both sides lack a
+        physical meeting, or both have one and, if they share a weekday,
+        it's not an outright conflict. How close together two physical
+        meetings are past this point is a softer question -- see
+        ``is_valid_schedule``, whose stricter failure becomes a
+        ``schedule_issues`` entry instead of blocking construction.
+        """
+        if left.instructor != right.instructor:
+            return False
+        if left.is_online and right.is_online:
+            return True
+        if left.is_online or right.is_online:
+            return False
+        if left.start is None or right.start is None:
+            return False
+        shared_days = bool(set(left.days or "") & set(right.days or ""))
+        if not shared_days:
+            return True
+        left_start = left.start.hour * 60 + left.start.minute
+        right_start = right.start.hour * 60 + right.start.minute
+        left_end = left_start + (left.duration or 0)
+        right_end = right_start + (right.duration or 0)
+        return 0 <= right_start - left_end <= 15 or 0 <= left_start - right_end <= 15
+
+    @classmethod
+    def _adjacency_issues(cls, left: Section, right: Section) -> tuple[str, ...]:
+        """Nonfatal companion to ``is_coreq_compatible``: report exactly how
+        a structurally sound pairing still falls short of ``is_valid_schedule``,
+        mirroring ``FourCreditClass.schedule_issues``."""
+        if cls.is_valid_schedule(left, right) or left.start is None or right.start is None:
+            return ()
+        label = f"{left.course_id} / {right.course_id}"
+        left_start = left.start.hour * 60 + left.start.minute
+        right_start = right.start.hour * 60 + right.start.minute
+        if bool(set(left.days or "") & set(right.days or "")):
+            return (
+                f"{label} coreq meetings are back-to-back but not in the "
+                f"same room ({left.building} {left.room} / "
+                f"{right.building} {right.room})",
+            )
+        gap = abs(left_start - right_start)
+        return (
+            f"{label} coreq meetings start {gap} minutes apart on "
+            "different weekdays; maximum is 30 minutes",
+        )
+
+    @staticmethod
     def is_valid_schedule(left: Section, right: Section) -> bool:
         """Same instructor, plus:
 
@@ -684,6 +845,12 @@ class CoreqClass(SpecialClass):
           within 30 minutes of each other on disjoint weekdays in any room --
           the latter covers the common MWF+TR/MW lecture pattern, which
           routinely uses two different rooms.
+
+        This is the full, strict rule the solver enforces (via
+        ``pairwise_predicate``) so its output is always fully compliant.
+        ``validate`` only enforces the weaker ``is_coreq_compatible``;
+        failing this stricter rule without failing that one becomes a
+        ``schedule_issues`` entry instead of blocking construction.
         """
         if left.instructor != right.instructor:
             return False
@@ -712,6 +879,9 @@ class CoreqClass(SpecialClass):
             # a real conflict, not a valid coreq pairing.
             return False
         return abs(left_start - right_start) <= 30
+
+    def pairwise_predicate(self) -> Callable[[Section, Section], bool] | None:
+        return self.is_valid_schedule
 
     def change_time(
         self, time_slot: str, *, record: int | None

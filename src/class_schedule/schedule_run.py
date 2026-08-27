@@ -52,10 +52,14 @@ class Attempt:
     error: str | None = None
 
     @property
-    def ranking(self) -> tuple[float, float, float]:
+    def ranking(self) -> tuple[float, float, float, float]:
+        """Fewer hard violations always outranks a "cleaner" objective --
+        see docs/codes.md: publication is never blocked on hard violations,
+        but among several attempts we still prefer the least-broken one."""
         if self.result is None:
-            return (float("inf"), float("inf"), float("inf"))
+            return (float("inf"), float("inf"), float("inf"), float("inf"))
         return (
+            len(self.hard_violations),
             self.worst_overload or 0.0,
             self.result.objective,
             self.soft_penalty or 0.0,
@@ -685,26 +689,27 @@ def run_term(
                 break
         except SolveTimeout as error:
             attempt_results.append(Attempt(number, None, None, error=str(error)))
-        except InfeasibleSchedule:
-            raise
+        except InfeasibleSchedule as error:
+            # Never a hard stop on its own (see docs/codes.md): this attempt's
+            # candidate space had no feasible assignment, but another attempt
+            # (different random seed) may still produce one. Only the total
+            # absence of any usable result below gives up for real.
+            attempt_results.append(Attempt(number, None, None, error=str(error)))
 
-    successful = [
-        attempt for attempt in attempt_results
-        if attempt.result is not None and not attempt.hard_violations
-    ]
-    if not successful:
-        hard_messages = [
-            violation.message
-            for attempt in attempt_results
-            for violation in attempt.hard_violations
-        ]
-        if hard_messages:
+    candidates = [attempt for attempt in attempt_results if attempt.result is not None]
+    if not candidates:
+        # There is truly nothing to publish -- not "some attempts had
+        # violations", but zero attempts produced a schedule at all. This is
+        # the one case that still has to fail outright: a report can't
+        # describe a schedule that was never built.
+        errors = list(dict.fromkeys(a.error for a in attempt_results if a.error))
+        if errors:
             raise InfeasibleSchedule(
                 "Every solve attempt returned an invalid schedule: "
-                + "; ".join(dict.fromkeys(hard_messages))
+                + "; ".join(errors)
             )
         raise SolveTimeout("Every solve attempt expired before finding a feasible schedule")
-    best = min(successful, key=lambda attempt: attempt.ranking)
+    best = min(candidates, key=lambda attempt: attempt.ranking)
     attempts_tuple = tuple(attempt_results)
     assert best.result is not None
 

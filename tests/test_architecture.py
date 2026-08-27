@@ -104,19 +104,40 @@ class SolverArchitectureTests(unittest.TestCase):
         self.assertEqual(solved.classes[0].sections[0].instructor, "Alice")
         self.assertEqual(solved.classes[0].sections[0].time_slot, "ONLINE")
 
-    def test_explicit_cross_listing_is_one_shared_meeting_after_solve(self):
+    def test_cross_listing_rows_are_never_forced_to_converge(self):
+        """Cross-listing rows are never required to match (see
+        docs/codes.md): a pair whose source template already had them in
+        different rooms/times is free to stay that way -- the solver has
+        no pairwise rule pulling them back together."""
+        from class_schedule.schedule_model import PersonRecord
+
         left = Section(
             "MATH", "1113", "001", "MWF 8:00am", 50, "102", "Alice",
             building="Corley", cross_list="XL1",
         )
         right = Section(
-            "STAT", "2163", "001", "MWF 10:00am", 50, "103", "Alice",
+            "STAT", "2163", "001", "TR 10:00am", 80, "103", "Alice",
             building="Corley", cross_list="XL1",
         )
-        config = self._config(("MATH 1113", "STAT 2163"))
+        config = SolverConfig(
+            persons={"Alice": PersonRecord("Alice", 6, ("MATH 1113", "STAT 2163"))},
+            preferences={},
+            meeting_patterns=[
+                MeetingPattern(
+                    "MWF", 50, (__import__("datetime").time(8),),
+                    frozenset({"normal", "cross_listing"}),
+                ),
+                MeetingPattern(
+                    "TR", 80, (__import__("datetime").time(10),),
+                    frozenset({"normal", "cross_listing"}),
+                ),
+            ],
+            rooms=[RoomRecord("Corley", "102"), RoomRecord("Corley", "103")],
+            version="test-config",
+        )
         solved = solve(Schedule([CrossListingClass((left, right))]), config)
         a, b = solved.classes[0].sections
-        self.assertTrue(CrossListingClass.is_shared_meeting(a, b))
+        self.assertFalse(CrossListingClass.is_shared_meeting(a, b))
 
     def test_detailed_result_reports_solver_metadata(self):
         section = Section("MATH", "1113", "001", "MWF 9:00am", 50, "101", "Alice", building="Corley")

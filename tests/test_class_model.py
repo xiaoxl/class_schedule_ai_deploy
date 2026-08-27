@@ -212,10 +212,68 @@ class CrossListingClassTests(unittest.TestCase):
         right = make_section(section="H01", instructor="Alice", room="101")
         self.assertTrue(CrossListingClass.is_honors_pair(left, right))
 
-    def test_honors_pair_different_room_is_not_honors_pair(self):
+    def test_honors_pair_recognition_does_not_require_a_shared_room(self):
+        # Recognition is purely structural (see docs/codes.md): a regular/
+        # honors pair that started out in different rooms is still one
+        # cross-listing, free to stay that way.
         left = make_section(section="001", instructor="Alice", room="101")
         right = make_section(section="H01", instructor="Alice", room="102")
-        self.assertFalse(CrossListingClass.is_honors_pair(left, right))
+        self.assertTrue(CrossListingClass.is_honors_pair(left, right))
+        self.assertFalse(CrossListingClass.is_shared_meeting(left, right))
+
+    def test_fully_matching_pair_locks_all_three_fields(self):
+        left = make_section(subject="MATH", number="1113", cross_list="XL1")
+        right = make_section(subject="STAT", number="2103", cross_list="XL1")
+        item = CrossListingClass((left, right))
+        self.assertEqual(item.synced_fields, frozenset({"instructor", "room", "time"}))
+        predicate = item.pairwise_predicate()
+        self.assertIsNotNone(predicate)
+        self.assertTrue(predicate(left, right))
+        moved = make_section(
+            subject="STAT", number="2103", cross_list="XL1",
+            room="102", time_slot="MWF 10:00am",
+        )
+        self.assertFalse(predicate(left, moved))
+
+    def test_partially_matching_pair_locks_only_the_shared_fields(self):
+        left = make_section(
+            subject="MATH", number="1113", cross_list="XL1",
+            room="101", time_slot="MWF 9:00am",
+        )
+        right = make_section(
+            subject="STAT", number="2103", cross_list="XL1",
+            room="205", time_slot="TR 11:00am", duration=80,
+        )
+        item = CrossListingClass((left, right))
+        self.assertEqual(item.synced_fields, frozenset({"instructor"}))
+        predicate = item.pairwise_predicate()
+        self.assertIsNotNone(predicate)
+        # Room/time may move independently -- only instructor is enforced.
+        self.assertTrue(predicate(
+            left, make_section(
+                subject="STAT", number="2103", cross_list="XL1",
+                room="310", time_slot="TR 1:00pm", duration=80,
+            ),
+        ))
+        self.assertFalse(predicate(
+            left, make_section(
+                subject="STAT", number="2103", cross_list="XL1",
+                instructor="Bob", room="205", time_slot="TR 11:00am", duration=80,
+            ),
+        ))
+
+    def test_no_shared_fields_leaves_no_pairwise_rule(self):
+        left = make_section(
+            subject="MATH", number="1113", cross_list="XL1",
+            instructor="Alice", room="101", time_slot="MWF 9:00am",
+        )
+        right = make_section(
+            subject="STAT", number="2103", cross_list="XL1",
+            instructor="Bob", room="205", time_slot="TR 11:00am", duration=80,
+        )
+        item = CrossListingClass((left, right))
+        self.assertEqual(item.synced_fields, frozenset())
+        self.assertIsNone(item.pairwise_predicate())
 
     def test_two_honors_sections_is_not_honors_pair(self):
         left = make_section(section="H01", instructor="Alice", room="101")

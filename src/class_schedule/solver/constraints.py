@@ -7,14 +7,7 @@ from dataclasses import dataclass
 
 from ortools.sat.python import cp_model
 
-from ..class_model import (
-    Class,
-    CoreqClass,
-    CrossListingClass,
-    FourCreditClass,
-    HybridClass,
-    Section,
-)
+from ..class_model import Class, Section
 from ..config_schema import WorkloadPolicySchema
 from ..schedule_model import (
     PersonRecord,
@@ -85,15 +78,15 @@ def add_placeholder_load_terms(
 
 
 def predicate_for(item: Class):
-    if isinstance(item, FourCreditClass):
-        return FourCreditClass.is_valid_schedule
-    if isinstance(item, HybridClass):
-        return HybridClass.is_hybrid
-    if isinstance(item, CoreqClass):
-        return CoreqClass.is_valid_schedule
-    if isinstance(item, CrossListingClass):
-        return CrossListingClass.is_shared_meeting
-    return None
+    """The two-row legality check ``item``'s own ``validate`` also enforces.
+
+    Sourced from the instance itself (``Class.pairwise_predicate``, see
+    ``docs/codes.md``) rather than a second, separately maintained
+    kind -> predicate mapping living here -- an instance method, not a
+    classmethod, because a ``CrossListingClass`` pair's rule depends on
+    what its own two rows started out sharing, not just its type.
+    """
+    return item.pairwise_predicate()
 
 
 def add_pairwise_validity_constraints(
@@ -110,14 +103,17 @@ def add_pairwise_validity_constraints(
             continue
         left_index, right_index = indices
         predicate = predicate_for(item)
+        if predicate is None:
+            # No pairwise rule at all for this instance (e.g. a
+            # CrossListingClass pair with nothing locked) -- the two rows
+            # are free to be assigned completely independently.
+            continue
         for left_candidate, left in enumerate(candidates[left_index]):
             for right_candidate, right in enumerate(candidates[right_index]):
-                valid = left.instructor == right.instructor
-                if valid and predicate is not None:
-                    valid = predicate(
-                        apply_candidate(sections[left_index], left),
-                        apply_candidate(sections[right_index], right),
-                    )
+                valid = predicate(
+                    apply_candidate(sections[left_index], left),
+                    apply_candidate(sections[right_index], right),
+                )
                 if not valid:
                     model.add_bool_or([
                         chosen[left_index][left_candidate].Not(),

@@ -446,11 +446,9 @@ def create_app() -> FastAPI:
             config.meeting_patterns, config.constraint_rules,
             config.workload_policy, config.back_to_back_policy,
         )
-        if evaluation.hard_violations:
-            raise HTTPException(422, {
-                "message": "Resolve hard conflicts before saving a version",
-                "violations": [_serialize_hard(v) for v in evaluation.hard_violations],
-            })
+        # Hard violations never block publication (see docs/codes.md) -- they
+        # are recorded in the report/manifest and returned below instead, so
+        # a version can always be saved and inspected, never refused.
         output_root = Path("out")
         version = next_version(output_root / term)
         destination = output_root / term / version
@@ -502,7 +500,8 @@ def create_app() -> FastAPI:
                 "attempts_requested": 1, "attempts_run": 1,
             },
             "validation": {
-                "hard_violations": 0, "soft_penalty": evaluation.soft_penalty,
+                "hard_violations": len(evaluation.hard_violations),
+                "soft_penalty": evaluation.soft_penalty,
                 "worst_overload": None,
             },
         }
@@ -514,16 +513,21 @@ def create_app() -> FastAPI:
                 "BestBound": None, "SolveSeconds": 0, "CandidateCount": None,
                 "SearchWorkers": 0, "SoftPenalty": evaluation.soft_penalty,
                 "SoftFindings": len(evaluation.soft_findings),
-                "HardViolations": 0, "WorstOverload": None, "Error": None,
+                "HardViolations": len(evaluation.hard_violations),
+                "WorstOverload": None, "Error": None,
             }],
             report=report, manifest=manifest, applied_overrides=no_overrides,
             reconciliation=reconciliation,
         )
-        logger.info("Published browser schedule as %s/%s", term, version)
+        logger.info(
+            "Published browser schedule as %s/%s (%d hard violation(s))",
+            term, version, len(evaluation.hard_violations),
+        )
         return {
             "term": term, "version": version,
             "output_dir": str(paths.output_dir),
             "schedule_path": str(paths.schedule_path),
+            "hard_violations": [_serialize_hard(v) for v in evaluation.hard_violations],
         }
 
     app.mount("/", _NoCacheStaticFiles(directory=PACKAGE_WEB, html=True), name="web")

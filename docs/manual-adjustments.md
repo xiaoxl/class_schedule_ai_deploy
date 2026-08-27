@@ -4,7 +4,7 @@
 
 Start the interface from [the documentation home](index.md). Import a starting CSV/XLSX schedule, drag meetings, or use the right-click assignment menu. Changes remain temporary until **Save New Version** is selected.
 
-Saving validates the schedule and uses the same atomic publisher as solver output. Hard conflicts prevent saving. Successful output goes to `out/<package>/verN/` with schedule, baseline, generated reconciliation audit, cumulative schedule diff, reports, and manifest.
+Saving uses the same atomic publisher as solver output. As long as the schedule can be built at all, saving always succeeds -- hard conflicts never block it, they are simply recorded in the version's report and manifest for review. Output goes to `out/<package>/verN/` with schedule, baseline, generated reconciliation audit, cumulative schedule diff, reports, and manifest.
 
 ## TOML overrides
 
