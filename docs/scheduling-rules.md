@@ -35,4 +35,4 @@ Contract load, course-number eligibility, and back-to-back policy come from the 
 
 The objective considers instructor/time/room changes, preferences, back-to-back rules, contract load, and New Instructor use. `schedule_model.evaluate_schedule()` is shared by CLI validation, solver attempts, reports, and the web API. Teaching load always comes from atomic classes through `teaching_loads()`.
 
-A successful solver status is not sufficient by itself. Hard violations never block saving or exporting (see "Nonfatal atomic-class issues" below), but review them along with workload and soft findings before treating a version as done.
+A successful solver status is not sufficient by itself. Hard violations never block saving or exporting (see "Nonfatal atomic-class issues" above), but review them along with workload and soft findings before treating a version as done.

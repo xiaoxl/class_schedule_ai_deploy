@@ -514,7 +514,10 @@ class ConfigurationFileManagementTests(unittest.TestCase):
         self.assertIn('data-instructor=', script)
         self.assertIn('event.target.closest(".load-row-button")', script)
         self.assertIn('function recordClock(minute)', script)
-        self.assertIn('startText=recordClock(minute)', script)
+        # moveSection no longer computes Time Slot/Duration locally -- it
+        # posts to POST /api/edit and waits for the server's answer (see
+        # docs/codes.md's "linking rules moved ... behind POST /api/edit").
+        self.assertIn('submitEdit(classIndex,recordIndex,"time",{days:newDays,start})', script)
 
     def test_replacing_template_keeps_only_the_latest_original_filename(self):
         package = self.config_root / "27S"

@@ -31,8 +31,11 @@ import psutil
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.staticfiles import StaticFiles
 
+from . import record_utils
 from . import solver as solver_module
+from .class_model import Class
 from .config_inference import infer_configuration_from_template
+from .pattern_rules import pattern_applies
 from .schedule_io import read_schedule
 from .schedule_run import _verified_initial, next_version
 from .version_publisher import publish_version, sha256
@@ -387,6 +390,73 @@ def create_app() -> FastAPI:
     async def analyze_current_schedule(payload: dict):
         schedule, config = _schedule_from_payload(payload)
         return _analysis_payload(schedule, config)
+
+    @app.post("/api/edit")
+    async def edit_schedule_class(payload: dict):
+        """The single entry point for every web edit (drag, course-list
+        time picker, instructor/room assignment). Which records an edit
+        to "instructor"/"time"/"room" must also touch is decided entirely
+        by the atomic-class object (``Class.edit_targets``/``apply_edit``,
+        see docs/codes.md) -- the browser only ever names one row and a
+        new value; it never decides linking itself.
+        """
+        schedule, config = _schedule_from_payload(payload)
+        try:
+            class_index = int(payload.get("class_index"))
+            record_index = int(payload.get("record_index"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "class_index and record_index must be integers")
+        if not 0 <= class_index < len(schedule.classes):
+            raise HTTPException(400, f"Unknown class_index: {class_index}")
+        item = schedule.classes[class_index]
+        if not 0 <= record_index < len(item.sections):
+            raise HTTPException(400, f"Unknown record_index: {record_index}")
+        field = payload.get("field")
+        value = payload.get("value")
+        section = item.sections[record_index]
+        if field in ("time", "room") and section.is_online:
+            raise HTTPException(
+                400, "Online/arranged rows only accept instructor edits",
+            )
+        if field == "instructor":
+            if not isinstance(value, str) or not value.strip():
+                raise HTTPException(400, "instructor value must be a non-empty string")
+            changes: dict[str, object] = {"instructor": value.strip()}
+        elif field == "room":
+            if not isinstance(value, dict):
+                raise HTTPException(400, "room value must be {building, room}")
+            changes = {
+                "building": record_utils.text(value.get("building", "")),
+                "room": record_utils.text(value.get("room", "")),
+            }
+        elif field == "time":
+            if not isinstance(value, dict) or "days" not in value or "start" not in value:
+                raise HTTPException(400, "time value must be {days, start}")
+            days = record_utils.text(value.get("days", "")).upper()
+            if not days:
+                raise HTTPException(400, "time.days must not be blank")
+            try:
+                start = record_utils.clock(value["start"])
+            except ValueError as error:
+                raise HTTPException(400, str(error)) from error
+            duration = (
+                _resolve_meeting_duration(item, record_index, days, config)
+                or section.duration or 0
+            )
+            clock_text = start.strftime("%I:%M%p").lstrip("0").lower()
+            changes = {"time_slot": f"{days} {clock_text}", "duration": duration}
+        else:
+            raise HTTPException(400, f"Unknown field: {field!r}")
+        try:
+            schedule.classes[class_index] = item.apply_edit(
+                field, record_index, **changes,
+            )
+        except (ValueError, IndexError) as error:
+            raise HTTPException(400, str(error)) from error
+        return {
+            "classes": _serialize_schedule(schedule),
+            "violations": _analysis_payload(schedule, config),
+        }
 
     @app.post("/api/export/{view}")
     async def export_current_schedule(view: str, payload: dict):
@@ -1048,6 +1118,26 @@ class _NoCacheStaticFiles(StaticFiles):
         return response
 
 
+def _resolve_meeting_duration(
+    item: Class, record_index: int, days: str,
+    config: solver_module.SolverConfig,
+) -> int | None:
+    """The configured duration for moving ``item``'s ``record_index`` row
+    to a new ``days`` pattern (e.g. dragging a FourCreditClass's MWF
+    meeting onto a T column) -- mirrors what the frontend used to compute
+    locally (draggedPattern/patternDuration in app.js) using the same
+    ``pattern_rules``/``config.meeting_patterns`` machinery ``/api/solve``'s
+    candidate generation and ``evaluate_schedule``'s meeting-pattern check
+    already rely on, so "what's a legal duration for this day" is decided
+    in exactly one place.
+    """
+    section = item.sections[record_index]
+    for pattern in config.meeting_patterns:
+        if pattern.days == days and pattern_applies(item, section, pattern):
+            return pattern.duration_minutes
+    return None
+
+
 def _serialize_schedule(schedule: Schedule) -> list[dict]:
     return [
         {
@@ -1055,10 +1145,20 @@ def _serialize_schedule(schedule: Schedule) -> list[dict]:
             "course_ids": list(item.course_ids),
             "credit_hours": item.credit_hours,
             "sections": [_serialize_record(r) for r in item.to_records()],
-            # CrossListingClass only -- see docs/codes.md. Lets the web UI
-            # decide whether editing instructor/room/time on one row should
-            # propagate to the other, instead of guessing from whatever the
-            # two rows' current values happen to be.
+            # Whether an edit to this field would touch more than this row
+            # (see docs/codes.md's edit_targets/apply_edit matrix) -- the
+            # web UI reads this straight off the view instead of guessing
+            # from `kind`/`synced_fields` itself, so there is exactly one
+            # place (Class.edit_targets) that knows the answer. `0` is an
+            # arbitrary row: for every current kind, whether a field links
+            # is a property of the class/pair, not of which row you'd edit
+            # through, so any valid record_index gives the same answer.
+            "linked_fields": {
+                field: len(item.edit_targets(field, 0)) > 1
+                for field in ("instructor", "room", "time")
+            },
+            # CrossListingClass only -- the raw, persisted config knowledge
+            # `linked_fields` above is itself derived from. See docs/codes.md.
             "synced_fields": (
                 sorted(item.synced_fields)
                 if hasattr(item, "synced_fields") else None

@@ -324,6 +324,41 @@ class NormalClass:
         )
         return replace(self, sections=updated)
 
+    # ---- unified web/API editing ----
+    #
+    # The single source of truth for what a live editor (the web UI, or
+    # any future API caller) calls "linking": does editing "instructor",
+    # "time", or "room" on one row also have to touch the class's other
+    # row? See docs/codes.md's linking matrix. Callers must never
+    # re-derive this from current field values or duplicate it per kind
+    # themselves (that was the bug this replaced -- e.g. inferring
+    # linkage from whether the two rows' Time Slot currently happens to
+    # match, which conflates "are they the same right now" with "are
+    # they required to be").
+
+    def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
+        """Which record indices an edit to ``field`` must also touch,
+        given the row the edit was made through. Default: only that row.
+        """
+        return (record_index,)
+
+    def apply_edit(
+        self, field: str, record_index: int, **changes: object,
+    ) -> "NormalClass":
+        """Apply one field edit through ``edit_targets``, returning a new
+        instance. ``changes`` are the actual ``Section`` attribute(s)
+        this field touches (already resolved by the caller -- e.g. a
+        "room" edit supplies both ``room`` and ``building``).
+        """
+        if not 0 <= record_index < len(self.sections):
+            raise IndexError(f"CSV record index out of range: {record_index}")
+        targets = self.edit_targets(field, record_index)
+        updated = tuple(
+            replace(section, **changes) if index in targets else section
+            for index, section in enumerate(self.sections)
+        )
+        return replace(self, sections=updated)
+
 
 @dataclass(slots=True)
 class SpecialClass(NormalClass):
@@ -397,6 +432,11 @@ class FourCreditClass(SpecialClass):
 
     def pairwise_predicate(self) -> Callable[[Section, Section], bool] | None:
         return self.is_valid_schedule
+
+    def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
+        # Instructor must match (is_four_credit); the MWF and T/R meetings
+        # are never the same time or necessarily the same room.
+        return (0, 1) if field == "instructor" else (record_index,)
 
     def change_time(
         self, time_slot: str, *, record: int | None = None
@@ -524,6 +564,15 @@ class HybridClass(SpecialClass):
 
     def pairwise_predicate(self) -> Callable[[Section, Section], bool] | None:
         return self.is_valid_schedule
+
+    def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
+        # Instructor must match; the companion row has no time/room of its
+        # own to edit at all (see docs/codes.md -- callers should disable
+        # those controls for it), so route either row's time/room edit to
+        # the physical one.
+        if field == "instructor":
+            return (0, 1)
+        return (self.sections.index(self.physical_section),)
 
     def to_records(self) -> list[dict[str, object]]:
         """Flatten with an ONLINE row regenerated from the physical row."""
@@ -705,6 +754,12 @@ class CrossListingClass(SpecialClass):
 
         return _predicate
 
+    def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
+        # The one kind whose linking is per-instance, not per-kind -- see
+        # synced_fields (docs/codes.md): a field the source data already
+        # had matching stays linked, one that didn't stays independent.
+        return (0, 1) if field in self.synced_fields else (record_index,)
+
     @staticmethod
     def is_honors_pair(left: Section, right: Section) -> bool:
         """Same course, one regular section and one 'H'-prefixed honors
@@ -778,6 +833,21 @@ class CoreqClass(SpecialClass):
         }
         return left.section == right.section and course_ids in cls.COURSE_PAIRS
 
+    @staticmethod
+    def _back_to_back(left: Section, right: Section) -> bool:
+        """Shared weekday, and a gap of 15 minutes or less either way."""
+        if left.start is None or right.start is None:
+            return False
+        left_start = left.start.hour * 60 + left.start.minute
+        right_start = right.start.hour * 60 + right.start.minute
+        left_end = left_start + (left.duration or 0)
+        right_end = right_start + (right.duration or 0)
+        shared_days = bool(set(left.days or "") & set(right.days or ""))
+        return shared_days and (
+            0 <= right_start - left_end <= 15
+            or 0 <= left_start - right_end <= 15
+        )
+
     @classmethod
     def _issues(cls, left: Section, right: Section) -> tuple[str, ...]:
         """Every reason ``is_valid_schedule`` might fail, as a report.
@@ -805,13 +875,8 @@ class CoreqClass(SpecialClass):
             return (f"{label} coreq meetings require a valid time",)
         left_start = left.start.hour * 60 + left.start.minute
         right_start = right.start.hour * 60 + right.start.minute
-        left_end = left_start + (left.duration or 0)
-        right_end = right_start + (right.duration or 0)
         shared_days = bool(set(left.days or "") & set(right.days or ""))
-        back_to_back = shared_days and (
-            0 <= right_start - left_end <= 15
-            or 0 <= left_start - right_end <= 15
-        )
+        back_to_back = cls._back_to_back(left, right)
         if shared_days and not back_to_back:
             # Same weekday on both sides but not back-to-back: the two
             # meetings would overlap or nearly overlap on a shared day --
@@ -851,6 +916,40 @@ class CoreqClass(SpecialClass):
 
     def pairwise_predicate(self) -> Callable[[Section, Section], bool] | None:
         return self.is_valid_schedule
+
+    def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
+        # Instructor must match; the two meetings are never the same
+        # time. Room only has to match when the pair is currently
+        # back-to-back on a shared weekday (is_valid_schedule's rule) --
+        # otherwise each meeting's room is independent.
+        if field == "instructor":
+            return (0, 1)
+        if field == "room" and self._back_to_back(*self.sections):
+            return (0, 1)
+        return (record_index,)
+
+    def apply_edit(
+        self, field: str, record_index: int, **changes: object,
+    ) -> "CoreqClass":
+        updated = super(CoreqClass, self).apply_edit(field, record_index, **changes)
+        if field != "time":
+            return updated
+        left, right = updated.sections
+        if self._back_to_back(left, right) and not (
+            left.room and left.room == right.room and left.building == right.building
+        ):
+            # This edit just made the pair back-to-back on a shared
+            # weekday, which requires a matching room (is_valid_schedule)
+            # -- follow whichever row wasn't just moved, rather than
+            # immediately reporting a fresh coreq_invalid room mismatch.
+            other = updated.sections[1 - record_index]
+            matched = tuple(
+                replace(section, room=other.room, building=other.building)
+                if index == record_index else section
+                for index, section in enumerate(updated.sections)
+            )
+            updated = replace(updated, sections=matched)
+        return updated
 
     def change_time(
         self, time_slot: str, *, record: int | None

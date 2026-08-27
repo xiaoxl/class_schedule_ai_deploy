@@ -442,3 +442,269 @@ solve-then-hand-edit-then-resolve workflow; dragging in the web UI *is*
 the hand-edit, there is no second solve step to protect it from), and the
 ability to give an unscheduled (TBA/blank) row a brand-new time slot from
 the grid UI (the course-list view already shows it; that's enough).
+
+## Addendum, same day: linking rules moved from `app.js` into the atomic-class model, behind `POST /api/edit`
+
+The `linkedField()` fix above turned out to be a stopgap, not the real
+design -- it was a second, JS-side reimplementation of a rule the Python
+model already half-had (and, for Coreq's instructor field, had backwards:
+`linkedField` returned `false`/"don't link" for the one field
+`CoreqClass.is_valid_schedule` requires to *always* match). Two engines
+computing the same linkage independently will drift; this section replaces
+`linkedField()` with a single rule, in Python, that every edit path calls
+through one endpoint instead of guessing locally.
+
+### The linking matrix (now the literal contract, not prose)
+
+| Kind | Instructor | Time | Room |
+|---|---|---|---|
+| Normal | this row | this row | this row |
+| FourCredit | both rows | this meeting | this meeting |
+| Hybrid | both rows | physical row only | physical row only |
+| Coreq | both rows | this meeting (never shared) | both rows *iff currently back-to-back on a shared weekday*, else this meeting |
+| CrossListing | per `synced_fields` | per `synced_fields` | per `synced_fields` |
+
+### `Class.edit_targets` / `Class.apply_edit`
+
+```python
+# NormalClass (base)
+def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
+    return (record_index,)                       # default: just this row
+
+def apply_edit(self, field: str, record_index: int, **changes) -> "NormalClass":
+    targets = self.edit_targets(field, record_index)
+    updated = tuple(
+        replace(section, **changes) if index in targets else section
+        for index, section in enumerate(self.sections)
+    )
+    return replace(self, sections=updated)
+```
+
+Each kind overrides only `edit_targets` (`FourCreditClass`/`HybridClass`:
+instructor links, time/room don't; `HybridClass` additionally always
+routes time/room to `physical_section` regardless of which row the edit
+named; `CrossListingClass`: `field in self.synced_fields`) -- except
+`CoreqClass`, which needs one more thing `edit_targets` alone can't
+express:
+
+```python
+# CoreqClass
+def edit_targets(self, field, record_index):
+    if field == "instructor": return (0, 1)
+    if field == "room" and self._back_to_back(*self.sections): return (0, 1)
+    return (record_index,)
+
+def apply_edit(self, field, record_index, **changes):
+    updated = super().apply_edit(field, record_index, **changes)
+    if field == "time":
+        left, right = updated.sections
+        if self._back_to_back(left, right) and not (matching room):
+            # just became back-to-back -- follow the row that wasn't
+            # moved, instead of reporting a fresh coreq_invalid gap
+            ... copy the other row's room/building onto the moved one ...
+    return updated
+```
+
+A time edit that makes a disjoint-day coreq pair become back-to-back on a
+shared weekday now auto-follows the untouched row's room (a detail the
+project owner specified explicitly) -- otherwise a perfectly reasonable
+drag would instantly report `coreq_invalid` for a room mismatch nobody
+asked to create. `CoreqClass._issues`/`is_valid_schedule` also now share
+this same `_back_to_back` staticmethod (previously duplicated inline).
+
+### `POST /api/edit`: the one endpoint every edit path calls
+
+Request: `{package, records, class_index, record_index, field, value}` --
+`field` is `"instructor"` (`value`: a name string), `"room"` (`value`:
+`{building, room}`), or `"time"` (`value`: `{days, start}`, 24-hour
+`"HH:MM"`). The handler:
+
+1. Rebuilds the `Schedule` from `records` (`_schedule_from_payload`,
+   already shared with `/api/analyze`/`/api/solve`).
+2. Rejects a `"time"`/`"room"` edit on an online/arranged row outright
+   (`section.is_online`) -- per the project owner, those rows only ever
+   take an instructor edit; there's no meeting to move or room to assign.
+3. For `"time"`, resolves the duration via a new `_resolve_meeting_duration`
+   helper -- the same `pattern_rules.pattern_applies` +
+   `config.meeting_patterns` lookup `/api/solve`'s candidate generation and
+   `evaluate_schedule`'s meeting-pattern check already use, so "what's a
+   legal duration for this day" has one source, not a second copy
+   (previously `app.js`'s `patternDuration`/`draggedPattern`).
+4. Calls `item.apply_edit(field, record_index, **changes)` -- the atomic
+   class decides linkage; the endpoint never does.
+5. Returns `{"classes": ..., "violations": ...}`, the same shape
+   `/api/solve` already returns, so the frontend's response handling
+   doesn't need a separate code path.
+
+Errors (unknown `class_index`/`record_index`, an edit that can't even be
+parsed) are `HTTPException(400, ...)`; a semantically bad edit (e.g. an
+instructor that breaks nothing) is never an error at all -- it just shows
+up in the returned `violations`, per the never-block design above.
+
+### What's done, what's next
+
+Done and tested (`tests/test_class_model.py`, `tests/test_edit_api.py` via
+`fastapi.testclient.TestClient`): the full `edit_targets`/`apply_edit`
+matrix on all five kinds, the Coreq instructor-linking fix, the Coreq
+room-follow rule, and `/api/edit` end-to-end including the online/arranged
+rejection and the 400 error cases.
+
+The frontend rewiring described as "not yet done" below is now done -- see
+the next addendum.
+
+## Addendum, 2026-08-27: `app.js`'s four edit paths now call `POST /api/edit`
+
+All four web edit actions -- dragging a block, the course-list time
+picker, "Assign instructor", "Assign room" -- used to mutate `data`
+locally using `linkedField()`'s guesses (see the two addenda above) before
+this phase's backend redesign made that logic wrong in one case (Coreq
+instructor) and redundant everywhere else (the atomic-class model already
+has the real answer, behind `POST /api/edit`). This addendum wires the
+frontend to actually use it.
+
+### The version that shipped: always wait, no local mutation
+
+Before implementing, we discussed shipping a local optimistic update for
+instructor/room edits (their `edit_targets` never depends on the new
+value, so the frontend could apply them immediately and let the network
+round trip only correct it if wrong) while still waiting on time edits
+(duration depends on backend-resolved meeting patterns). The user chose
+the simpler path first: **every edit path calls `/api/edit` and waits for
+the response before touching the view at all**, with the decision on
+whether the added latency is worth avoiding deferred until after trying
+it ("先修改，测试看结果再说，有可能这个延迟我没有问题" -- implement it,
+test it, the delay might not actually be a problem).
+
+The honest trade-off, discussed explicitly: the old local-mutation
+`moveSection`/`assignTeacher`/`assignRoom` never depended on the network
+for the edit itself (only the decoupled, already-soft-failing
+`/api/analyze` debounce touched the network) -- it could not have a
+"network problem" for an edit, only a correctness bug (which is exactly
+what it had: the Coreq instructor case). The new design trades that
+zero-network-dependency property for correctness-by-construction (the
+linking rule can never drift from the backend's, because there's only one
+copy of it). On a localhost deployment this is expected to be cheap, but
+it is a genuine new dependency, not a free change.
+
+### What changed in `app.js`
+
+- **`submitEdit(classIndex, recordIndex, field, value)`** -- the one
+  function all four paths call. Posts `{package, records, class_index,
+  record_index, field, value}` to `/api/edit`, and on success replaces
+  `data.classes`/`data.violations` with the response (which already
+  reflects whatever linking `edit_targets` decided, and fresh
+  `violations` -- no separate `/api/analyze` call needed). Throws on a
+  non-2xx response so callers can toast the error and leave `data`
+  untouched.
+- **`moveSection(minute, day)`** -- now `async`. Still uses
+  `draggedPattern()` to translate the drop location into a day pattern
+  (pure UI gesture translation, unrelated to linking, so it stays), then
+  sends `{days, start}` via `submitEdit` with `field: "time"`. No longer
+  computes duration, `Delivery Mode`, or which rows to touch locally.
+- **`assignTeacher(name)`** and the `#assignRoom` click handler -- now
+  `async`, call `submitEdit` with `field: "instructor"` / `field: "room"`.
+- The course-list `.slot-select` change handler -- now `async`, calls
+  `submitEdit` with `field: "time"`. Its `<select>` is now `disabled` for
+  any row that isn't `in_person` (online/arranged rows don't get a new
+  time from this view at all, matching the decision recorded in the
+  Delivery Mode section above -- "tba只用在section view里面显示出来，不需要安排新时间").
+- **`minuteToClock24(minute)`** -- new helper, drag-grid minute offset to
+  a 24-hour `"HH:MM"` string (what `/api/edit`'s `time.start` expects;
+  matches `Section.to_record()`'s `Start`/`End` serialization, see the
+  Delivery Mode section).
+- **`parseSlotValue(text)`** -- new helper, parses a course-list option's
+  `"MWF 9:00am"`-style text (produced by `/api/edit`'s own
+  `record_utils.clock`/`parse_slot` round trip) back into `{days,
+  start:"HH:MM"}`.
+- **`markDirty(skipAnalysis)`** -- gained an optional parameter; the four
+  edit handlers pass `true` since `/api/edit`'s response already carries
+  fresh `violations`, making the debounced `/api/analyze` call redundant
+  for them. `markDirty()`'s other caller (`#solveButton`, after
+  `/api/solve`) is unaffected.
+- **`editBusy`** -- new module-level flag (separate from the existing
+  `busy`, which gates Auto Schedule/Save) so a second edit can't be fired
+  while one is still in flight; it is not a lock in the "prevent Auto
+  Schedule" sense discussed and declined earlier, just a guard against a
+  literal double click/drop.
+- **Removed as dead code**: `deliveryModeOf` (existed only so local
+  mutation could keep `Delivery Mode` in sync with a locally-changed `Time
+  Slot`; there is no local mutation left to keep in sync), and
+  `patternRole`/`patternDuration` (existed only so `moveSection` could
+  compute a new duration locally; `/api/edit` resolves it server-side via
+  `_resolve_meeting_duration`, the same `pattern_rules`/
+  `config.meeting_patterns` machinery `/api/solve` and `evaluate_schedule`
+  already used).
+- `linkedField()` and `contextHintText()` stayed as display-only helpers
+  (neither decides an actual edit's targets any more -- `/api/edit` does),
+  but see the next addendum: what they read changed a few minutes later.
+- One corresponding test fix: `tests/test_configuration_web.py`'s static
+  content sanity test asserted the literal substring
+  `'startText=recordClock(minute)'` was present in `app.js` as a proxy for
+  "`moveSection` exists and does the expected thing" -- updated to assert
+  `moveSection` calls `submitEdit(classIndex,recordIndex,"time",...)`
+  instead, since the local `startText` computation this checked for no
+  longer exists.
+
+### What's still open
+
+The optimistic-update question above (skip the network wait for
+instructor/room edits, since their targets don't depend on the new value)
+is deferred pending manual testing of the always-wait version's felt
+latency. No frontend automated test exercises the four rewired handlers
+directly (the project has no JS test runner); `tests/test_edit_api.py`
+covers the `/api/edit` contract they now depend on, and
+`tests/test_configuration_web.py` sanity-checks that the expected call
+sites still exist in the shipped `app.js`.
+
+## Addendum, 2026-08-27: `linkedField()` reads the view payload instead of guessing
+
+Immediately after the rewiring above shipped, a correction: this was
+already the agreed design from an earlier same-day discussion --
+"在构建视图的时候，把是否需要相同的信息从配置里面读出来，然后直接使用"
+(when building the view, read whether fields need to match out of the
+config, and use that directly) -- and the rewiring above left
+`linkedField()` still computing its own answer from `item.kind`/
+`item.synced_fields` in `app.js`, i.e. still a second, hand-maintained
+copy of a rule the backend already has the real answer to. It happened to
+be *correct* (the Coreq bug was fixed at the source, in
+`CoreqClass.edit_targets`, not in this JS function), but it was still the
+wrong shape: exactly the kind of duplication this whole redesign was
+meant to eliminate.
+
+Fixed by having `_serialize_schedule` (`webapp.py`) compute the answer
+once, per class, and ship it:
+
+```python
+"linked_fields": {
+    field: len(item.edit_targets(field, 0)) > 1
+    for field in ("instructor", "room", "time")
+},
+```
+
+`0` is an arbitrary row index, not a special one: for every current kind,
+"does this field link the two rows" is a property of the class (or, for
+Coreq's room field, of the pair's current back-to-back state) -- never of
+*which* row you'd start the edit from -- so `edit_targets(field, 0)` and
+`edit_targets(field, 1)` always agree. (This stops being true only if a
+future kind's linking genuinely depends on which row was clicked, which
+none of the current five do.)
+
+`app.js`'s `linkedField()` shrank to a one-line read:
+
+```js
+function linkedField(item,field){return !!item.linked_fields?.[field];}
+```
+
+`contextHintText()` simplified to call it for both `"instructor"` and
+`"room"` instead of special-casing `CrossListingClass`/`synced_fields`
+itself. The `"synced_fields"` payload field stays as-is alongside the new
+one -- it is the raw, persisted config knowledge (which fields a
+CrossListingClass instance was configured/detected as sharing);
+`linked_fields` is the generalized, always-present answer derived from it
+(for CrossListingClass) or from each kind's fixed rule (for the other
+four), and is what the UI should read from now on.
+
+Tested by a new `tests/test_edit_api.py` case
+(`test_view_payload_carries_linked_fields_from_edit_targets`), asserting a
+disjoint-weekday Coreq pair's `linked_fields` comes back as
+`{"instructor": True, "room": False, "time": False}`.

@@ -117,6 +117,16 @@ class FourCreditClassTests(unittest.TestCase):
         self.assertTrue(FourCreditClass.is_valid_schedule(left, right))
         self.assertEqual(item.schedule_issues, ())
 
+    def test_instructor_links_both_rows_time_and_room_stay_independent(self):
+        item = FourCreditClass((
+            make_section(time_slot="MWF 9:00am", room="101"),
+            make_section(time_slot="T 9:00am", duration=75, room="205"),
+        ))
+        self.assertEqual(item.edit_targets("instructor", 0), (0, 1))
+        self.assertEqual(item.edit_targets("instructor", 1), (0, 1))
+        self.assertEqual(item.edit_targets("time", 0), (0,))
+        self.assertEqual(item.edit_targets("room", 1), (1,))
+
 
 class HybridClassTests(unittest.TestCase):
     def test_m_prefixed_physical_and_tba_pair_is_hybrid(self):
@@ -165,6 +175,19 @@ class HybridClassTests(unittest.TestCase):
         self.assertEqual(online["Instructor"], "Alice")
         self.assertIsNone(online["Room"])
         self.assertEqual(in_person["Room"], "269")
+
+    def test_time_and_room_edits_always_route_to_the_physical_row(self):
+        physical = make_section(section="F01", room="269", building="Corley")
+        hybrid = HybridClass((physical,))  # sections = (companion, physical)
+        physical_index = hybrid.sections.index(hybrid.physical_section)
+        self.assertEqual(physical_index, 1)
+        self.assertEqual(hybrid.edit_targets("time", 0), (1,))
+        self.assertEqual(hybrid.edit_targets("room", 0), (1,))
+        self.assertEqual(hybrid.edit_targets("time", 1), (1,))
+
+    def test_instructor_links_both_rows(self):
+        hybrid = HybridClass((make_section(section="F01", room="269"),))
+        self.assertEqual(hybrid.edit_targets("instructor", 0), (0, 1))
 
     def test_non_prefixed_section_is_not_hybrid(self):
         left = make_section(section="001", room="101")
@@ -286,6 +309,21 @@ class CrossListingClassTests(unittest.TestCase):
             ),
         ))
 
+    def test_edit_targets_follow_synced_fields_per_field(self):
+        left = make_section(
+            subject="MATH", number="1113", cross_list="XL1",
+            instructor="Alice", room="101", time_slot="MWF 9:00am",
+        )
+        right = make_section(
+            subject="STAT", number="2103", cross_list="XL1",
+            instructor="Alice", room="205", time_slot="MWF 9:00am",
+        )
+        item = CrossListingClass((left, right))
+        self.assertEqual(item.synced_fields, frozenset({"instructor", "time"}))
+        self.assertEqual(item.edit_targets("instructor", 0), (0, 1))
+        self.assertEqual(item.edit_targets("time", 1), (0, 1))
+        self.assertEqual(item.edit_targets("room", 0), (0,))
+
     def test_two_honors_sections_is_not_honors_pair(self):
         left = make_section(section="H01", instructor="Alice", room="101")
         right = make_section(section="H02", instructor="Alice", room="101")
@@ -367,6 +405,62 @@ class CoreqClassTests(unittest.TestCase):
         )
         coreq = CoreqClass((left, right))
         self.assertEqual(coreq.credit_hours, 6)  # 1113 -> 3, 0903 -> 3 (last digit each)
+
+    def test_instructor_edit_links_both_rows(self):
+        # is_valid_schedule requires a shared instructor (class_model.py
+        # ~L795) -- editing just one row's instructor is never legal on
+        # its own, so it must always be routed to both (see docs/codes.md).
+        left = make_section(number="1113", time_slot="MWF 9:00am", duration=50, room="101")
+        right = make_section(number="0903", time_slot="T 9:30am", duration=80, room="102")
+        item = CoreqClass((left, right))
+        self.assertEqual(item.edit_targets("instructor", 0), (0, 1))
+        self.assertEqual(item.edit_targets("instructor", 1), (0, 1))
+
+    def test_time_edit_never_links(self):
+        left = make_section(number="1113", time_slot="MWF 9:00am", duration=50, room="101")
+        right = make_section(number="0903", time_slot="T 9:30am", duration=80, room="102")
+        item = CoreqClass((left, right))
+        self.assertEqual(item.edit_targets("time", 0), (0,))
+        self.assertEqual(item.edit_targets("time", 1), (1,))
+
+    def test_room_edit_links_only_when_currently_back_to_back(self):
+        back_to_back = CoreqClass((
+            make_section(number="1113", time_slot="MWF 9:00am", duration=50, room="101"),
+            make_section(number="0903", time_slot="MWF 9:50am", duration=50, room="101"),
+        ))
+        self.assertEqual(back_to_back.edit_targets("room", 0), (0, 1))
+        disjoint_days = CoreqClass((
+            make_section(number="1113", time_slot="MWF 9:00am", duration=50, room="101"),
+            make_section(number="0903", time_slot="T 9:20am", duration=75, room="102"),
+        ))
+        self.assertEqual(disjoint_days.edit_targets("room", 0), (0,))
+
+    def test_time_edit_that_creates_back_to_back_follows_the_other_rows_room(self):
+        # Moving the disjoint-day meeting onto the other's weekday, right
+        # after it, makes the pair back-to-back -- which requires a
+        # matching room. apply_edit should carry the untouched row's room
+        # over automatically instead of leaving a fresh coreq_invalid gap.
+        left = make_section(number="1113", time_slot="MWF 9:00am", duration=50, room="101")
+        right = make_section(number="0903", time_slot="T 9:20am", duration=75, room="205")
+        item = CoreqClass((left, right))
+        self.assertEqual(item.schedule_issues, ())  # valid to start (30-minute rule)
+
+        moved = item.apply_edit("time", 1, time_slot="MWF 9:50am", duration=50)
+
+        moved_left, moved_right = moved.sections
+        self.assertTrue(CoreqClass._back_to_back(moved_left, moved_right))
+        self.assertEqual(moved_right.room, "101")
+        self.assertEqual(moved_right.building, moved_left.building)
+        self.assertEqual(moved.schedule_issues, ())
+
+    def test_time_edit_that_stays_disjoint_does_not_touch_room(self):
+        left = make_section(number="1113", time_slot="MWF 9:00am", duration=50, room="101")
+        right = make_section(number="0903", time_slot="T 9:20am", duration=75, room="205")
+        item = CoreqClass((left, right))
+
+        moved = item.apply_edit("time", 1, time_slot="R 9:10am", duration=75)
+
+        self.assertEqual(moved.sections[1].room, "205")
 
 
 class NormalClassTests(unittest.TestCase):
