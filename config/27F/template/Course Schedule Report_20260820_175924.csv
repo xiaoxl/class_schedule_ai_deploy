@@ -1,0 +1,125 @@
+Subject,Number,Section,Type,Title,Credits,Instructor,Delivery Mode,Scheduling Status,Time Slot,Duration,Days,Start,End,Building,Room,Cross-List,CRN,Seats Available,Source Row
+MATH,0803,001,,FOUNDATIONS OF COLLEGE MATH,,"Winn, Janet L.",in_person,scheduled,TR 9:30am,80,TR,09:30:00,10:50:00,Corley,103,,20450,-21 / 0 / 36,2
+MATH,0803,002,,FOUNDATIONS OF COLLEGE MATH,,"Growns, Landon C.",in_person,scheduled,MWF 9:00am,50,MWF,09:00:00,09:50:00,Ross Pendergraft Library,331,,20472,-24 / 0 / 30,3
+MATH,0803,003,,FOUNDATIONS OF COLLEGE MATH,,"Ballard, Kasey L.",in_person,scheduled,MWF 1:00pm,50,MWF,13:00:00,13:50:00,Corley,103,,20483,-15 / 0 / 36,4
+MATH,0803,TC1,,FOUNDATIONS OF COLLEGE MATH,,"King, Jamie L.",arranged,unscheduled,,,,,,,,,20461,-13 / 0 / na,5
+MATH,0903,001,,BEGIN/INTERMEDIATE ALGEBRA,,"Hogan, Jessica L.",in_person,scheduled,TR 11:00am,80,TR,11:00:00,12:20:00,Corley,104,,20466,-19 / 0 / 36,6
+MATH,0903,002,,BEGIN/INTERMEDIATE ALGEBRA,,"Winn, Janet L.",in_person,scheduled,MWF 8:00am,50,MWF,08:00:00,08:50:00,Corley,104,,20452,-19 / 0 / 36,7
+MATH,0903,TC1,,BEGIN/INTERMEDIATE ALGEBRA,,"Hogan, Jessica L.",arranged,unscheduled,,,,,,,,,20468,-5 / 0 / na,8
+MATH,1003,001,,COLLEGE MATHEMATICS,,"Winn, Janet L.",in_person,scheduled,MWF 9:00am,50,MWF,09:00:00,09:50:00,Corley,103,,20451,-21 / 0 / 36,9
+MATH,1003,002,,COLLEGE MATHEMATICS,,"Growns, Landon C.",in_person,scheduled,MWF 10:00am,50,MWF,10:00:00,10:50:00,Ross Pendergraft Library,331,,20474,-24 / 0 / 30,10
+MATH,1003,003,,COLLEGE MATHEMATICS,,"Ballard, Kasey L.",in_person,scheduled,MWF 2:00pm,50,MWF,14:00:00,14:50:00,Corley,103,,20484,-15 / 0 / 36,11
+MATH,1003,005,,COLLEGE MATHEMATICS,,"Winn, Janet L.",in_person,scheduled,MWF 10:00am,50,MWF,10:00:00,10:50:00,Corley,104,,20454,5 / 32 / 36,12
+MATH,1003,006,,COLLEGE MATHEMATICS,,"King, Jamie L.",in_person,scheduled,MWF 9:00am,50,MWF,09:00:00,09:50:00,Rothwell,221,,20463,9 / 33 / 50,13
+MATH,1003,A01,,COLLEGE MATHEMATICS,,"Koone, Shelley D.",in_person,scheduled,MW 11:00am,80,MW,11:00:00,12:20:00,Ozark Allied Health,111,,20954,17 / 23 / 28,14
+MATH,1003,A01,,COLLEGE MATHEMATICS,,"Ingram, Brianna R.",in_person,scheduled,MW 11:00am,80,MW,11:00:00,12:20:00,Ozark Allied Health,111,,20954,17 / 23 / 28,15
+MATH,1003,A02,,COLLEGE MATHEMATICS,,"Koone, Shelley D.",in_person,scheduled,TR 9:30am,80,TR,09:30:00,10:50:00,Ozark Allied Health,111,,20957,7 / 23 / 28,16
+MATH,1003,A02,,COLLEGE MATHEMATICS,,"Macy, Benjamin A.",in_person,scheduled,TR 9:30am,80,TR,09:30:00,10:50:00,Ozark Allied Health,111,,20957,7 / 23 / 28,17
+MATH,1003,P01,,COLLEGE MATHEMATICS,,"Hubbard, Evan D.",arranged,unscheduled,,,,,,Prairie Grove High School,PGHS,,21140,-2 / 0 / 999,18
+MATH,1003,TC1,,COLLEGE MATHEMATICS,,"King, Jamie L.",arranged,unscheduled,,,,,,,,,20462,-13 / 0 / na,19
+MATH,1003,TC2,,COLLEGE MATHEMATICS,,"King, Jamie L.",arranged,unscheduled,,,,,,,,,20464,10 / 30 / na,20
+MATH,1110,003,,COLLEGE ALGEBRA LAB,2.0,"Growns, Landon C.",in_person,scheduled,MW 2:00pm,50,MW,14:00:00,14:50:00,Rothwell,221,,20480,-23 / 0 / 50,21
+MATH,1110,ET1,,COLLEGE ALGEBRA LAB,2.0,"Ridenour, Anna M.",arranged,unscheduled,,,,,,Multiple High Schools (ET),ET,,21096,13 / 71 / 99999,22
+MATH,1110,ET2,,COLLEGE ALGEBRA LAB,2.0,"Singleton, Brit P.",arranged,unscheduled,,,,,,Multiple High Schools (ET),ET,,21098,-19 / 35 / 99999,23
+MATH,1110,P01,,COLLEGE ALGEBRA LAB,2.0,"Bean, Garin",arranged,unscheduled,,,,,,Alma High School,AHS,,21089,28 / 70 / 99999,24
+MATH,1110,P02,,COLLEGE ALGEBRA LAB,2.0,"Hilderbrand, Jennifer",arranged,unscheduled,,,,,,Bauxite High School,BHS,,21113,5 / 15 / 99999,25
+MATH,1110,P03,,COLLEGE ALGEBRA LAB,2.0,"Parker, Meagan A.",arranged,unscheduled,,,,,,Dardanelle High School,DHS,,21121,-6 / 17 / 99999,26
+MATH,1110,P04,,COLLEGE ALGEBRA LAB,2.0,"Sumners, Jon T.",arranged,unscheduled,,,,,,Dover High School,DHS,,21128,-5 / 0 / 99999,27
+MATH,1110,P05,,COLLEGE ALGEBRA LAB,2.0,"Billingsley, Daniel W.",arranged,unscheduled,,,,,,Greenwood High School,GHS,,21131,-12 / 0 / 99999,28
+MATH,1110,P06,,COLLEGE ALGEBRA LAB,2.0,"Lachowsky, Jennifer A.",arranged,unscheduled,,,,,,Russellville High School,RHS,,21162,0 / 10 / 99999,29
+MATH,1110,P07,,COLLEGE ALGEBRA LAB,2.0,"Fudge, Danna L.",arranged,unscheduled,,,,,,Van Buren High School,VBHS,,21168,-12 / 0 / 99999,30
+MATH,1110,P08,,COLLEGE ALGEBRA LAB,2.0,"Billingsley, Daniel W.",arranged,unscheduled,,,,,,Greenwood High School,GHS,,21926,9 / 25 / 99999,31
+MATH,1110,P09,,COLLEGE ALGEBRA LAB,2.0,"Billingsley, Daniel W.",arranged,unscheduled,,,,,,Greenwood High School,GHS,,21928,-18 / 0 / 99999,32
+MATH,1110,P10,,COLLEGE ALGEBRA LAB,2.0,"Billingsley, Daniel W.",arranged,unscheduled,,,,,,Greenwood High School,GHS,,21930,-12 / 0 / 99999,33
+MATH,1113,001,,COLLEGE ALGEBRA,,"Hogan, Jessica L.",in_person,scheduled,MWF 11:00am,50,MWF,11:00:00,11:50:00,Corley,104,,20467,-19 / 0 / 36,34
+MATH,1113,002,,COLLEGE ALGEBRA,,"Winn, Janet L.",in_person,scheduled,TR 8:00am,80,TR,08:00:00,09:20:00,Corley,104,,20453,-19 / 0 / 36,35
+MATH,1113,003,,COLLEGE ALGEBRA,,"Growns, Landon C.",in_person,scheduled,MWF 1:00pm,50,MWF,13:00:00,13:50:00,Rothwell,221,,20482,-23 / 0 / 50,36
+MATH,1113,006,,COLLEGE ALGEBRA,,"Taylor, Teresa L.",in_person,scheduled,TR 9:30am,80,TR,09:30:00,10:50:00,Corley,104,,20455,17 / 30 / 36,37
+MATH,1113,A01,,COLLEGE ALGEBRA,,"Koone, Shelley D.",in_person,scheduled,MW 8:00am,80,MW,08:00:00,09:20:00,Ozark Allied Health,111,,20959,17 / 23 / 28,38
+MATH,1113,A01,,COLLEGE ALGEBRA,,"Ingram, Brianna R.",in_person,scheduled,MW 8:00am,80,MW,08:00:00,09:20:00,Ozark Allied Health,111,,20959,17 / 23 / 28,39
+MATH,1113,A01,,COLLEGE ALGEBRA,,"Macy, Benjamin A.",in_person,scheduled,MW 8:00am,80,MW,08:00:00,09:20:00,Ozark Allied Health,111,,20959,17 / 23 / 28,40
+MATH,1113,A02,,COLLEGE ALGEBRA,,new_instructor,arranged,unscheduled,,,,,,,,,20961,0 / 0 / na,41
+MATH,1113,A03,,COLLEGE ALGEBRA,,"Koone, Shelley D.",in_person,scheduled,R 5:00pm,170,R,17:00:00,19:50:00,Ozark Allied Health,111,,20963,21 / 23 / 28,42
+MATH,1113,ET1,,COLLEGE ALGEBRA,,"Ridenour, Anna M.",arranged,unscheduled,,,,,,Multiple High Schools (ET),ET,,21095,13 / 71 / 99999,43
+MATH,1113,ET2,,COLLEGE ALGEBRA,,"Singleton, Brit P.",arranged,unscheduled,,,,,,Multiple High Schools (ET),ET,,21097,-19 / 35 / 99999,44
+MATH,1113,F01,,COLLEGE ALGEBRA,,"Hogan, Jessica L.",arranged,unscheduled,,,,,,,,,20470,12 / 30 / na,45
+MATH,1113,F01,,COLLEGE ALGEBRA,,"Hogan, Jessica L.",in_person,scheduled,MWF 10:00am,50,MWF,10:00:00,10:50:00,Corley,269,,20470,12 / 30 / 36,46
+MATH,1113,P01,,COLLEGE ALGEBRA,,"Bean, Garin",arranged,unscheduled,,,,,,Alma High School,AHS,,21088,28 / 70 / 99999,47
+MATH,1113,P02,,COLLEGE ALGEBRA,,"Hilderbrand, Jennifer",arranged,unscheduled,,,,,,Bauxite High School,BHS,,21112,5 / 15 / 99999,48
+MATH,1113,P03,,COLLEGE ALGEBRA,,"Parker, Meagan A.",arranged,unscheduled,,,,,,Dardanelle High School,DHS,,21120,-6 / 17 / 99999,49
+MATH,1113,P04,,COLLEGE ALGEBRA,,"Sumners, Jon T.",arranged,unscheduled,,,,,,Dover High School,DHS,,21127,-5 / 0 / 99999,50
+MATH,1113,P05,,COLLEGE ALGEBRA,,"Billingsley, Daniel W.",arranged,unscheduled,,,,,,Greenwood High School,GHS,,21130,-12 / 0 / 99999,51
+MATH,1113,P06,,COLLEGE ALGEBRA,,"Lachowsky, Jennifer A.",arranged,unscheduled,,,,,,Russellville High School,RHS,,21161,0 / 10 / 99999,52
+MATH,1113,P07,,COLLEGE ALGEBRA,,"Fudge, Danna L.",arranged,unscheduled,,,,,,Van Buren High School,VBHS,,21167,-12 / 0 / 99999,53
+MATH,1113,P08,,COLLEGE ALGEBRA,,"Billingsley, Daniel W.",arranged,unscheduled,,,,,,Greenwood High School,GHS,,21925,4 / 20 / 99999,54
+MATH,1113,P09,,COLLEGE ALGEBRA,,"Billingsley, Daniel W.",arranged,unscheduled,,,,,,Greenwood High School,GHS,,21927,-18 / 0 / 99999,55
+MATH,1113,P10,,COLLEGE ALGEBRA,,"Billingsley, Daniel W.",arranged,unscheduled,,,,,,Greenwood High School,GHS,,21929,-12 / 0 / 99999,56
+MATH,1113,TC1,,COLLEGE ALGEBRA,,"Hogan, Jessica L.",arranged,unscheduled,,,,,,,,,20469,-5 / 0 / na,57
+MATH,1113,TC2,,COLLEGE ALGEBRA,,"Ballard, Kasey L.",arranged,unscheduled,,,,,,,,,20485,23 / 32 / na,58
+MATH,1203,P01,,PLANE TRIGONOMETRY,,"Bean, Garin",arranged,unscheduled,,,,,,Alma High School,AHS,,21086,1 / 38 / 99999,59
+MATH,1203,P02,,PLANE TRIGONOMETRY,,"Sumners, Jon T.",arranged,unscheduled,,,,,,Dover High School,DHS,,21129,-2 / 0 / 99999,60
+MATH,1203,P03,,PLANE TRIGONOMETRY,,"Lachowsky, Jennifer A.",arranged,unscheduled,,,,,,Russellville High School,RHS,,21160,10 / 81 / 99999,61
+MATH,1203,P04,,PLANE TRIGONOMETRY,,"Mashburn, Marlena J.",arranged,unscheduled,,,,,,Valley Christian School,VCS,,21165,3 / 5 / 999,62
+MATH,1203,P05,,PLANE TRIGONOMETRY,,"Salyer, Kellie S.",arranged,unscheduled,,,,,,Van Buren High School,VBHS,,21169,4 / 41 / 99999,63
+MATH,1203,P06,,PLANE TRIGONOMETRY,,"Holland, Jeremy K.",arranged,unscheduled,,,,,,Greenwood High School,GHS,,21890,1 / 16 / 99999,64
+MATH,1203,P07,,PLANE TRIGONOMETRY,,"Holland, Jeremy K.",arranged,unscheduled,,,,,,Greenwood High School,GHS,,21891,3 / 25 / 99999,65
+MATH,1203,P08,,PLANE TRIGONOMETRY,,"Holland, Jeremy K.",arranged,unscheduled,,,,,,Greenwood High School,GHS,,21892,4 / 24 / 99999,66
+MATH,1203,P09,,PLANE TRIGONOMETRY,,"Fudge, Danna L.",arranged,unscheduled,,,,,,Van Buren High School,VBHS,,21955,-2 / 67 / 99999,67
+MATH,1203,TC1,,PLANE TRIGONOMETRY,,"Bain, Leslie M.",arranged,unscheduled,,,,,,,,,20489,14 / 25 / na,68
+MATH,1914,001,,PRECALCULUS,,"Cox, Allie M.",in_person,scheduled,MWF 8:00am,50,MWF,08:00:00,08:50:00,Corley,101,,20498,13 / 30 / 42,69
+MATH,1914,001,,PRECALCULUS,,"Cox, Allie M.",in_person,scheduled,T 9:30am,80,T,09:30:00,10:50:00,Corley,101,,20498,13 / 30 / 42,70
+MATH,1914,003,,PRECALCULUS,,"Ballard, Kasey L.",in_person,scheduled,R 9:30am,80,R,09:30:00,10:50:00,Corley,102,,20486,21 / 30 / 32,71
+MATH,1914,003,,PRECALCULUS,,"Ballard, Kasey L.",in_person,scheduled,MWF 10:00am,50,MWF,10:00:00,10:50:00,Corley,268,,20486,21 / 30 / 36,72
+MATH,1914,P01,,PRECALCULUS,,"King, William H.",arranged,unscheduled,,,,,,Maumelle Charter High School,MCHS,,21134,0 / 4 / 9999,73
+MATH,2033,001,,MATH CONCEPTS I,,"Taylor, Teresa L.",in_person,scheduled,MWF 10:00am,50,MWF,10:00:00,10:50:00,Corley,102,,20456,11 / 25 / 32,74
+MATH,2043,001,,MATH CONCEPTS II,,"Taylor, Teresa L.",in_person,scheduled,MWF 9:00am,50,MWF,09:00:00,09:50:00,Corley,102,,20457,1 / 25 / 32,75
+MATH,2043,TC1,,MATH CONCEPTS II,,"Taylor, Teresa L.",arranged,unscheduled,,,,,,,,,20458,9 / 25 / na,76
+MATH,2223,001,,QUANTITATIVE BUSINESS ANALYSIS,,"Cox, Allie M.",in_person,scheduled,MWF 11:00am,50,MWF,11:00:00,11:50:00,Corley,103,,20501,12 / 30 / 36,77
+MATH,2223,002,,QUANTITATIVE BUSINESS ANALYSIS,,"Cox, Allie M.",in_person,scheduled,TR 11:00am,80,TR,11:00:00,12:20:00,Corley,103,,20502,5 / 30 / 36,78
+MATH,2223,003,,QUANTITATIVE BUSINESS ANALYSIS,,"Cox, Allie M.",in_person,scheduled,MWF 10:00am,50,MWF,10:00:00,10:50:00,Corley,103,,20503,14 / 30 / 36,79
+MATH,2223,TC1,,QUANTITATIVE BUSINESS ANALYSIS,,"Cox, Allie M.",arranged,unscheduled,,,,,,,,,20505,14 / 30 / na,80
+MATH,2243,001,,CALCULUS-BUSINESS/ECON,,"Overduin, Matthew D.",in_person,scheduled,MWF 1:00pm,50,MWF,13:00:00,13:50:00,Corley,104,,20528,15 / 30 / 36,81
+MATH,2243,002,,CALCULUS-BUSINESS/ECON,,"Overduin, Matthew D.",in_person,scheduled,TR 9:30am,80,TR,09:30:00,10:50:00,Ross Pendergraft Library,220,,20529,4 / 25 / 30,82
+MATH,2703,001,,DISCRETE MATHEMATICS,,"Jordan, Susan M.",in_person,scheduled,MWF 10:00am,50,MWF,10:00:00,10:50:00,Corley,101,,20506,5 / 30 / 42,83
+MATH,2703,002,,DISCRETE MATHEMATICS,,"Limperis, Thomas G.",in_person,scheduled,TR 11:00am,80,TR,11:00:00,12:20:00,Rothwell,206,,20520,-1 / 30 / 32,84
+MATH,2703,TC1,,DISCRETE MATHEMATICS,,"Jordan, Susan M.",arranged,unscheduled,,,,,,,,,20530,14 / 30 / na,85
+MATH,2914,001,,CALCULUS I,,"Jordan, Susan M.",in_person,scheduled,MWF 9:00am,50,MWF,09:00:00,09:50:00,Corley,101,,20508,3 / 30 / 42,86
+MATH,2914,001,,CALCULUS I,,"Jordan, Susan M.",in_person,scheduled,R 9:30am,80,R,09:30:00,10:50:00,Corley,101,,20508,3 / 30 / 42,87
+MATH,2914,002,,CALCULUS I,,"Jordan, Susan M.",in_person,scheduled,R 1:00pm,80,R,13:00:00,14:20:00,Corley,101,,20511,17 / 30 / 42,88
+MATH,2914,002,,CALCULUS I,,"Jordan, Susan M.",in_person,scheduled,MWF 1:00pm,50,MWF,13:00:00,13:50:00,Corley,101,,20511,17 / 30 / 42,89
+MATH,2914,003,,CALCULUS I,,new_instructor,in_person,scheduled,MWF 2:00pm,50,MWF,14:00:00,14:50:00,Corley,101,,20513,30 / 30 / 42,90
+MATH,2914,003,,CALCULUS I,,new_instructor,in_person,scheduled,R 2:30pm,80,R,14:30:00,15:50:00,Corley,101,,20513,30 / 30 / 42,91
+MATH,2924,001,,CALCULUS II,,"Myers, Jeanine L.",in_person,scheduled,MWF 1:00pm,50,MWF,13:00:00,13:50:00,Corley,102,,20524,14 / 30 / 32,92
+MATH,2924,001,,CALCULUS II,,"Myers, Jeanine L.",in_person,scheduled,R 1:00pm,80,R,13:00:00,14:20:00,Corley,102,,20524,14 / 30 / 32,93
+MATH,2924,002,,CALCULUS II,,"Limperis, Thomas G.",in_person,scheduled,MWF 12:00pm,50,MWF,12:00:00,12:50:00,Rothwell,206,,20521,-3 / 32 / 32,94
+MATH,2924,002,,CALCULUS II,,"Limperis, Thomas G.",in_person,scheduled,T 1:00pm,80,T,13:00:00,14:20:00,Rothwell,206,,20521,-3 / 32 / 32,95
+MATH,2924,003,,CALCULUS II,,"Limperis, Thomas G.",in_person,scheduled,MWF 10:00am,50,MWF,10:00:00,10:50:00,Rothwell,306,,20522,3 / 30 / 40,96
+MATH,2924,003,,CALCULUS II,,"Limperis, Thomas G.",in_person,scheduled,R 9:30am,80,R,09:30:00,10:50:00,Rothwell,206,,20522,3 / 30 / 32,97
+MATH,2934,001,,CALCULUS III,,"Myers, Jeanine L.",in_person,scheduled,T 9:30am,80,T,09:30:00,10:50:00,Rothwell,207,,20525,16 / 30 / 43,98
+MATH,2934,001,,CALCULUS III,,"Myers, Jeanine L.",in_person,scheduled,MWF 10:00am,50,MWF,10:00:00,10:50:00,Rothwell,207,,20525,16 / 30 / 43,99
+MATH,2934,002,,CALCULUS III,,"Myers, Jeanine L.",in_person,scheduled,MWF 11:00am,50,MWF,11:00:00,11:50:00,Corley,101,,20526,-3 / 30 / 42,100
+MATH,2934,002,,CALCULUS III,,"Myers, Jeanine L.",in_person,scheduled,R 11:00am,80,R,11:00:00,12:20:00,Corley,101,,20526,-3 / 30 / 42,101
+MATH,3033,001,,METH TEACH ELEM MATH,,"Taylor, Teresa L.",in_person,scheduled,TR 11:00am,80,TR,11:00:00,12:20:00,Corley,102,,20459,14 / 25 / 32,102
+MATH,3033,AT1,,METH TEACH ELEM MATH,,new_instructor,arranged,unscheduled,,,,,,,,,20460,25 / 25 / na,103
+MATH,3123,001,,COLLEGE GEOMETRY,,"Overduin, Matthew D.",in_person,scheduled,MWF 2:00pm,50,MWF,14:00:00,14:50:00,Corley,102,,20531,20 / 25 / 32,104
+MATH,3203,001,,INTRO TO ANALYSIS,,"Myers, Jeanine L.",in_person,scheduled,MWF 8:00am,50,MWF,08:00:00,08:50:00,Corley,268,,20527,17 / 30 / 36,105
+MATH,3203,H01,,HONORS INTRO TO ANALYSIS,,"Myers, Jeanine L.",in_person,scheduled,MWF 8:00am,50,MWF,08:00:00,08:50:00,Corley,268,,21939,-2 / 0 / 36,106
+MATH,3243,001,,DIFF EQUATIONS I,,"Xiao, Xinli",in_person,scheduled,MWF 10:00am,50,MWF,10:00:00,10:50:00,Rothwell,206,,20446,4 / 30 / 32,107
+MATH,3243,002,,DIFF EQUATIONS I,,"Limperis, Thomas G.",in_person,scheduled,MWF 9:00am,50,MWF,09:00:00,09:50:00,Rothwell,212,,20523,-1 / 33 / 56,108
+MATH,4003,001,,LINEAR ALGEBRA I,,"Xiao, Xinli",in_person,scheduled,MWF 9:00am,50,MWF,09:00:00,09:50:00,Rothwell,206,,20447,3 / 30 / 32,109
+MATH,4971,001,,MATHEMATICS SENIOR SEMINAR,,"Xiao, Xinli",in_person,scheduled,T 11:00am,80,T,11:00:00,12:20:00,Corley,101,,20448,4 / 10 / 42,110
+MATH,4993,001,,SP: MATHEMATICAL MODELING,,"Limperis, Thomas G.",arranged,unscheduled,,,,,,,,,21948,-2 / 0 / na,111
+MATH,5173,TC1,,ADVANCED BIOSTATISTICS,,"Jordan, Scott M.",arranged,unscheduled,,,,,,,,,20536,10 / 10 / na,112
+STAT,2163,001,,INTRO/STATISTICAL METHODS,,"King, Jamie L.",in_person,scheduled,MWF 10:00am,50,MWF,10:00:00,10:50:00,Rothwell,221,,20465,1 / 30 / 50,113
+STAT,2163,002,,INTRO/STATISTICAL METHODS,,"Bain, Leslie M.",in_person,scheduled,MWF 9:00am,50,MWF,09:00:00,09:50:00,Corley,104,,20490,3 / 31 / 36,114
+STAT,2163,003,,INTRO/STATISTICAL METHODS,,"Bain, Leslie M.",in_person,scheduled,TR 1:00pm,80,TR,13:00:00,14:20:00,Corley,104,,20492,2 / 30 / 36,115
+STAT,2163,P01,,INTRO/STATISTICAL METHODS,,"Holland, Jeremy K.",arranged,unscheduled,,,,,,Greenwood High School,GHS,,21132,-1 / 22 / 99999,116
+STAT,2163,P02,,INTRO/STATISTICAL METHODS,,"Hubbard, Evan D.",arranged,unscheduled,,,,,,Prairie Grove High School,PGHS,,21139,-1 / 38 / 999,117
+STAT,2163,P03,,INTRO/STATISTICAL METHODS,,"Holland, Jeremy K.",arranged,unscheduled,,,,,,Greenwood High School,GHS,,21893,1 / 21 / 99999,118
+STAT,2163,TC1,,INTRO/STATISTICAL METHODS,,"Bain, Leslie M.",arranged,unscheduled,,,,,,,,,20493,7 / 31 / na,119
+STAT,2163,TC2,,INTRO/STATISTICAL METHODS,,"Bain, Leslie M.",arranged,unscheduled,,,,,,,,,20494,13 / 32 / na,120
+STAT,3113,001,,REGRESSION ANALYSIS,,"Xiao, Xinli",in_person,scheduled,MWF 11:00am,50,MWF,11:00:00,11:50:00,Rothwell,213,,20449,15 / 30 / 40,121
+STAT,3153,001,,APPLIED STATISTICS,,"Jordan, Scott M.",in_person,scheduled,MWF 9:00am,50,MWF,09:00:00,09:50:00,Rothwell,207,,20532,-1 / 30 / 43,122
+STAT,3153,002,,APPLIED STATISTICS,,"Jordan, Scott M.",in_person,scheduled,MWF 11:00am,50,MWF,11:00:00,11:50:00,Corley,102,,20533,5 / 30 / 32,123
+STAT,3183,001,,STATISTICAL PROCESS CONTROL,,"Jordan, Scott M.",in_person,scheduled,MWF 1:00pm,50,MWF,13:00:00,13:50:00,Rothwell,213,,20534,1 / 32 / 40,124
+STAT,4173,TC1,,ADVANCED BIOSTATISTICS,,"Jordan, Scott M.",arranged,unscheduled,,,,,,,,,20535,5 / 15 / na,125

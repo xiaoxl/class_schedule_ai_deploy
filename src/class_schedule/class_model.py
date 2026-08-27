@@ -88,21 +88,29 @@ class Section:
         return (self.subject, self.number, self.section)
 
     @property
-    def is_online(self) -> bool:
-        """Compatibility name for ONLINE, TBA, or blank non-physical records.
-
-        Use ``delivery_mode`` or ``has_meeting_time`` when online and arranged
-        records must be distinguished.
-        """
-        return self.time_slot.upper() in {"", "ONLINE", "TBA"}
-
-    @property
     def delivery_mode(self) -> DeliveryMode:
+        """The single source of truth for online/arranged/in-person.
+
+        Every other "does this need a physical slot" check in the codebase
+        (``is_online`` here, and every caller of it) derives from this
+        property instead of re-parsing ``time_slot`` itself -- see
+        ``docs/codes.md`` for the full rule.
+        """
         if self.time_slot.upper() == "ONLINE":
             return DeliveryMode.ONLINE
         if self.time_slot.upper() in {"", "TBA"}:
             return DeliveryMode.ARRANGED
         return DeliveryMode.IN_PERSON
+
+    @property
+    def is_online(self) -> bool:
+        """Shorthand for "no physical time/room to schedule".
+
+        Derived from ``delivery_mode``, not a separate check: true for
+        ONLINE, TBA, and blank alike. Use ``delivery_mode`` when those three
+        must be told apart.
+        """
+        return self.delivery_mode is not DeliveryMode.IN_PERSON
 
     @property
     def has_meeting_time(self) -> bool:
@@ -188,6 +196,7 @@ class Section:
             "Room": self.room or None,
             "Building": self.building or None,
             "Cross-List": self.cross_list or None,
+            "Delivery Mode": self.delivery_mode.value,
         }
 
 

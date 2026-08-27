@@ -15,8 +15,8 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Press `Ctrl+C` to stop the 
 
 ## Use the web interface
 
-1. Import a starting schedule in CSV or XLSX format.
-2. Select a Configuration package before import, then switch between Instructor, Room, and Course views.
+1. Select a Ready Configuration package. Its current working schedule loads automatically from the package workspace.
+2. Switch between Instructor, Room, and Course views.
 3. Drag a class to change its meeting time. Moving between weekday columns can change supported MWF/TR patterns.
 4. Right-click a class to assign an instructor or room. Choose **New** to create another New Instructor identity.
 
@@ -47,6 +47,15 @@ the same drop still route by their package comments. Updating a template or
 package remains Draft. Without a template, a complete configuration produces a
 deterministic default using configured course order, qualifications, load
 limits, dynamic-position eligibility, meeting patterns, and available rooms.
+When a template is uploaded, any configuration TOMLs already present are
+preserved and only missing files are filled from inference. The template
+panel's **从模板推断** action instead creates a new complete package named
+`推断(N)` and copies the template into it; all seven TOMLs in that new package
+come from inference. It infers
+catalog courses and offered sections, marked cross-listings, hybrid and
+four-credit relationships, rooms, meeting times, instructors, and the courses
+they have taught. It deliberately does not infer corequisites; inferred
+instructors allow overload and back-to-back teaching, and hard rules are empty.
 5. Review workloads and findings. Finding links open the relevant Instructor or Room view.
 6. Resolve hard conflicts and select **Save New Version**. The output namespace is locked to the selected package.
 
@@ -74,6 +83,7 @@ uv run class-schedule final 27S ver10
 - [Scheduling rules](scheduling-rules.md)
 - [Manual adjustments and versioning](manual-adjustments.md)
 - [Demand analysis](demand-analysis.md)
+- [Delivery mode design](codes.md)
 
 ## Tests
 

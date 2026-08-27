@@ -1,21 +1,19 @@
-"""Web app: upload a schedule file, see it grouped into atomic classes,
-and optionally solve it.
+"""Web app: load a configuration workspace schedule and optionally solve it.
 
-Built on ``schedule_model.Schedule`` / ``class_model``. Every upload is also
+Built on ``schedule_model.Schedule`` / ``class_model``. Every workspace is
 evaluated against the resolved persons and preferences configuration
 -- see ``schedule_model.check_soft_preferences`` (everything, including
 max_load) / hard validation (room/instructor double-booking plus configured
 hard constraint rules). ``POST /api/solve`` runs the OR-Tools
 solver (``solver.solve_detailed``) on top of that, using
 the resolved timeslot/location configuration for the legal time/room search
-space. The Web API is a stateless auxiliary interface;
-versioned production publication remains in the CLI.
+space. The Web API keeps no server-side editing session; browser publication
+and CLI solves both use the shared version publisher.
 """
 
 from __future__ import annotations
 
 import hashlib
-import io
 import logging
 import math
 import os
@@ -29,14 +27,14 @@ from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-import pandas as pd
 import psutil
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.staticfiles import StaticFiles
 
 from . import solver as solver_module
-from .schedule_run import next_version
-from .reconciliation import reconcile_records
+from .config_inference import infer_configuration_from_template
+from .schedule_io import read_schedule
+from .schedule_run import _verified_initial, next_version
 from .version_publisher import publish_version, sha256
 from .template_workspace import (
     TEMPLATE_SUFFIXES,
@@ -59,7 +57,6 @@ CONFIG_DIR = Path(os.environ.get(
     "CLASS_SCHEDULE_CONFIG_ROOT",
     Path(__file__).resolve().parents[2] / "config",
 ))
-ALLOWED_SUFFIXES = {".csv", ".xlsx"}
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 LOG_PATH = Path("output/logs/webapp.log")
@@ -73,10 +70,12 @@ CONFIG_FILES = {
     "constraints.toml": Path("constraints.toml"),
 }
 PACKAGE_COMMENT = re.compile(
-    r"^\s*#\s*Configuration package:\s*([A-Za-z0-9][A-Za-z0-9_-]*)\s*$",
+    r"^\s*#\s*Configuration package:\s*(\S(?:.*\S)?)\s*$",
     re.MULTILINE,
 )
-PACKAGE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+PACKAGE_ID = re.compile(
+    r"^(?:[A-Za-z0-9][A-Za-z0-9_-]*|推断\([1-9]\d*\))$"
+)
 _CONFIG_WRITE_LOCK = threading.Lock()
 CONFIG_TRASH = Path("work/config-trash")
 WORK_ROOT = Path("work")
@@ -186,6 +185,11 @@ def create_app() -> FastAPI:
         config_files: list[UploadFile] = File(...),
         current_package: str = Form(DEFAULT_PACKAGE),
     ):
+        current_package = current_package.strip()
+        if not PACKAGE_ID.fullmatch(current_package):
+            raise HTTPException(
+                400, f"Invalid configuration package name: {current_package!r}",
+            )
         replacements: dict[str, bytes] = {}
         uploaded_template: tuple[str, bytes] | None = None
         for upload in config_files:
@@ -218,11 +222,33 @@ def create_app() -> FastAPI:
         if uploaded_template is not None:
             current = changes.setdefault(current_package, {})
             current["template"] = uploaded_template
+            incoming = current.setdefault("replacements", {})
+            package_root = CONFIG_DIR / current_package
+            needed = [
+                filename for filename, relative in CONFIG_FILES.items()
+                if filename not in incoming
+                and not (package_root / relative).is_file()
+            ]
+            inferred_names = []
+            if needed:
+                inferred = _infer_uploaded_template(
+                    *uploaded_template, package=current_package,
+                )
+                missing = _missing_inferred_files(
+                    current_package, inferred.files, incoming,
+                )
+                incoming.update(missing)
+                inferred_names = list(missing)
+            current["inferred_files"] = inferred_names
             current["rebuild"] = True
         _apply_configuration_transaction(changes)
         package_to_show = current_package if uploaded_template else routed_package
         payload = _configuration_file_payload(package_to_show)
         payload["uploaded_configuration_package"] = routed_package
+        payload["inferred_files"] = (
+            changes.get(current_package, {}).get("inferred_files", [])
+            if uploaded_template else []
+        )
         return payload
 
     @app.get("/api/configuration-packages/{package}/template")
@@ -247,6 +273,37 @@ def create_app() -> FastAPI:
     async def rebuild_configuration_work_views(package: str):
         return _rebuild_package_work_views(package)
 
+    @app.post("/api/configuration-packages/{package}/infer-from-template")
+    async def infer_configuration_files(package: str):
+        root = _package_root(package)
+        template = find_template(root)
+        if template is None:
+            raise HTTPException(404, "Upload a schedule template before inferring configuration")
+        try:
+            inferred_package = _next_inferred_package_name()
+            inferred = infer_configuration_from_template(
+                template, package=inferred_package,
+            )
+            _apply_configuration_transaction({inferred_package: {
+                "replacements": inferred.files,
+                "rebuild": True,
+            }})
+        except HTTPException:
+            raise
+        except (OSError, ValueError) as error:
+            raise HTTPException(422, f"Could not infer configuration: {error}") from error
+        payload = _configuration_file_payload(inferred_package)
+        payload["source_package"] = package
+        payload["inference"] = {
+            "courses": inferred.course_count,
+            "sections": inferred.section_count,
+            "relationships": inferred.relationship_count,
+            "rooms": inferred.room_count,
+            "time_patterns": inferred.time_pattern_count,
+            "persons": inferred.person_count,
+        }
+        return payload
+
     @app.post("/api/configuration-packages/{package}/templates/{filename}")
     async def generate_configuration_template(package: str, filename: str):
         return _generate_configuration_template(package, filename)
@@ -260,30 +317,18 @@ def create_app() -> FastAPI:
         _delete_configuration_package(package)
         return {"deleted": package}
 
-    @app.post("/api/schedule")
-    async def parse_schedule(
-        schedule_file: UploadFile = File(...), package: str = Form(DEFAULT_PACKAGE),
-    ):
+    @app.get("/api/schedule")
+    async def configuration_schedule(package: str = DEFAULT_PACKAGE):
         config = _load_web_config(package)
-        filename, schedule = await _read_and_group(schedule_file, config)
-        logger.info("Parsed %r into %d classes", filename, len(schedule))
-        return {
-            "count": len(schedule),
-            "config_version": config.version,
-            "package_id": config.package_id,
-            "assignment_options": _assignment_options(config),
-            "classes": _serialize_schedule(schedule),
-            "violations": _analysis_payload(schedule, config),
-        }
+        source, schedule = _load_workspace_schedule(package, config)
+        logger.info("Loaded %s into %d classes", source, len(schedule))
+        return _schedule_payload(schedule, config, source=source)
 
     @app.post("/api/solve")
-    async def solve_schedule(
-        schedule_file: UploadFile = File(...),
-        regenerate: bool = Form(False),
-        package: str = Form(DEFAULT_PACKAGE),
-    ):
-        config = _load_web_config(package)
-        filename, schedule = await _read_and_group(schedule_file, config)
+    async def solve_schedule(payload: dict):
+        schedule, config = _schedule_from_payload(payload)
+        source = f"{config.package_id} current workspace"
+        regenerate = bool(payload.get("regenerate", False))
         rss_before = _rss_mb()
         try:
             solve_result = solver_module.solve_detailed(
@@ -299,7 +344,7 @@ def create_app() -> FastAPI:
         except solver_module.SolveTimeout as error:
             logger.warning(
                 "Solve timed out for %r: %s (RSS %.1f -> %.1f MB)",
-                filename, error, rss_before, _rss_mb(),
+                source, error, rss_before, _rss_mb(),
             )
             raise HTTPException(504, str(error)) from error
         except solver_module.NoFeasibleSchedule as error:
@@ -310,17 +355,18 @@ def create_app() -> FastAPI:
             # is chosen, instead of inviting a retry that can't succeed.
             logger.warning(
                 "Could not solve %r: %s (RSS %.1f -> %.1f MB)",
-                filename, error, rss_before, _rss_mb(),
+                source, error, rss_before, _rss_mb(),
             )
             raise HTTPException(422, str(error)) from error
         changes = solver_module.diff_schedules(schedule, solved)
         violations = _analysis_payload(solved, config)
         logger.info(
             "Solved %r cleanly (%d classes, %d field change(s), RSS %.1f -> %.1f MB)",
-            filename, len(solved), len(changes), rss_before, _rss_mb(),
+            source, len(solved), len(changes), rss_before, _rss_mb(),
         )
         return {
             "count": len(solved),
+            "source_name": source,
             "config_version": config.version,
             "package_id": config.package_id,
             "assignment_options": _assignment_options(config),
@@ -367,15 +413,17 @@ def create_app() -> FastAPI:
     @app.post("/api/save")
     async def save_schedule_version(payload: dict):
         """Publish browser edits through the same atomic verN publisher as solve."""
-        term = str(payload.get("term", "")).strip().upper()
-        if not re.fullmatch(r"[A-Z0-9_-]+", term):
-            raise HTTPException(400, "A valid term is required, for example 27S")
+        term = str(payload.get("term", "")).strip()
+        if not PACKAGE_ID.fullmatch(term):
+            raise HTTPException(
+                400, "A valid configuration/output name is required, for example 27S",
+            )
         records = payload.get("records")
         baseline_records = payload.get("baseline_records")
         if not isinstance(records, list) or not isinstance(baseline_records, list):
             raise HTTPException(400, "Current and baseline schedule records are required")
         package = str(payload.get("package", DEFAULT_PACKAGE)).strip()
-        if term != package.upper():
+        if term != package:
             raise HTTPException(
                 400, "The output term must match the selected configuration package"
             )
@@ -425,9 +473,13 @@ def create_app() -> FastAPI:
             "version": version,
             "parent": None,
             "created_at": created_at,
-            "input": {"path": "web-upload", "sha256": hashlib.sha256(baseline_bytes).hexdigest()},
+            "input": {
+                "path": f"work/{package}/initial/initial.csv",
+                "sha256": hashlib.sha256(baseline_bytes).hexdigest(),
+            },
             "initial_baseline": {
-                "path": "web-upload", "sha256": hashlib.sha256(baseline_bytes).hexdigest(),
+                "path": f"work/{package}/initial/initial.csv",
+                "sha256": hashlib.sha256(baseline_bytes).hexdigest(),
                 "snapshot": "baseline.csv", "role": "initial",
             },
             "configuration": {
@@ -436,7 +488,7 @@ def create_app() -> FastAPI:
                 "files": [{"path": name, "sha256": sha256(Path(name))} for name in config.source_paths],
             },
             "reconciliation": {
-                "source": "web-upload",
+                "source": "configuration-workspace",
                 "sha256": hashlib.sha256(reconciliation).hexdigest(),
                 "snapshot": "reconciliation.toml",
             },
@@ -488,6 +540,48 @@ def _package_root(package: str) -> Path:
     return root
 
 
+def _next_inferred_package_name() -> str:
+    """Return the first unused system-generated ``推断(N)`` package name."""
+    used = {
+        int(match.group(1))
+        for path in CONFIG_DIR.iterdir()
+        if path.is_dir() and (match := re.fullmatch(r"推断\(([1-9]\d*)\)", path.name))
+    }
+    rank = 1
+    while rank in used:
+        rank += 1
+    return f"推断({rank})"
+
+
+def _infer_uploaded_template(
+    filename: str,
+    content: bytes,
+    *,
+    package: str,
+):
+    """Materialize one upload briefly and return its seven inferred TOMLs."""
+    suffix = Path(filename).suffix.lower()
+    with tempfile.TemporaryDirectory() as folder:
+        source = Path(folder) / f"template{suffix}"
+        source.write_bytes(content)
+        return infer_configuration_from_template(source, package=package)
+
+
+def _missing_inferred_files(
+    package: str,
+    inferred_files: dict[str, bytes],
+    incoming: dict[str, bytes],
+) -> dict[str, bytes]:
+    """Select only TOMLs absent from both disk and the current upload."""
+    package_root = CONFIG_DIR / package
+    return {
+        filename: content
+        for filename, content in inferred_files.items()
+        if filename not in incoming
+        and not (package_root / CONFIG_FILES[filename]).is_file()
+    }
+
+
 def _configuration_target(package: str, filename: str) -> tuple[Path, Path]:
     clean_package = package.strip()
     if filename not in CONFIG_FILES or Path(filename).name != filename:
@@ -523,6 +617,15 @@ def _configuration_file_payload(package: str) -> dict:
     }
 
 
+def _working_view_ready(package: str) -> bool:
+    """Return whether a package owns a complete, provenance-verified work view."""
+    try:
+        _verified_initial(WORK_ROOT / package / "initial" / "initial.csv")
+    except (FileNotFoundError, OSError, ValueError):
+        return False
+    return True
+
+
 def _configuration_summary(package: str) -> dict:
     root = CONFIG_DIR / package
     if not root.is_dir():
@@ -554,6 +657,7 @@ def _configuration_summary(package: str) -> dict:
         "missing": missing,
         "errors": errors,
         "config_version": version,
+        "working_view_ready": status == "ready" and _working_view_ready(package),
     }
 
 
@@ -586,7 +690,10 @@ def _apply_configuration_transaction(changes: dict[str, dict]) -> None:
                 if source.is_dir():
                     shutil.copytree(source, staged_package)
                 else:
-                    if change.get("template") is not None:
+                    if (
+                        change.get("template") is not None
+                        and not change.get("replacements")
+                    ):
                         raise HTTPException(
                             404, f"Unknown configuration package: {package}",
                         )
@@ -857,6 +964,45 @@ def _schedule_from_payload(
     return schedule, config
 
 
+def _load_workspace_schedule(
+    package: str, config: solver_module.SolverConfig,
+) -> tuple[str, Schedule]:
+    """Load the verified initial working view owned by a Ready package."""
+    initial = WORK_ROOT / package / "initial" / "initial.csv"
+    try:
+        _verified_initial(initial)
+        schedule = read_schedule(
+            initial,
+            persons=config.persons,
+            relationships=tuple(config.courses.relationships) if config.courses else (),
+            catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
+        )
+    except (FileNotFoundError, GroupingError, ValueError) as error:
+        raise HTTPException(
+            409,
+            f"Configuration {package!r} has no valid working schedule; "
+            f"rebuild its working views: {error}",
+        ) from error
+    return initial.name, schedule
+
+
+def _schedule_payload(
+    schedule: Schedule,
+    config: solver_module.SolverConfig,
+    *,
+    source: str,
+) -> dict:
+    return {
+        "count": len(schedule),
+        "source_name": source,
+        "config_version": config.version,
+        "package_id": config.package_id,
+        "assignment_options": _assignment_options(config),
+        "classes": _serialize_schedule(schedule),
+        "violations": _analysis_payload(schedule, config),
+    }
+
+
 def _assignment_options(config: solver_module.SolverConfig) -> dict:
     """Configured resources offered by the browser's assignment menu."""
     return {
@@ -885,59 +1031,6 @@ def _assignment_options(config: solver_module.SolverConfig) -> dict:
     }
 
 
-async def _read_and_group(
-    schedule_file: UploadFile, config: solver_module.SolverConfig,
-) -> tuple[str, Schedule]:
-    """Shared upload -> DataFrame -> Schedule pipeline for both
-    ``/api/schedule`` and ``/api/solve`` -- same validation, same
-    GroupingError handling either way."""
-    filename = schedule_file.filename or "<unknown>"
-    suffix = Path(filename).suffix.lower()
-    if suffix not in ALLOWED_SUFFIXES:
-        logger.warning("Rejected %r: unsupported file type", filename)
-        raise HTTPException(400, "Upload a CSV or XLSX schedule file")
-    content = await schedule_file.read()
-    if not content:
-        logger.warning("Rejected %r: empty file", filename)
-        raise HTTPException(400, "Uploaded file is empty")
-    if len(content) > MAX_UPLOAD_BYTES:
-        logger.warning(
-            "Rejected %r: %d bytes exceeds the 50 MB limit",
-            filename, len(content),
-        )
-        raise HTTPException(413, "Uploaded file exceeds 50 MB")
-
-    try:
-        dataframe = _read_dataframe(content, suffix)
-    except Exception as error:
-        logger.exception("Failed to read %r", filename)
-        raise HTTPException(400, f"Could not read file: {error}") from error
-    del content  # no longer needed once parsed; drop it before the solve path holds `schedule`
-
-    try:
-        schedule, _ = reconcile_records(
-            dataframe.to_dict(orient="records"), config,
-        )
-    except GroupingError as error:
-        logger.warning(
-            "Failed to group %r into classes: %s (%d record(s))",
-            filename, error, len(error.records),
-        )
-        raise HTTPException(
-            400,
-            {
-                "message": str(error),
-                "records": [_serialize_record(r) for r in error.records],
-            },
-        ) from error
-    except ValueError as error:
-        logger.warning("Failed to group %r into classes: %s", filename, error)
-        raise HTTPException(400, str(error)) from error
-    del dataframe  # Schedule.from_dataframe() copies out into Class objects; doesn't need the DataFrame itself
-
-    return filename, schedule
-
-
 class _NoCacheStaticFiles(StaticFiles):
     """Static files with no browser caching.
 
@@ -949,21 +1042,6 @@ class _NoCacheStaticFiles(StaticFiles):
         response = super().file_response(*args, **kwargs)
         response.headers["Cache-Control"] = "no-store"
         return response
-
-
-def _read_dataframe(content: bytes, suffix: str) -> pd.DataFrame:
-    # dtype=str on both branches -- without it, pandas silently infers
-    # numeric types for numeric-looking text columns (course "Number",
-    # "Room", ...), stripping leading zeros ("0803" -> 803). This isn't
-    # just theoretical: it's exactly what corrupted a solved schedule's
-    # own raw Excel export when re-uploaded for another solve pass.
-    buffer = io.BytesIO(content)
-    dataframe = (
-        pd.read_csv(buffer, dtype=str)
-        if suffix == ".csv"
-        else pd.read_excel(buffer, dtype=str)
-    )
-    return dataframe.dropna(how="all")
 
 
 def _serialize_schedule(schedule: Schedule) -> list[dict]:

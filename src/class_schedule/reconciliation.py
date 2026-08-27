@@ -134,6 +134,7 @@ def _synthesize_relationship(config: SolverConfig, relationship) -> list[dict[st
 
 def reconcile_records(
     records: list[Mapping[str, object]], config: SolverConfig,
+    *, infer_legacy_relationships: bool = True,
 ) -> tuple[Schedule, ReconciliationReport]:
     """Make the imported template exactly match courses.toml."""
     desired = {
@@ -156,13 +157,26 @@ def reconcile_records(
             if identity.strip():
                 removed.add(identity)
             continue
+        relationship = relationship_by_member.get(identity)
+        section = identity.split(maxsplit=2)[2]
+        if section.startswith("TC") and (
+            relationship is None
+            or relationship.kind not in {"hybrid", "four_credit"}
+        ):
+            # TC sections are web sections. Banner exports may describe them
+            # as arranged/unscheduled; normalize them explicitly so neither
+            # rebuilding nor solving can turn them into physical meetings.
+            row.update({
+                "Time Slot": "ONLINE", "Duration": None,
+                "Days": "", "Start": "", "End": "",
+                "Building": "", "Room": "",
+            })
         instructor = record_utils.text(record_utils.value(row, "Instructor"))
         if (
             instructor and instructor not in config.persons
             and not is_new_instructor(instructor)
             and not is_new_professor(instructor)
         ):
-            relationship = relationship_by_member.get(identity)
             identities = relationship.members if relationship is not None else [identity]
             row["Instructor"] = _placeholder(config, identities)
             reassigned.add(identity)
@@ -196,6 +210,7 @@ def reconcile_records(
         kept, persons=config.persons,
         relationships=tuple(config.courses.relationships),
         catalogs=tuple(config.catalogs.courses),
+        infer_legacy_relationships=infer_legacy_relationships,
     )
     return schedule, ReconciliationReport(
         removed=tuple(sorted(removed)), added=tuple(sorted(added)),

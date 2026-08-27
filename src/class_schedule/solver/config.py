@@ -44,7 +44,9 @@ _CONFIG_PATHS = {
     "constraints.toml": Path("constraints.toml"),
 }
 _CONFIG_FILES = tuple(_CONFIG_PATHS)
-_PACKAGE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_PACKAGE_ID = re.compile(
+    r"^(?:[A-Za-z0-9][A-Za-z0-9_-]*|推断\([1-9]\d*\))$"
+)
 
 
 @dataclass(frozen=True)

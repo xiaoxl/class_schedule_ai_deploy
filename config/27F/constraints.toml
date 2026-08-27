@@ -1,0 +1,50 @@
+# Configuration package: 27S
+# Term: Spring 2027
+# Department: MAPS
+# Program: Mathematics
+
+# Same [[rules]] selector fields as preferences.toml:
+#   name, course, section, section_prefix, room, time
+# This file is hard and has no weight.  `direction = "+"` requires the whole
+# configured name/room/time combination; `direction = "-"` forbids it.
+
+[workload]
+overload_tolerance = 2
+hard_load_cap_tolerance = 6
+far_overload_threshold = 4
+
+[workload.penalties]
+underload_per_credit = 30
+permissive_overload_per_credit = 10
+strict_overload_per_credit = 100
+far_overload_extra = 50
+
+[back_to_back]
+penalty = 10
+
+[new_instructor]
+allowed_counts = [0, 1, 2]
+contract_load = 15
+max_course_number_exclusive = 2300
+allow_back_to_back = true
+
+[new_professor]
+allowed_counts = [0]
+contract_load = 12
+min_course_number_inclusive = 1914
+allow_back_to_back = true
+
+[[rules]]
+direction = "+"
+course = "MATH 4123"
+name = "Limperis, Thomas G."
+
+[[rules]]
+direction = "+"
+course = "MATH 1113"
+section = "F01"
+room = "Corley 269"
+
+[[rules]]
+direction = "-"
+time = { days = ["F"], between = ["12:00", "12:50"], reason = "Department-wide Friday noon meeting" }

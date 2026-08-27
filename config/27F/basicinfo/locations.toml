@@ -1,0 +1,98 @@
+# Configuration package: 27S
+# Term: Spring 2027
+# Department: MAPS
+# Program: Mathematics
+
+# Rooms the solver may use when generating new schedule candidates.
+# A course's existing room remains available as a fallback even when it
+# is not listed here.
+
+[[rooms]]
+name = "Corley 101"
+location = "Corley"
+available = true
+
+[[rooms]]
+name = "Corley 102"
+location = "Corley"
+available = true
+
+[[rooms]]
+name = "Corley 103"
+location = "Corley"
+available = true
+
+[[rooms]]
+name = "Corley 104"
+location = "Corley"
+available = true
+
+[[rooms]]
+name = "Corley 267"
+location = "Corley"
+available = true
+
+[[rooms]]
+name = "Corley 268"
+location = "Corley"
+available = true
+
+[[rooms]]
+name = "Corley 269"
+location = "Corley"
+available = true
+
+[[rooms]]
+name = "Ross Pendergraft Library 220"
+location = "Ross Pendergraft Library"
+available = true
+
+[[rooms]]
+name = "Ross Pendergraft Library 331"
+location = "Ross Pendergraft Library"
+available = true
+
+[[rooms]]
+name = "Ross Pendergraft Library 332"
+location = "Ross Pendergraft Library"
+available = true
+
+[[rooms]]
+name = "Ross Pendergraft Library 334"
+location = "Ross Pendergraft Library"
+available = true
+
+[[rooms]]
+name = "Rothwell 206"
+location = "Rothwell"
+available = true
+
+[[rooms]]
+name = "Rothwell 207"
+location = "Rothwell"
+available = true
+
+[[rooms]]
+name = "Rothwell 212"
+location = "Rothwell"
+available = true
+
+[[rooms]]
+name = "Rothwell 213"
+location = "Rothwell"
+available = true
+
+[[rooms]]
+name = "Rothwell 221"
+location = "Rothwell"
+available = true
+
+[[rooms]]
+name = "Rothwell 306"
+location = "Rothwell"
+available = true
+
+[[rooms]]
+name = "Rothwell 312"
+location = "Rothwell"
+available = true

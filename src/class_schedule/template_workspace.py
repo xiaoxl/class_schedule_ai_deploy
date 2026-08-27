@@ -139,7 +139,13 @@ def rebuild_work_views(
         source = "generated_default"
 
     if config is not None:
-        schedule, report = reconcile_records(records, config)
+        schedule, report = reconcile_records(
+            records, config,
+            # A config-only seed must use only the relationships explicitly
+            # declared in its inferred courses.toml. In particular, do not
+            # resurrect legacy corequisites that inference intentionally omits.
+            infer_legacy_relationships=template is not None,
+        )
         if template is None:
             schedule = _assign_default_instructors(schedule, config)
         audit = render_reconciliation(report)

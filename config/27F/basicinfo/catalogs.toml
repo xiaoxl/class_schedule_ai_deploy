@@ -1,0 +1,228 @@
+# Configuration package: 27S
+# Term: Spring 2027
+# Department: MAPS
+# Program: Mathematics
+
+[[courses]]
+subject = "MATH"
+number = "0803"
+title = "Foundations of College Math"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "0903"
+title = "Beginning/Intermediate Algebra"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "1003"
+title = "College Mathematics"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "1110"
+title = "College Algebra Lab"
+credits = 2
+
+[[courses]]
+subject = "MATH"
+number = "1113"
+title = "College Algebra"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "1203"
+title = "Plane Trigonometry"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "1914"
+title = "Precalculus"
+credits = 4
+
+[[courses]]
+subject = "MATH"
+number = "2033"
+title = "Mathematical Concepts I"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "2043"
+title = "Mathematical Concepts II"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "2223"
+title = "Quantitative Business Analysis"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "2243"
+title = "Calculus for Business and Economics"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "2703"
+title = "Discrete Mathematics"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "2914"
+title = "Calculus I"
+credits = 4
+
+[[courses]]
+subject = "MATH"
+number = "2924"
+title = "Calculus II"
+credits = 4
+
+[[courses]]
+subject = "MATH"
+number = "2934"
+title = "Calculus III"
+credits = 4
+
+[[courses]]
+subject = "MATH"
+number = "3033"
+title = "Methods of Teaching Elementary Mathematics"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "3123"
+title = "College Geometry"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "3243"
+title = "Differential Equations I"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "4003"
+title = "Linear Algebra I"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "4123"
+title = "Mathematical Modeling"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "4971"
+title = "Mathematics Senior Seminar"
+credits = 1
+
+[[courses]]
+subject = "MATH"
+number = "5173"
+title = "Advanced Biostatistics"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "2163"
+title = "Introduction to Statistical Methods"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "3113"
+title = "Regression Analysis"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "3153"
+title = "Applied Statistics"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "3183"
+title = "Statistical Process Control"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "4173"
+title = "Advanced Biostatistics"
+credits = 3
+
+# Qualified but not offered in this package. Keeping them in the catalog makes
+# instructor qualification references explicit and validates spelling.
+[[courses]]
+subject = "MATH"
+number = "3203"
+title = "Introduction to Analysis"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "4033"
+title = "Abstract Algebra I"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "4273"
+title = "Complex Variables"
+credits = 3
+
+[[courses]]
+subject = "MATH"
+number = "4703"
+title = "Special Topics in Mathematics"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "4113"
+title = "Categorical Data Analysis"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "4163"
+title = "Mathematical Statistics"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "4383"
+title = "Machine Learning"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "5113"
+title = "Categorical Data Analysis"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "5173"
+title = "Advanced Biostatistics"
+credits = 3
+
+[[courses]]
+subject = "STAT"
+number = "5383"
+title = "Machine Learning"
+credits = 3

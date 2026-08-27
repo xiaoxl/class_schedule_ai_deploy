@@ -1,0 +1,283 @@
+# Configuration package: 27S
+# Term: Spring 2027
+# Department: MAPS
+# Program: Mathematics
+
+# FORMAT AND KEYWORDS
+#
+# Top level:
+#   staff_count_weight = 0..100
+#     Cost for every distinct Staff/Staff N identity used in the whole
+#     schedule. A larger value favors changing times to use fewer Staff
+#     identities. Hard conflicts may still require additional Staff.
+#   staff_credit_weight = 0..100
+#     Cost for every credit hour left with Staff/Staff N. A larger value
+#     favors assigning qualified named instructors instead of placeholders.
+#
+# Instructor profile (policy only, one per person):
+#   [[instructors]]
+#   name = "Exact persons.toml name"
+#   allow_overload = true|false
+#   allow_back_to_back = true|false
+#   max_back_to_back = nonnegative integer       # optional
+# max_load, aliases, and course qualifications belong in persons.toml.
+#
+# One soft matching preference per flat dictionary:
+#   [[rules]]
+#   name = "Exact instructor name"               # omit for a global rule
+#   course = "MATH 1113"
+#   section = "F01"
+#   section_prefix = "TC"
+#   room = "Corley 101"                          # or ["Corley 101", "Corley 102"]
+#   time = "8-12"
+#   weight = 50                                  # like; -50 means dislike
+#
+# Selector fields in one rule are ANDed. `section` requires `course`;
+# `section` and `section_prefix` cannot coexist. Room accepts one string or a
+# string array. Time can be the all-weekday
+# shorthand "8-12" or a table such as
+# { days = ["M", "W", "F"], between = ["08:00", "09:00"], reason = "text" }.
+# Every rule carries a nonzero signed weight in [-100, 100]. Positive means
+# preferred and is subtracted from solver cost; negative means disliked and
+# its magnitude is added. Rules with no name are global.
+# Online/web courses use section codes beginning with TC. Express that
+# preference with section_prefix = "TC" and a positive or negative weight.
+# Nearby `# Name` comments only group the file visually and have no meaning.
+# allow_overload only changes a soft penalty; overload begins above
+# max_load + 2 and is never a hard block.
+
+staff_count_weight = 10
+staff_credit_weight = 5
+
+# Bain, Leslie M.
+[[instructors]]
+name = "Bain, Leslie M."
+allow_overload = true
+allow_back_to_back = true
+max_back_to_back = 4
+
+[[rules]]
+name = "Bain, Leslie M."
+course = "STAT 2163"
+room = ["Corley 103", "Corley 104", "Rothwell 221"]
+weight = 10
+
+# Ballard, Kasey L.
+[[instructors]]
+name = "Ballard, Kasey L."
+allow_overload = false
+allow_back_to_back = true
+max_back_to_back = 4
+
+# Cox, Allie M.
+[[instructors]]
+name = "Cox, Allie M."
+allow_overload = false
+allow_back_to_back = true
+max_back_to_back = 4
+
+[[rules]]
+name = "Cox, Allie M."
+time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "Prefers no early classes" }
+weight = -50
+
+[[rules]]
+name = "Cox, Allie M."
+course = "MATH 2223"
+room = ["Corley 103", "Corley 104"]
+weight = 10
+
+# Growns, Landon C.
+[[instructors]]
+name = "Growns, Landon C."
+allow_overload = true
+allow_back_to_back = true
+max_back_to_back = 4
+
+# Jordan, Scott M.
+[[instructors]]
+name = "Jordan, Scott M."
+allow_overload = false
+allow_back_to_back = false
+max_back_to_back = 0
+
+[[rules]]
+name = "Jordan, Scott M."
+time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = -50
+
+# Jordan, Susan M.
+[[instructors]]
+name = "Jordan, Susan M."
+allow_overload = false
+allow_back_to_back = true
+max_back_to_back = 2
+
+[[rules]]
+name = "Jordan, Susan M."
+time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = -50
+
+[[rules]]
+name = "Jordan, Susan M."
+room = "Corley 101"
+weight = 100
+
+# King, Jamie L.
+[[instructors]]
+name = "King, Jamie L."
+allow_overload = false
+allow_back_to_back = true
+max_back_to_back = 4
+
+[[rules]]
+name = "King, Jamie L."
+time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = -5
+
+[[rules]]
+name = "King, Jamie L."
+course = "MATH 0903"
+weight = -5
+
+[[rules]]
+name = "King, Jamie L."
+course = "MATH 1113"
+weight = -5
+
+[[rules]]
+name = "King, Jamie L."
+course = "STAT 2163"
+room = ["Corley", "Rothwell 221"]
+weight = 10
+
+[[rules]]
+name = "King, Jamie L."
+course = "MATH 0903"
+room = ["Corley", "Rothwell 221"]
+weight = 10
+
+[[rules]]
+name = "King, Jamie L."
+course = "MATH 1113"
+room = ["Corley", "Rothwell 221"]
+weight = 10
+
+# Limperis, Thomas G.
+[[instructors]]
+name = "Limperis, Thomas G."
+allow_overload = false
+allow_back_to_back = true
+max_back_to_back = 2
+
+[[rules]]
+name = "Limperis, Thomas G."
+time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = -100
+
+[[rules]]
+name = "Limperis, Thomas G."
+room = "Rothwell"
+weight = 50
+
+[[rules]]
+name = "Limperis, Thomas G."
+section_prefix = "TC"
+weight = -100
+
+# Overduin, Matthew D.
+[[instructors]]
+name = "Overduin, Matthew D."
+allow_overload = false
+allow_back_to_back = true
+max_back_to_back = 4
+
+[[rules]]
+name = "Overduin, Matthew D."
+course = "MATH 2934"
+section = "002"
+weight = 100
+
+# Taylor, Teresa L.
+[[instructors]]
+name = "Taylor, Teresa L."
+allow_overload = true
+allow_back_to_back = true
+max_back_to_back = 4
+
+[[rules]]
+name = "Taylor, Teresa L."
+time = { days = ["M", "W", "F"], between = ["08:00", "8:51"], reason = "No 8am classes on MWF" }
+weight = -5
+
+[[rules]]
+name = "Taylor, Teresa L."
+room = "Corley 102"
+weight = 10
+
+# Winn, Janet L.
+[[instructors]]
+name = "Winn, Janet L."
+allow_overload = false
+allow_back_to_back = true
+max_back_to_back = 4
+
+[[rules]]
+name = "Winn, Janet L."
+time = { days = ["T", "R"], between = ["00:00", "23:59"], reason = "Prefers MWF only" }
+weight = -5
+
+[[rules]]
+name = "Winn, Janet L."
+time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = -20
+
+[[rules]]
+name = "Winn, Janet L."
+section_prefix = "TC"
+weight = -100
+
+[[rules]]
+name = "Winn, Janet L."
+course = "MATH 1914"
+weight = -50
+
+# Xiao, Xinli
+[[instructors]]
+name = "Xiao, Xinli"
+allow_overload = false
+allow_back_to_back = true
+max_back_to_back = 4
+
+[[rules]]
+name = "Xiao, Xinli"
+time = { days = ["M", "T", "W", "R", "F"], between = ["08:00", "8:51"], reason = "No 8am classes" }
+weight = -10
+
+[[rules]]
+name = "Xiao, Xinli"
+course = "MATH 3243"
+section = "001"
+weight = 100
+
+[[rules]]
+name = "Xiao, Xinli"
+course = "MATH 2934"
+weight = -40
+
+[[rules]]
+name = "Xiao, Xinli"
+course = "MATH 2924"
+weight = -30
+
+[[rules]]
+name = "Xiao, Xinli"
+course = "MATH 2914"
+weight = -30
+
+# Yousuf, Marium
+[[instructors]]
+name = "Yousuf, Marium"
+allow_overload = true
+allow_back_to_back = true
+max_back_to_back = 4

@@ -13,7 +13,7 @@ from .schedule_model import GroupingError, PersonRecord, Schedule, resolve_perso
 
 NORMALIZED_COLUMNS = (
     "Subject", "Number", "Section", "Type", "Title", "Credits",
-    "Instructor", "Delivery Mode", "Scheduling Status", "Time Slot",
+    "Instructor", "Delivery Mode", "Time Slot",
     "Duration", "Days", "Start", "End", "Building", "Room",
     "Cross-List", "CRN", "Seats Available", "Source Row",
 )
@@ -40,17 +40,6 @@ def _first(row: dict[str, object], *names: str) -> str:
     return record_utils.text(record_utils.value(row, *names))
 
 
-def _mode_and_status(raw_slot: str, section: Section) -> tuple[str, str]:
-    slot = raw_slot.strip().upper()
-    if slot == "ONLINE":
-        return "online", "scheduled"
-    if slot == "TBA":
-        return "arranged", "tba"
-    if not slot:
-        return "arranged", "unscheduled"
-    return section.delivery_mode.value, "scheduled"
-
-
 def clean_dataframe(
     dataframe: pd.DataFrame,
     *,
@@ -74,13 +63,8 @@ def clean_dataframe(
             section = Section.from_record(row)
             if section.section.upper().startswith(("P", "ET", "A")):
                 ignored += 1
-            raw_slot = _first(row, "Time Slot") or record_utils.format_slot(
-                record_utils.value(row, "Days"), record_utils.value(row, "Start"),
-            )
-            mode, status = _mode_and_status(raw_slot, section)
             normalized = section.to_record()
             normalized.update({
-                "Delivery Mode": mode, "Scheduling Status": status,
                 "CRN": _first(row, "CRN"),
                 "Seats Available": _first(
                     row, "Seats Available", "Seats_Avail", "Seats Avail",

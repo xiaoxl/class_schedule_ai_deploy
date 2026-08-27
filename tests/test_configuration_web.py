@@ -219,6 +219,68 @@ class ConfigurationFileManagementTests(unittest.TestCase):
         schedule, _ = reconcile_records(records, config)
         return schedule, config
 
+    def _source_template(self) -> Path:
+        return (
+            Path(__file__).parents[1] / "inputs" / "27S"
+            / "Course Schedule Report_20260820_175924.csv"
+        )
+
+    def test_template_inference_fills_only_missing_configuration_files(self):
+        draft = self.config_root / "DRAFT"
+        (draft / "basicinfo").mkdir(parents=True)
+        catalogs = self.config_root / "27S" / "basicinfo" / "catalogs.toml"
+        shutil.copy2(catalogs, draft / "basicinfo" / "catalogs.toml")
+        source = self._source_template()
+        inferred = webapp._infer_uploaded_template(
+            source.name, source.read_bytes(), package="DRAFT",
+        )
+        incoming = {"locations.toml": inferred.files["locations.toml"]}
+
+        missing = webapp._missing_inferred_files(
+            "DRAFT", inferred.files, incoming,
+        )
+
+        self.assertNotIn("catalogs.toml", missing)
+        self.assertNotIn("locations.toml", missing)
+        self.assertEqual(set(missing), set(webapp.CONFIG_FILES) - {
+            "catalogs.toml", "locations.toml",
+        })
+
+    def test_full_template_inference_creates_next_independent_package(self):
+        (self.config_root / "推断(1)").mkdir()
+        source = self._source_template()
+        package = webapp._next_inferred_package_name()
+        inferred = webapp._infer_uploaded_template(
+            source.name, source.read_bytes(), package=package,
+        )
+
+        webapp._apply_configuration_transaction({package: {
+            "replacements": inferred.files,
+            "rebuild": True,
+        }})
+
+        self.assertEqual(package, "推断(2)")
+        self.assertEqual(
+            SolverConfig.load(self.config_root, package=package).package_id,
+            package,
+        )
+        self.assertIsNone(webapp.find_template(self.config_root / package))
+        self.assertTrue(
+            (webapp.WORK_ROOT / package / "initial" / "initial.csv").is_file()
+        )
+        summary = webapp.template_summary(
+            self.config_root / package, webapp.WORK_ROOT,
+        )
+        self.assertEqual(summary["work_views"]["source"], "generated_default")
+
+    def test_generated_chinese_package_name_is_valid_upload_metadata(self):
+        content = b"# Configuration package: \xe6\x8e\xa8\xe6\x96\xad(1)\n"
+
+        self.assertEqual(
+            webapp._package_name_from_comments({"constraints.toml": content}),
+            "推断(1)",
+        )
+
     def test_web_analysis_uses_authoritative_evaluation_loads(self):
         schedule, config = self._production_schedule()
 
@@ -351,6 +413,11 @@ class ConfigurationFileManagementTests(unittest.TestCase):
             "MATH 9999 EXTRA",
             summary["work_views"]["differences"]["removed"],
         )
+        tc_rows = output[
+            output["Section"].str.upper().eq("TC1")
+            & output["Number"].isin(["0903", "1113"])
+        ]
+        self.assertEqual(set(tc_rows["Time Slot"]), {"ONLINE"})
 
     def test_courses_without_template_generate_default_work_views(self):
         summary = webapp._rebuild_package_work_views("27S")
@@ -393,6 +460,61 @@ class ConfigurationFileManagementTests(unittest.TestCase):
         self.assertEqual(manifest["configuration"]["package_id"], "27S")
         self.assertEqual(manifest["initial"]["path"], "initial.csv")
         self.assertIsInstance(manifest["files"], dict)
+
+    def test_schedule_workspace_loads_directly_from_selected_configuration(self):
+        webapp._rebuild_package_work_views("27S")
+        config = SolverConfig.load(self.config_root, package="27S")
+
+        source, schedule = webapp._load_workspace_schedule("27S", config)
+
+        self.assertEqual(source, "initial.csv")
+        self.assertGreater(len(schedule), 0)
+
+    def test_configuration_summary_only_opens_verified_working_view_tab(self):
+        self.assertFalse(webapp._configuration_summary("27S")["working_view_ready"])
+
+        webapp._rebuild_package_work_views("27S")
+        self.assertTrue(webapp._configuration_summary("27S")["working_view_ready"])
+
+        initial = webapp.WORK_ROOT / "27S" / "initial" / "initial.csv"
+        initial.write_bytes(initial.read_bytes() + b"\n")
+        self.assertFalse(webapp._configuration_summary("27S")["working_view_ready"])
+
+    def test_schedule_workspace_rejects_missing_working_view(self):
+        config = SolverConfig.load(self.config_root, package="27S")
+
+        with self.assertRaises(HTTPException) as context:
+            webapp._load_workspace_schedule("27S", config)
+
+        self.assertEqual(context.exception.status_code, 409)
+
+    def test_schedule_api_and_ui_no_longer_accept_a_schedule_upload(self):
+        routes = {
+            (route.path, frozenset(route.methods or ()))
+            for route in webapp.create_app().routes
+            if hasattr(route, "methods")
+        }
+        html = (webapp.PACKAGE_WEB / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn(("/api/schedule", frozenset({"GET"})), routes)
+        self.assertIn((
+            "/api/configuration-packages/{package}/infer-from-template",
+            frozenset({"POST"}),
+        ), routes)
+        self.assertNotIn('id="scheduleFile"', html)
+        self.assertNotIn('id="emptyFile"', html)
+        self.assertIn('id="workspaceNav"', html)
+        self.assertIn('class="workspace-tab active" data-workspace="configuration"', html)
+        self.assertNotIn('data-workspace="schedule">Schedule</button>', html)
+        script = (webapp.PACKAGE_WEB / "app.js").read_text(encoding="utf-8")
+        self.assertIn('id="configurationTemplateInfer"', script)
+        self.assertIn('item.working_view_ready', script)
+        self.assertIn('schedule-package-tab', script)
+        self.assertIn('await loadPackages(managedPackage())', script)
+        self.assertIn('data-instructor=', script)
+        self.assertIn('event.target.closest(".load-row-button")', script)
+        self.assertIn('function recordClock(minute)', script)
+        self.assertIn('startText=recordClock(minute)', script)
 
     def test_replacing_template_keeps_only_the_latest_original_filename(self):
         package = self.config_root / "27S"
