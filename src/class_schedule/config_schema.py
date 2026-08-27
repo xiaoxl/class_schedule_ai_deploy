@@ -431,6 +431,7 @@ class CourseRelationshipSchema(StrictModel):
     id: str
     kind: Literal["coreq", "cross_listing", "four_credit", "hybrid"]
     members: list[str]
+    synced_fields: list[Literal["instructor", "room", "time"]] | None = None
 
     @field_validator("id")
     @classmethod
@@ -452,11 +453,20 @@ class CourseRelationshipSchema(StrictModel):
             raise ValueError("relationship members must use 'SUBJECT NUMBER SECTION'")
         return normalized
 
+    @field_validator("synced_fields")
+    @classmethod
+    def validate_synced_fields(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and len(set(value)) != len(value):
+            raise ValueError("synced_fields must not contain duplicates")
+        return value
+
     @model_validator(mode="after")
     def validate_member_count(self):
         expected = 1 if self.kind in {"four_credit", "hybrid"} else 2
         if len(self.members) != expected:
             raise ValueError(f"{self.kind} relationships require {expected} member(s)")
+        if self.synced_fields is not None and self.kind != "cross_listing":
+            raise ValueError("synced_fields is only meaningful for cross_listing relationships")
         return self
 
 

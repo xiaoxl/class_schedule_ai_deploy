@@ -262,7 +262,7 @@ class CrossListingClassTests(unittest.TestCase):
             ),
         ))
 
-    def test_no_shared_fields_leaves_no_pairwise_rule(self):
+    def test_no_shared_fields_leaves_instructor_room_time_unconstrained(self):
         left = make_section(
             subject="MATH", number="1113", cross_list="XL1",
             instructor="Alice", room="101", time_slot="MWF 9:00am",
@@ -273,7 +273,18 @@ class CrossListingClassTests(unittest.TestCase):
         )
         item = CrossListingClass((left, right))
         self.assertEqual(item.synced_fields, frozenset())
-        self.assertIsNone(item.pairwise_predicate())
+        # Recognition (is_cross_listing) still has to hold -- the predicate
+        # is never None -- but with nothing synced, no field comparison
+        # blocks any instructor/room/time combination.
+        predicate = item.pairwise_predicate()
+        self.assertIsNotNone(predicate)
+        self.assertTrue(predicate(left, right))
+        self.assertTrue(predicate(
+            left, make_section(
+                subject="STAT", number="2103", cross_list="XL1",
+                instructor="Carol", room="310", time_slot="F 1:00pm", duration=50,
+            ),
+        ))
 
     def test_two_honors_sections_is_not_honors_pair(self):
         left = make_section(section="H01", instructor="Alice", room="101")
@@ -298,13 +309,17 @@ class CoreqClassTests(unittest.TestCase):
         self.assertFalse(CoreqClass.is_coreq_pair(left, right))
 
     def test_both_online_same_instructor_is_valid_schedule(self):
-        left = make_section(time_slot="ONLINE", duration=None, instructor="Alice")
-        right = make_section(time_slot="ONLINE", duration=None, instructor="Alice")
+        left = make_section(
+            number="1113", time_slot="ONLINE", duration=None, instructor="Alice",
+        )
+        right = make_section(
+            number="0903", time_slot="ONLINE", duration=None, instructor="Alice",
+        )
         self.assertTrue(CoreqClass.is_valid_schedule(left, right))
 
     def test_back_to_back_same_room_is_valid_schedule(self):
-        left = make_section(time_slot="MWF 9:00am", duration=50, room="101")
-        right = make_section(time_slot="MWF 9:50am", duration=50, room="101")
+        left = make_section(number="1113", time_slot="MWF 9:00am", duration=50, room="101")
+        right = make_section(number="0903", time_slot="MWF 9:50am", duration=50, room="101")
         self.assertTrue(CoreqClass.is_valid_schedule(left, right))
 
     def test_back_to_back_different_room_is_not_valid_schedule(self):
@@ -337,8 +352,8 @@ class CoreqClassTests(unittest.TestCase):
         self.assertFalse(CoreqClass.is_valid_schedule(left, right))
 
     def test_within_30_minutes_different_days_is_valid_schedule(self):
-        left = make_section(time_slot="MWF 9:00am", duration=50, room="101")
-        right = make_section(time_slot="T 9:20am", duration=75, room="102")
+        left = make_section(number="1113", time_slot="MWF 9:00am", duration=50, room="101")
+        right = make_section(number="0903", time_slot="T 9:20am", duration=75, room="102")
         self.assertTrue(CoreqClass.is_valid_schedule(left, right))
 
     def test_credit_hours_add_both_courses(self):

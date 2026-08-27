@@ -360,7 +360,13 @@ def _take_configured_relationships(
             elif relationship.kind == "cross_listing":
                 if len(rows) != 2:
                     raise ValueError("configured cross-listing requires two source rows")
-                item = CrossListingClass.from_configured_sections(rows)
+                synced_fields = (
+                    frozenset(relationship.synced_fields)
+                    if relationship.synced_fields is not None else None
+                )
+                item = CrossListingClass.from_configured_sections(
+                    rows, synced_fields=synced_fields,
+                )
             else:
                 if len(rows) != 2:
                     raise ValueError("configured coreq requires two source rows")
@@ -1169,7 +1175,7 @@ def check_atomic_class_rules(schedule: "Schedule") -> list[HardViolation]:
     """Report nonfatal construction issues that adjustment must repair.
 
     Sourced from each class's own ``schedule_issues``/``schedule_issue_rule``
-    (FourCreditClass, HybridClass, CoreqClass -- see docs/codes.md) rather
+    (all four two-row kinds -- see docs/codes.md) rather
     than a separate per-kind mapping kept here: any kind that carries
     ``schedule_issues`` is reported the same way, with no per-kind branch
     to remember to add.

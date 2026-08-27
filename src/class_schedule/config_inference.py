@@ -220,7 +220,9 @@ def _preferences_toml(sections, header: str) -> str:
     return "".join(blocks)
 
 
-def _inferred_relationships(schedule: Schedule) -> list[tuple[str, list[str]]]:
+def _inferred_relationships(
+    schedule: Schedule,
+) -> list[tuple[str, list[str], frozenset[str] | None]]:
     relationships = []
     for item in schedule.classes:
         kind = (
@@ -235,7 +237,13 @@ def _inferred_relationships(schedule: Schedule) -> list[tuple[str, list[str]]]:
             f"{section.subject} {section.number} {section.section.upper()}"
             for section in item.sections
         ))
-        relationships.append((kind, members))
+        # A cross-listing's synced_fields is otherwise re-derived from
+        # whatever the current rows happen to show every time the schedule
+        # is reloaded (see docs/codes.md) -- baking in what the template
+        # actually had at inference time turns that one-shot heuristic into
+        # a persisted, human-editable decision instead.
+        synced_fields = item.synced_fields if isinstance(item, CrossListingClass) else None
+        relationships.append((kind, members, synced_fields))
     return relationships
 
 
@@ -254,12 +262,17 @@ def _courses_toml(schedule: Schedule, header: str) -> str:
             f"number = {_quote(number)}\n"
             f"sections = {_array(sorted(values))}\n"
         )
-    for index, (kind, members) in enumerate(_inferred_relationships(schedule), 1):
+    for index, (kind, members, synced_fields) in enumerate(
+        _inferred_relationships(schedule), 1,
+    ):
         slug = re.sub(r"[^a-z0-9]+", "-", "-".join(members).lower()).strip("-")
-        blocks.append(
+        block = (
             "\n[[relationships]]\n"
             f"id = {_quote(f'inferred-{kind}-{slug}-{index}')}\n"
             f"kind = {_quote(kind)}\n"
             f"members = {_array(members)}\n"
         )
+        if synced_fields is not None:
+            block += f"synced_fields = {_array(sorted(synced_fields))}\n"
+        blocks.append(block)
     return "".join(blocks)

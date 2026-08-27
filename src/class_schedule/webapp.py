@@ -1055,6 +1055,14 @@ def _serialize_schedule(schedule: Schedule) -> list[dict]:
             "course_ids": list(item.course_ids),
             "credit_hours": item.credit_hours,
             "sections": [_serialize_record(r) for r in item.to_records()],
+            # CrossListingClass only -- see docs/codes.md. Lets the web UI
+            # decide whether editing instructor/room/time on one row should
+            # propagate to the other, instead of guessing from whatever the
+            # two rows' current values happen to be.
+            "synced_fields": (
+                sorted(item.synced_fields)
+                if hasattr(item, "synced_fields") else None
+            ),
         }
         for item in schedule
     ]

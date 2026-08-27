@@ -326,6 +326,43 @@ class ConfigLayoutTests(unittest.TestCase):
         ], relationships=relationships)
         self.assertEqual(type(schedule.classes[0]).__name__, "CoreqClass")
 
+    def test_configured_cross_listing_uses_its_declared_synced_fields(self):
+        relationships = CoursesFileSchema.model_validate({
+            "courses": [
+                {"subject": "MATH", "number": "5173", "sections": ["TC1"]},
+                {"subject": "STAT", "number": "4173", "sections": ["TC1"]},
+            ],
+            "relationships": [{
+                "id": "configured-cross-listing", "kind": "cross_listing",
+                "members": ["MATH 5173 TC1", "STAT 4173 TC1"],
+                "synced_fields": ["instructor", "room"],
+            }],
+        }).relationships
+        # Rooms actually differ in the source data -- auto-detection would
+        # never lock "room" on its own; the declared synced_fields is a
+        # persisted decision that overrides that (see docs/codes.md).
+        schedule = Schedule.from_records([
+            {"Subject": "MATH", "Number": "5173", "Section": "TC1", "Time Slot": "TR 11:00am", "Duration": 80, "Building": "Corley", "Room": "101", "Instructor": "Alice"},
+            {"Subject": "STAT", "Number": "4173", "Section": "TC1", "Time Slot": "TR 11:00am", "Duration": 80, "Building": "Corley", "Room": "205", "Instructor": "Alice"},
+        ], relationships=relationships)
+        item = schedule.classes[0]
+        self.assertEqual(type(item).__name__, "CrossListingClass")
+        self.assertEqual(item.synced_fields, frozenset({"instructor", "room"}))
+
+    def test_synced_fields_is_rejected_for_a_non_cross_listing_relationship(self):
+        with self.assertRaisesRegex(ValueError, "synced_fields"):
+            CoursesFileSchema.model_validate({
+                "courses": [
+                    {"subject": "MATH", "number": "2003", "sections": ["001"]},
+                    {"subject": "MATH", "number": "2004", "sections": ["001"]},
+                ],
+                "relationships": [{
+                    "id": "configured-coreq", "kind": "coreq",
+                    "members": ["MATH 2003 001", "MATH 2004 001"],
+                    "synced_fields": ["instructor"],
+                }],
+            })
+
     def test_package_catalog_is_required_and_credit_is_authoritative(self):
         catalog = (CatalogCourseSchema(
             subject="MATH", number="1113", title="College Algebra", credits=3,

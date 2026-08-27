@@ -144,7 +144,7 @@ class EvaluateFourCreditTests(unittest.TestCase):
 
         self.assertEqual(len(evaluation.hard_violations), 1)
         self.assertEqual(
-            evaluation.hard_violations[0].rule, "four_credit_time_gap"
+            evaluation.hard_violations[0].rule, "four_credit_invalid"
         )
 
 
@@ -152,19 +152,24 @@ class EvaluateHybridShapeTests(unittest.TestCase):
     def test_two_physical_rows_is_a_nonfatal_construction_violation(self):
         # Reachable via a courses.toml "hybrid" relationship whose declared
         # member no longer looks like a physical+companion pair (see
-        # docs/codes.md) -- construction must not raise, and the solver
-        # must not be asked to enforce is_hybrid on it (that would make
-        # solving infeasible instead of just reporting the problem).
+        # docs/codes.md). Construction never rejects this -- it is
+        # reported, not raised -- and the solver still enforces the full
+        # rule via pairwise_predicate like every other kind; a pairing
+        # this broken simply can't be scheduled (a section's online/
+        # physical shape isn't something candidate selection can fix), so
+        # solving it would report infeasible rather than repair it.
         item = HybridClass((
             make_section(Section="M01", **{"Time Slot": "MWF 8:00am"}),
             make_section(Section="M01", **{"Time Slot": "MWF 9:00am"}),
         ))
 
-        self.assertIsNone(item.pairwise_predicate())
+        predicate = item.pairwise_predicate()
+        self.assertIsNotNone(predicate)
+        self.assertFalse(predicate(*item.sections))
         evaluation = evaluate_schedule(Schedule([item]), {}, {})
 
         self.assertEqual(len(evaluation.hard_violations), 1)
-        self.assertEqual(evaluation.hard_violations[0].rule, "hybrid_shape")
+        self.assertEqual(evaluation.hard_violations[0].rule, "hybrid_invalid")
 
 
 class EvaluateRequiredRoomTests(unittest.TestCase):

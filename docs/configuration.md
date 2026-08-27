@@ -101,6 +101,18 @@ members = ["MATH 1110 003", "MATH 1113 003"]
 
 The TOML declares only identity and relationship kind. Same-instructor, same-room, back-to-back, shared-meeting, credit, editing, and export behavior remain authoritative in the existing Python atomic-class types. Explicit relationships are applied before legacy import recognition.
 
+A `cross_listing` relationship may also declare `synced_fields`, an array drawn from `"instructor"`, `"room"`, `"time"`:
+
+```toml
+[[relationships]]
+id = "math-5173-stat-4173"
+kind = "cross_listing"
+members = ["MATH 5173 TC1", "STAT 4173 TC1"]
+synced_fields = ["instructor", "room"]
+```
+
+This is a persisted decision, not a live check: whichever fields are listed stay in sync (the solver keeps them matching); any field left out is free to diverge independently across the two rows, with no conflict between them. Omitting `synced_fields` falls back to auto-detecting it from whatever the current rows show, re-evaluated every time the schedule loads -- declaring it explicitly is how "the source template already had them different" becomes a fact that survives edits and reloads instead of being re-guessed each time. `从模板推断` (template inference) writes this automatically, from whatever the imported template actually showed.
+
 ## People, preferences, and constraints
 
 New Instructor identities are dynamic and need no person record. Their contract, numeric course limit, and back-to-back policy are defined in `constraints.toml`.

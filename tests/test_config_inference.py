@@ -68,6 +68,18 @@ class ConfigurationInferenceTests(unittest.TestCase):
             self.assertEqual(inferred.section_count, 6)
             self.assertCountEqual(kinds, ["hybrid", "four_credit", "cross_listing"])
             self.assertNotIn("coreq", kinds)
+            cross_listing = next(
+                item for item in courses["relationships"]
+                if item["kind"] == "cross_listing"
+            )
+            # The template's MATH 5173/STAT 4173 rows already shared an
+            # instructor, room, and time -- that observed-at-inference state
+            # is baked in as a persisted decision (see docs/codes.md),
+            # rather than left to be re-derived from whatever a future load
+            # happens to show.
+            self.assertCountEqual(
+                cross_listing["synced_fields"], ["instructor", "room", "time"],
+            )
             self.assertEqual(
                 set(config.persons["Teacher, Alice"].courses),
                 {
