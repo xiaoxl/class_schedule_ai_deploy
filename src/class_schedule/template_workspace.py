@@ -182,6 +182,7 @@ def rebuild_work_views(
         schedule.to_room_excel(location)
         reconciliation.write_text(audit, encoding="utf-8")
         template_hash = hashlib.sha256(template.read_bytes()).hexdigest() if template else None
+        generated_files = (initial, instructor, location, reconciliation)
         manifest = {
             "schema_version": 4,
             "role": "initial",
@@ -189,12 +190,39 @@ def rebuild_work_views(
             "source": source,
             "generated_at": datetime.now(UTC).isoformat(),
             "configuration_version": config_version,
+            "configuration": ({
+                "package_id": config.package_id,
+                "version": config.version,
+                "files": [
+                    {
+                        "path": str(path),
+                        "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+                    }
+                    for path in config.source_paths
+                ],
+            } if config is not None else {
+                "package_id": package_root.name,
+                "version": None,
+                "files": [],
+            }),
             "template": {
                 "filename": template.name if template else None,
                 "sha256": template_hash,
             },
+            "reconciliation": {
+                "snapshot": reconciliation.name,
+                "sha256": hashlib.sha256(reconciliation.read_bytes()).hexdigest(),
+                "source": "courses.toml" if config is not None else "template_only",
+            },
+            "initial": {
+                "path": initial.name,
+                "sha256": hashlib.sha256(initial.read_bytes()).hexdigest(),
+            },
             "differences": differences,
-            "files": [initial.name, instructor.name, location.name, reconciliation.name],
+            "files": {
+                path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in generated_files
+            },
         }
         (staging / "manifest.json").write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8",

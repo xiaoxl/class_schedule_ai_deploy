@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from class_schedule import webapp
 from class_schedule.reconciliation import reconcile_records
 from class_schedule.schedule_model import evaluate_schedule
+from class_schedule.schedule_run import _verified_initial
 from class_schedule.solver import SolverConfig
 
 
@@ -20,6 +21,7 @@ class ConfigurationFileManagementTests(unittest.TestCase):
         self.config_root = Path(self.temporary.name) / "config"
         source = Path(__file__).parents[1] / "config" / "27S"
         shutil.copytree(source, self.config_root / "27S")
+        shutil.rmtree(self.config_root / "27S" / "template", ignore_errors=True)
         self.config_patch = patch.object(webapp, "CONFIG_DIR", self.config_root)
         self.trash_patch = patch.object(
             webapp, "CONFIG_TRASH", Path(self.temporary.name) / "trash",
@@ -380,6 +382,17 @@ class ConfigurationFileManagementTests(unittest.TestCase):
             if item.rule in {"instructor_conflict", "room_conflict"}
         ]
         self.assertEqual(basic_conflicts, [])
+
+    def test_rebuilt_manifest_is_accepted_by_solver_provenance_check(self):
+        webapp._rebuild_package_work_views("27S")
+        initial = webapp.WORK_ROOT / "27S" / "initial" / "initial.csv"
+
+        reconciliation, manifest = _verified_initial(initial)
+
+        self.assertEqual(reconciliation.name, "reconciliation.toml")
+        self.assertEqual(manifest["configuration"]["package_id"], "27S")
+        self.assertEqual(manifest["initial"]["path"], "initial.csv")
+        self.assertIsInstance(manifest["files"], dict)
 
     def test_replacing_template_keeps_only_the_latest_original_filename(self):
         package = self.config_root / "27S"

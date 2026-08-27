@@ -630,21 +630,31 @@ def _apply_configuration_transaction(changes: dict[str, dict]) -> None:
             ) from error
 
         swaps: list[tuple[Path, Path | None]] = []
+        incoming_paths: list[Path] = []
         try:
             for package in changes:
                 staged_package = staged_config / package
                 destination = CONFIG_DIR / package
+                incoming = CONFIG_DIR / f".{package}.incoming-{uuid.uuid4().hex}"
+                shutil.copytree(staged_package, incoming)
+                incoming_paths.append(incoming)
                 backup = None
                 if destination.exists():
                     backup = CONFIG_DIR / f".{package}.backup-{uuid.uuid4().hex}"
                     destination.replace(backup)
                 swaps.append((destination, backup))
-                staged_package.replace(destination)
+                incoming.replace(destination)
+                incoming_paths.remove(incoming)
 
                 staged_initial = staged_work / package / "initial"
                 if staged_initial.is_dir():
                     destination_initial = WORK_ROOT / package / "initial"
                     destination_initial.parent.mkdir(parents=True, exist_ok=True)
+                    work_incoming = destination_initial.parent / (
+                        f".initial.incoming-{uuid.uuid4().hex}"
+                    )
+                    shutil.copytree(staged_initial, work_incoming)
+                    incoming_paths.append(work_incoming)
                     work_backup = None
                     if destination_initial.exists():
                         work_backup = destination_initial.parent / (
@@ -652,8 +662,12 @@ def _apply_configuration_transaction(changes: dict[str, dict]) -> None:
                         )
                         destination_initial.replace(work_backup)
                     swaps.append((destination_initial, work_backup))
-                    staged_initial.replace(destination_initial)
+                    work_incoming.replace(destination_initial)
+                    incoming_paths.remove(work_incoming)
         except OSError as error:
+            for incoming in incoming_paths:
+                if incoming.exists():
+                    shutil.rmtree(incoming)
             for destination, backup in reversed(swaps):
                 if destination.exists():
                     shutil.rmtree(destination)
