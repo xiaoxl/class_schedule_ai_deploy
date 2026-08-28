@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .class_model import infer_credit_hours
 
 COURSE_PATTERN = re.compile(r"^[A-Z]+\s+\d+[A-Z]?$")
 TIME_RANGE_PATTERN = re.compile(
@@ -392,11 +393,17 @@ class CatalogCourseSchema(StrictModel):
 
     @property
     def resolved_credits(self) -> float:
-        """Configured credits, or the final numeric course-number digit."""
+        """Configured credits, or the final numeric course-number digit.
+
+        Shares ``class_model.infer_credit_hours`` -- the fallback used to
+        live here too, separately (and, for a trailing-letter number like
+        "1013L", differently -- see docs/codes.md), so a course without
+        explicit ``credits`` could silently get a different answer
+        depending on which code path resolved it.
+        """
         if self.credits is not None:
             return self.credits
-        match = re.search(r"(\d)(?:[A-Z])?$", self.number)
-        return float(match.group(1)) if match else 0.0
+        return float(infer_credit_hours(self.number))
 
 
 class CatalogsFileSchema(StrictModel):

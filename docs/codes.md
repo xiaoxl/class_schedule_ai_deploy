@@ -1566,3 +1566,141 @@ cross-listings, `synced_fields` as the preferred syntax, or
 - Weekly exports include a complete Issues sheet and use structured
   `RecordReference` values for hard/soft highlighting. The web issue list no
   longer truncates after eight entries.
+
+## Addendum, 2026-08-28: a live regression in the batch above, plus two latent consistency gaps -- found by re-checking the shipped code against real 27S/27F data
+
+The redesign documented in the addenda above (Hybrid/FourCredit intrinsic
+recognition, Coreq/CrossListing config-only, `validate()`/`validation_report()`,
+N-member CrossListing, no more hand-written relationship `id`) was reviewed
+against the actual committed code and the real 27S/27F working views, not
+just the design discussion. Two things were confirmed working exactly as
+designed; three were not, one of them **actively wrong on real,
+already-published data** at the moment this review happened.
+
+### 1. Coreq's tightened `_back_to_back` broke a real, currently-scheduled pair
+
+`_back_to_back`'s `shared_days` had been tightened to
+`left.days == right.days == "MWF"` -- exact equality, not overlap. Running
+`evaluate_schedule` against `work/27S/initial/initial.csv` (the actual
+reconciled 27S working view) found:
+
+```
+coreq_invalid: 1
+  MATH 1110-003 / MATH 1113-003 coreq meetings must be MWF back-to-back
+  or an MWF + TR five-day pairing
+```
+
+The real data: `MATH 1110 003` is a 2-credit lab meeting `MW` only;
+`MATH 1113 003` is the 3-credit lecture meeting `MWF`; same instructor,
+same room (Rothwell 221), the lab starts 10 minutes after the lecture
+ends. A lab that meets fewer days than its paired lecture, back-to-back
+in the same room, is a real and reasonable pattern -- `"MW" != "MWF"`
+wrongly rejected it, even though M and W are literally shared between the
+two.
+
+Fixed by reverting `shared_days` (in both `_back_to_back` and `_issues`)
+to an overlap check -- `bool(set(left.days or "") & set(right.days or ""))`
+-- which is what it was before this round of tightening. The separate,
+newly-added strict requirement for the *disjoint*-weekday branch
+(`{left.days, right.days} == {"MWF", "TR"}`, not any two disjoint sets)
+was kept -- re-running the same real-data check found no violation
+attributable to that one, so there was no evidence it needed loosening
+too.
+
+```python
+shared_days = bool(set(left.days or "") & set(right.days or ""))
+```
+
+Re-running `evaluate_schedule` against both `work/27S/initial/initial.csv`
+and `work/27F/initial/initial.csv` after the fix: `coreq_invalid: 0` on
+both, and the total hard-violation count only dropped by exactly the one
+issue removed (14, was 15, on 27S) -- nothing else moved. New regression
+test: `CoreqClassTests::test_partial_weekday_overlap_can_still_be_back_to_back`
+(`tests/test_class_model.py`), built from the exact real MW/MWF shape above.
+
+### 2. `infer_credit_hours` had two different implementations that disagreed
+
+`class_model.py`'s `infer_credit_hours(number)` read only `number[-1]`
+and required it to be a digit -- for a course number carrying the one
+trailing letter `config_schema.OfferedCourseSchema`'s own validator
+explicitly documents as a supported format (its error message literally
+says `"number must be text such as '1113' or '1013L'"`), this silently
+inferred **0 credits** instead of reading the digit before the letter.
+Separately, `config_schema.py`'s `CatalogCourseSchema.resolved_credits`
+already had its own, *correct* regex (`r"(\d)(?:[A-Z])?$"`) for the same
+fallback -- and `reconciliation.py` already depended on that correct one
+for synthesized rows/demand counts. So a course numbered e.g. `"1013L"`
+with no explicit `credits` got a different answer depending on which of
+the two independent implementations resolved it -- `_group_records` (the
+main schedule-loading path, `schedule_model.py`) via the broken one, or
+`reconciliation.py` via the correct one.
+
+Fixed by keeping exactly one implementation, in `class_model.py` (the
+lower-level module the domain model already lives in), and having
+`config_schema.py`'s `resolved_credits` call it instead of its own copy:
+
+```python
+def infer_credit_hours(number: str) -> int:
+    match = re.search(r"(\d)[A-Z]?$", number or "")
+    return int(match.group(1)) if match else 0
+```
+
+New tests: `InferCreditHoursTests` (`tests/test_class_model.py`, unit-level
+-- plain number, trailing-letter number, no-digit-at-all) and
+`test_catalog_credit_inference_handles_a_trailing_letter_course_number`
+(`tests/test_pipeline.py`, integration-level -- loads an actual
+`Schedule.from_records()` schedule with a `"1013L"` catalog course and no
+explicit `credits`, asserts `credit_hours == 3`, exercising the real
+previously-broken `_group_records` path directly, not just the function
+in isolation).
+
+### 3. Coreq template inference could silently mis-pair on whitelist ambiguity
+
+`infer_relationships_from_template`'s coreq loop matched greedily: for
+each unconsumed row, take the *first* subsequent row satisfying
+`is_coreq_pair` and commit it immediately. The whitelist pairs
+`"MATH 1113"` with *two* different courses (`"MATH 0903"` and
+`"MATH 1110"`) -- if a template's section number were ever shared by all
+three (`MATH 0903`/`MATH 1110`/`MATH 1113`, same section), `"MATH 1113"`
+would match both candidates, and the old scan picked whichever one it
+reached first in row order, silently dropping the other with no
+indication anything was ambiguous. (Checked this
+specifically against 27S's real data: section `"003"` only has
+`MATH 1110`/`MATH 1113`, no `MATH 0903 003`, so this was not yet an
+active problem there -- a latent gap, not a live one, unlike #1 above.)
+
+Fixed by finding every whitelist-eligible candidate pair *before*
+committing any of them, then rejecting the whole inference with a clear
+`ValueError` if any course matched more than one candidate, instead of
+silently resolving it by scan order:
+
+```python
+if ambiguous:
+    raise ValueError(
+        f"Ambiguous coreq inference: {member} matches multiple "
+        f"whitelisted partners ({partners}) -- declare the intended "
+        "coreq relationship explicitly in courses.toml instead of "
+        "relying on inference"
+    )
+```
+
+New test: `test_coreq_inference_rejects_an_ambiguous_whitelist_match`
+(`tests/test_config_inference.py`), a three-row template built from the
+exact ambiguous shape described above (`MATH 0903 003` / `MATH 1110 003`
+/ `MATH 1113 003`), asserting `infer_configuration_from_template` raises
+instead of picking one silently.
+
+### Not done in this pass: the dynamic-position placeholder credit weight still reads only a class's first row
+
+`solver/constraints.py`'s `add_placeholder_load_terms` -- a separate,
+purely optimization-side objective term (discourages using New
+Instructor/New Professor credit hours, distinct from `add_load_terms`'s
+hard cap enforcement, already fixed in the addendum above) -- still reads
+`sections_by_class[class_index][0]` only. For an instructor-unsynced
+`CrossListingClass` whose *second* row is a placeholder identity, this
+under-penalizes (never over-penalizes) that class in the objective. Raised
+again during this review and explicitly left alone: it can only under-count
+a soft preference weight, not produce an incorrect hard result, so it stays
+a smaller, separate follow-up rather than being bundled into a pass whose
+other three items were either an active data regression or a silent
+data-integrity gap.

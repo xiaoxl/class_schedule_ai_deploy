@@ -125,6 +125,24 @@ class ConfigurationInferenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no physical meeting times"):
                 infer_configuration_from_template(path, package="TEST")
 
+    def test_coreq_inference_rejects_an_ambiguous_whitelist_match(self):
+        # Regression: the coreq whitelist pairs "MATH 1113" with both
+        # "MATH 0903" and "MATH 1110" -- if a template's section number is
+        # shared by all three, "MATH 1113" matches two different
+        # candidates, and inference used to silently pick whichever one
+        # the scan reached first instead of flagging the ambiguity (see
+        # docs/codes.md).
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "source.csv"
+            pd.DataFrame([
+                self._row("MATH", "0903", "003", "Corequisite Support", 1, "MWF 8:00am", 50),
+                self._row("MATH", "1110", "003", "College Algebra Lab", 2, "MW 2:00pm", 50),
+                self._row("MATH", "1113", "003", "College Algebra", 3, "MWF 1:00pm", 50),
+            ]).to_csv(path, index=False)
+
+            with self.assertRaisesRegex(ValueError, "Ambiguous coreq inference"):
+                infer_configuration_from_template(path, package="TEST")
+
     def test_cross_list_marker_infers_all_members_and_unsynced_fields(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "source.csv"

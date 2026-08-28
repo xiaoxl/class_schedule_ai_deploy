@@ -7,6 +7,7 @@ from class_schedule.class_model import (
     HybridClass,
     NormalClass,
     Section,
+    infer_credit_hours,
 )
 
 
@@ -23,6 +24,21 @@ def make_section(**overrides) -> Section:
     )
     defaults.update(overrides)
     return Section(**defaults)
+
+
+class InferCreditHoursTests(unittest.TestCase):
+    def test_plain_number_uses_the_last_digit(self):
+        self.assertEqual(infer_credit_hours("1913"), 3)
+
+    def test_trailing_letter_suffix_still_reads_the_digit_before_it(self):
+        # Regression: number[-1].isdigit() alone reads "L" and infers 0 --
+        # config_schema.OfferedCourseSchema's own number validator treats
+        # "1013L" as a normal, expected format (see docs/codes.md), so a
+        # course numbered this way must not silently become 0 credits.
+        self.assertEqual(infer_credit_hours("1013L"), 3)
+
+    def test_no_digits_at_all_infers_zero(self):
+        self.assertEqual(infer_credit_hours("ABC"), 0)
 
 
 class SectionTests(unittest.TestCase):
@@ -488,6 +504,19 @@ class CoreqClassTests(unittest.TestCase):
             time_slot="MWF 9:50am", duration=50, room="101", building="Rothwell"
         )
         self.assertFalse(CoreqClass.is_valid_schedule(left, right))
+
+    def test_partial_weekday_overlap_can_still_be_back_to_back(self):
+        # Regression: a real, currently-scheduled pattern (MATH 1110-003 /
+        # MATH 1113-003 in config/27S) -- a 2-credit MW lab back-to-back
+        # with a 3-credit MWF lecture, same room. _back_to_back's
+        # shared_days briefly required the two day-strings to be
+        # *identical* ("MWF" == "MWF"), which wrongly rejected this
+        # (see docs/codes.md) -- "MW" and "MWF" share M and W, that's
+        # enough.
+        left = make_section(number="1113", time_slot="MWF 1:00pm", duration=50, room="101")
+        right = make_section(number="1110", time_slot="MW 2:00pm", duration=50, room="101")
+        self.assertTrue(CoreqClass._back_to_back(left, right))
+        self.assertTrue(CoreqClass.is_valid_schedule(left, right))
 
     def test_clock_adjacent_on_different_days_is_not_back_to_back(self):
         left = make_section(time_slot="MWF 9:00am", duration=50, room="101")

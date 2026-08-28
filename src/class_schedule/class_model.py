@@ -32,8 +32,18 @@ class DeliveryMode(StrEnum):
 
 
 def infer_credit_hours(number: str) -> int:
-    """Infer catalog credits from the final numeric course-number digit."""
-    return int(number[-1]) if number and number[-1].isdigit() else 0
+    """Infer catalog credits from the final numeric course-number digit.
+
+    A course number may carry one trailing letter (e.g. "1013L" -- see
+    ``config_schema.OfferedCourseSchema``'s number format), so this looks
+    for the last *digit*, not just the last character -- ``number[-1]``
+    alone would silently read a trailing letter as "no digit here" and
+    infer 0 credits. The single canonical implementation: previously
+    duplicated (differently) in ``config_schema.py``'s
+    ``resolved_credits``, which now calls this instead (see docs/codes.md).
+    """
+    match = re.search(r"(\d)[A-Z]?$", number or "")
+    return int(match.group(1)) if match else 0
 
 
 @dataclass(slots=True)
@@ -907,14 +917,22 @@ class CoreqClass(SpecialClass):
 
     @staticmethod
     def _back_to_back(left: Section, right: Section) -> bool:
-        """Shared weekday, and a gap of 15 minutes or less either way."""
+        """Any shared weekday, and a gap of 15 minutes or less either way.
+
+        Deliberately an overlap check (e.g. "MW" and "MWF" share M and W),
+        not "the two day-strings are identical" -- a lab meeting fewer
+        days than its paired lecture (2-credit MW lab + 3-credit MWF
+        lecture, same room, back-to-back) is a real, currently-scheduled
+        pattern (see docs/codes.md); requiring exact equality wrongly
+        rejected it.
+        """
         if left.start is None or right.start is None:
             return False
         left_start = left.start.hour * 60 + left.start.minute
         right_start = right.start.hour * 60 + right.start.minute
         left_end = left_start + (left.duration or 0)
         right_end = right_start + (right.duration or 0)
-        shared_days = left.days == right.days == "MWF"
+        shared_days = bool(set(left.days or "") & set(right.days or ""))
         return shared_days and (
             0 <= right_start - left_end <= 15
             or 0 <= left_start - right_end <= 15
@@ -949,7 +967,7 @@ class CoreqClass(SpecialClass):
             return (f"{label} coreq meetings require a valid time",)
         left_start = left.start.hour * 60 + left.start.minute
         right_start = right.start.hour * 60 + right.start.minute
-        shared_days = left.days == right.days == "MWF"
+        shared_days = bool(set(left.days or "") & set(right.days or ""))
         back_to_back = cls._back_to_back(left, right)
         if shared_days and not back_to_back:
             # Same weekday on both sides but not back-to-back: the two

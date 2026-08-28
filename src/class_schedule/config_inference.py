@@ -326,6 +326,14 @@ def infer_relationships_from_template(
                 break
 
     # Coreq defaults are inference-only; runtime uses the emitted config.
+    # Every whitelist-eligible pair is found *before* any of them is
+    # committed, so a member matching more than one candidate (the
+    # whitelist has "MATH 1113" paired with both "MATH 0903" and
+    # "MATH 1110" -- a section number shared by all three would match
+    # both) is caught as an inference ambiguity, not silently resolved by
+    # whichever candidate the scan happens to reach first (see
+    # docs/codes.md).
+    coreq_candidates: list[tuple[str, str]] = []
     for left_index, left in enumerate(sections):
         left_member = _member(left)
         if left_member in consumed:
@@ -335,11 +343,34 @@ def infer_relationships_from_template(
             if right_member in consumed:
                 continue
             if CoreqClass.is_coreq_pair(left, right):
-                relationships.append(CourseRelationshipSchema(
-                    kind="coreq", members=[left_member, right_member],
-                ))
-                consumed.update((left_member, right_member))
-                break
+                coreq_candidates.append((left_member, right_member))
+    partners_by_member: dict[str, list[str]] = {}
+    for left_member, right_member in coreq_candidates:
+        partners_by_member.setdefault(left_member, []).append(right_member)
+        partners_by_member.setdefault(right_member, []).append(left_member)
+    ambiguous = sorted(
+        member for member, partners in partners_by_member.items()
+        if len(partners) > 1
+    )
+    if ambiguous:
+        member = ambiguous[0]
+        partners = ", ".join(sorted(partners_by_member[member]))
+        raise ValueError(
+            f"Ambiguous coreq inference: {member} matches multiple "
+            f"whitelisted partners ({partners}) -- declare the intended "
+            "coreq relationship explicitly in courses.toml instead of "
+            "relying on inference"
+        )
+    seen_pairs: set[frozenset[str]] = set()
+    for left_member, right_member in coreq_candidates:
+        pair = frozenset((left_member, right_member))
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        relationships.append(CourseRelationshipSchema(
+            kind="coreq", members=[left_member, right_member],
+        ))
+        consumed.update(pair)
     return tuple(relationships)
 
 

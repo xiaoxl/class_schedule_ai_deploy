@@ -492,6 +492,24 @@ class ConfigLayoutTests(unittest.TestCase):
                 **base, "Number": "9993",
             }], catalogs=catalog)
 
+    def test_catalog_credit_inference_handles_a_trailing_letter_course_number(self):
+        # Regression: schedule_model._group_records' fallback for a
+        # catalog course with no explicit `credits` used to differ from
+        # config_schema.CatalogCourseSchema.resolved_credits (which
+        # reconciliation.py already relied on) -- number[-1].isdigit()
+        # alone read "L" in "1013L" as "no digit here" and inferred 0,
+        # even though "1013L" is an explicitly supported catalog number
+        # format (see docs/codes.md). Both now share one function.
+        catalog = (CatalogCourseSchema(
+            subject="MATH", number="1013L", title="College Algebra Lab",
+        ),)
+        schedule = Schedule.from_records([{
+            "Subject": "MATH", "Number": "1013L", "Section": "001",
+            "Time Slot": "MWF 9:00am", "Duration": 50, "Room": "101",
+            "Building": "Corley", "Instructor": "Alice",
+        }], catalogs=catalog)
+        self.assertEqual(schedule.classes[0].credit_hours, 3)
+
     def test_production_policy_is_loaded_from_constraints(self):
         config = SolverConfig.load(Path(__file__).parents[1] / "config", package="27S")
         self.assertEqual(config.workload_policy.overload_tolerance, 2)
