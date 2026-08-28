@@ -397,8 +397,9 @@ def create_app() -> FastAPI:
         time picker, instructor/room assignment). Which records an edit
         to "instructor"/"time"/"room" must also touch is decided entirely
         by the atomic-class object (``Class.edit_targets``/``apply_edit``,
-        see docs/codes.md) -- the browser only ever names one row and a
-        new value; it never decides linking itself.
+        see docs/codes.md). The browser names one row, supplies its
+        pre-edit identity snapshot, and supplies a new value; it never
+        decides linking itself.
         """
         schedule, config = _schedule_from_payload(payload)
         try:
@@ -411,9 +412,48 @@ def create_app() -> FastAPI:
         item = schedule.classes[class_index]
         if not 0 <= record_index < len(item.sections):
             raise HTTPException(400, f"Unknown record_index: {record_index}")
+        expected_course_ids = payload.get("expected_course_ids")
+        expected_record = payload.get("expected_record")
+        if not (
+            isinstance(expected_course_ids, list)
+            and expected_course_ids
+            and all(isinstance(value, str) for value in expected_course_ids)
+        ):
+            raise HTTPException(400, "expected_course_ids must be a non-empty list")
+        required_identity = {"subject", "number", "section", "expected_time_slot"}
+        if not isinstance(expected_record, dict) or not required_identity.issubset(
+            expected_record
+        ):
+            raise HTTPException(
+                400,
+                "expected_record must contain subject, number, section, "
+                "and expected_time_slot",
+            )
         field = payload.get("field")
         value = payload.get("value")
         section = item.sections[record_index]
+        actual_course_ids = set(item.course_ids)
+        requested_course_ids = {
+            record_utils.text(course_id) for course_id in expected_course_ids
+        }
+        expected_identity = (
+            record_utils.text(expected_record["subject"]).upper(),
+            record_utils.text(expected_record["number"]),
+            record_utils.text(expected_record["section"]),
+            record_utils.text(expected_record["expected_time_slot"]),
+        )
+        actual_identity = (
+            section.subject, section.number, section.section, section.time_slot,
+        )
+        if (
+            requested_course_ids != actual_course_ids
+            or expected_identity != actual_identity
+        ):
+            raise HTTPException(
+                409,
+                "The schedule grouping changed before this edit; reload the "
+                "schedule and try again",
+            )
         if field in ("time", "room") and section.is_online:
             raise HTTPException(
                 400, "Online/arranged rows only accept instructor edits",

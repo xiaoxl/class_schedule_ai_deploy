@@ -518,6 +518,8 @@ class ConfigurationFileManagementTests(unittest.TestCase):
         # posts to POST /api/edit and waits for the server's answer (see
         # docs/codes.md's "linking rules moved ... behind POST /api/edit").
         self.assertIn('submitEdit(classIndex,recordIndex,"time",{days:newDays,start})', script)
+        self.assertIn("expected_course_ids:item.course_ids", script)
+        self.assertIn('expected_time_slot:row["Time Slot"]', script)
 
     def test_replacing_template_keeps_only_the_latest_original_filename(self):
         package = self.config_root / "27S"
