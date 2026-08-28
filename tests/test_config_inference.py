@@ -35,7 +35,7 @@ class ConfigurationInferenceTests(unittest.TestCase):
             "Cross-List": cross,
         }
 
-    def test_infers_complete_valid_package_without_coreqs(self):
+    def test_infers_complete_valid_package_with_explicit_coreqs(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             package_name = "推断(1)"
@@ -66,20 +66,16 @@ class ConfigurationInferenceTests(unittest.TestCase):
 
             self.assertEqual(inferred.course_count, 6)
             self.assertEqual(inferred.section_count, 6)
-            self.assertCountEqual(kinds, ["hybrid", "four_credit", "cross_listing"])
-            self.assertNotIn("coreq", kinds)
+            self.assertCountEqual(
+                kinds, ["hybrid", "four_credit", "cross_listing", "coreq"],
+            )
             cross_listing = next(
                 item for item in courses["relationships"]
                 if item["kind"] == "cross_listing"
             )
             # The template's MATH 5173/STAT 4173 rows already shared an
-            # instructor, room, and time -- and synced_fields is opt-in,
-            # not opt-out (see docs/codes.md): omitting it now defaults to
-            # fully locked, so a fully-matching template needs nothing
-            # written at all. (A template where some field genuinely
-            # diverged would still get an explicit, narrower list -- see
-            # the "opt-in" addendum.)
-            self.assertNotIn("synced_fields", cross_listing)
+            # Fully shared means no fields are allowed to diverge.
+            self.assertEqual(cross_listing["unsynced"], [])
             self.assertEqual(
                 set(config.persons["Teacher, Alice"].courses),
                 {
@@ -94,7 +90,7 @@ class ConfigurationInferenceTests(unittest.TestCase):
                 tomllib.loads(inferred.files["constraints.toml"].decode()), {}
             )
 
-    def test_infers_a_narrower_synced_fields_when_the_template_pair_diverges(self):
+    def test_infers_unsynced_fields_when_the_template_pair_diverges(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             path = root / "source.csv"
@@ -115,11 +111,7 @@ class ConfigurationInferenceTests(unittest.TestCase):
                 item for item in courses["relationships"]
                 if item["kind"] == "cross_listing"
             )
-            # Room diverges in the template (101 vs 205) -- unlike the
-            # fully-matching case above, that has to be written explicitly
-            # (as the narrower set that's actually still shared), or the
-            # opt-in default (fully locked) would silently re-lock it.
-            self.assertCountEqual(cross_listing["synced_fields"], ["instructor", "time"])
+            self.assertEqual(cross_listing["unsynced"], ["room"])
 
     def test_rejects_a_template_without_physical_times(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -132,6 +124,22 @@ class ConfigurationInferenceTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "no physical meeting times"):
                 infer_configuration_from_template(path, package="TEST")
+
+    def test_cross_list_marker_infers_all_members_and_unsynced_fields(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "source.csv"
+            pd.DataFrame([
+                self._row("MATH", "3003", "001", "Shared", 3, "MWF 9:00am", 50, cross="X"),
+                self._row("STAT", "4004", "001", "Shared", 4, "MWF 9:00am", 50, cross="X"),
+                {**self._row("CS", "2002", "001", "Shared", 2, "MWF 9:00am", 50, cross="X"), "Room": "205"},
+            ]).to_csv(path, index=False)
+            inferred = infer_configuration_from_template(path, package="TEST")
+        courses = tomllib.loads(inferred.files["courses.toml"].decode())
+        relationship = courses["relationships"][0]
+        self.assertEqual(relationship["kind"], "cross_listing")
+        self.assertEqual(len(relationship["members"]), 3)
+        self.assertEqual(relationship["unsynced"], ["room"])
+        self.assertNotIn("id", relationship)
 
 
 if __name__ == "__main__":

@@ -137,7 +137,7 @@ class SolveResolvesConflictsTests(unittest.TestCase):
         result = solved.classes[0]
 
         self.assertIsInstance(result, FourCreditClass)
-        self.assertEqual(result.schedule_issues, ())
+        self.assertEqual(result.validation_report(), ())
         self.assertLessEqual(
             FourCreditClass.start_difference_minutes(*result.sections), 90
         )

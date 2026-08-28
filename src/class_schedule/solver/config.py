@@ -407,7 +407,7 @@ class SolverConfig:
     def _validate_pattern_coverage(self) -> None:
         assert self.catalogs is not None and self.courses is not None
         credits = {
-            f"{item.subject} {item.number}": item.credits
+            f"{item.subject} {item.number}": item.resolved_credits
             for item in self.catalogs.courses
         }
         relationships = self.courses.relationships

@@ -143,111 +143,91 @@ number = "4173"
 sections = ["TC1"]
 
 [[relationships]]
-id = "math-1113-f01-hybrid"
 kind = "hybrid"
 members = ["MATH 1113 F01"]
 
 [[relationships]]
-id = "math-1914-001-four-credit"
 kind = "four_credit"
 members = ["MATH 1914 001"]
 
 [[relationships]]
-id = "math-1914-003-four-credit"
 kind = "four_credit"
 members = ["MATH 1914 003"]
 
 [[relationships]]
-id = "math-2914-001-four-credit"
 kind = "four_credit"
 members = ["MATH 2914 001"]
 
 [[relationships]]
-id = "math-2914-002-four-credit"
 kind = "four_credit"
 members = ["MATH 2914 002"]
 
 [[relationships]]
-id = "math-2914-003-four-credit"
 kind = "four_credit"
 members = ["MATH 2914 003"]
 
 [[relationships]]
-id = "math-2924-001-four-credit"
 kind = "four_credit"
 members = ["MATH 2924 001"]
 
 [[relationships]]
-id = "math-2924-002-four-credit"
 kind = "four_credit"
 members = ["MATH 2924 002"]
 
 [[relationships]]
-id = "math-2924-003-four-credit"
 kind = "four_credit"
 members = ["MATH 2924 003"]
 
 [[relationships]]
-id = "math-2934-001-four-credit"
 kind = "four_credit"
 members = ["MATH 2934 001"]
 
 [[relationships]]
-id = "math-2934-002-four-credit"
 kind = "four_credit"
 members = ["MATH 2934 002"]
 
 [[relationships]]
-id = "math-5173-stat-4173-tc1-cross-listing"
 kind = "cross_listing"
 members = ["MATH 5173 TC1", "STAT 4173 TC1"]
+unsynced = []
 
 [[relationships]]
-id = "math-4123-001-h01-cross-listing"
 kind = "cross_listing"
 members = ["MATH 4123 001", "MATH 4123 H01"]
+unsynced = []
 
 [[relationships]]
-id = "math-0803-1003-001-coreq"
 kind = "coreq"
 members = ["MATH 0803 001", "MATH 1003 001"]
 
 [[relationships]]
-id = "math-0803-1003-002-coreq"
 kind = "coreq"
 members = ["MATH 0803 002", "MATH 1003 002"]
 
 [[relationships]]
-id = "math-0803-1003-003-coreq"
 kind = "coreq"
 members = ["MATH 0803 003", "MATH 1003 003"]
 
 [[relationships]]
-id = "math-0803-1003-004-coreq"
 kind = "coreq"
 members = ["MATH 0803 004", "MATH 1003 004"]
 
 [[relationships]]
-id = "math-0803-1003-tc1-coreq"
 kind = "coreq"
 members = ["MATH 0803 TC1", "MATH 1003 TC1"]
 
 [[relationships]]
-id = "math-0903-1113-001-coreq"
 kind = "coreq"
 members = ["MATH 0903 001", "MATH 1113 001"]
 
 [[relationships]]
-id = "math-0903-1113-002-coreq"
 kind = "coreq"
 members = ["MATH 0903 002", "MATH 1113 002"]
 
 [[relationships]]
-id = "math-0903-1113-tc1-coreq"
 kind = "coreq"
 members = ["MATH 0903 TC1", "MATH 1113 TC1"]
 
 [[relationships]]
-id = "math-1110-1113-003-coreq"
 kind = "coreq"
 members = ["MATH 1110 003", "MATH 1113 003"]

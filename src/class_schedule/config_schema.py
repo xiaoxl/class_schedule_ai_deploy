@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Literal
 
@@ -363,7 +364,7 @@ class CatalogCourseSchema(StrictModel):
     subject: str
     number: str
     title: str
-    credits: float = Field(gt=0)
+    credits: float | None = Field(default=None, ge=0)
 
     @field_validator("subject")
     @classmethod
@@ -388,6 +389,14 @@ class CatalogCourseSchema(StrictModel):
         if not value:
             raise ValueError("title must not be blank")
         return value
+
+    @property
+    def resolved_credits(self) -> float:
+        """Configured credits, or the final numeric course-number digit."""
+        if self.credits is not None:
+            return self.credits
+        match = re.search(r"(\d)(?:[A-Z])?$", self.number)
+        return float(match.group(1)) if match else 0.0
 
 
 class CatalogsFileSchema(StrictModel):
@@ -428,14 +437,19 @@ class OfferedCourseSchema(StrictModel):
 
 
 class CourseRelationshipSchema(StrictModel):
-    id: str
+    # Legacy input compatibility only. Relationship identity is derived from
+    # kind + canonical members and never needs to be authored or persisted.
+    id: str | None = Field(default=None, exclude=True)
     kind: Literal["coreq", "cross_listing", "four_credit", "hybrid"]
     members: list[str]
     synced_fields: list[Literal["instructor", "room", "time"]] | None = None
+    unsynced: list[Literal["instructor", "room", "time"]] | None = None
 
     @field_validator("id")
     @classmethod
-    def require_id(cls, value: str) -> str:
+    def require_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         value = value.strip()
         if not value:
             raise ValueError("relationship id must not be blank")
@@ -445,8 +459,8 @@ class CourseRelationshipSchema(StrictModel):
     @classmethod
     def validate_members(cls, values: list[str]) -> list[str]:
         normalized = [" ".join(value.strip().upper().split()) for value in values]
-        if len(normalized) not in (1, 2):
-            raise ValueError("relationship members must contain one or two sections")
+        if not normalized:
+            raise ValueError("relationship members must not be empty")
         if len(set(normalized)) != len(normalized):
             raise ValueError("relationship members must be different")
         if any(not re.fullmatch(r"[A-Z]+\s+\d+[A-Z]?\s+\S+", value) for value in normalized):
@@ -460,14 +474,50 @@ class CourseRelationshipSchema(StrictModel):
             raise ValueError("synced_fields must not contain duplicates")
         return value
 
+    @field_validator("unsynced")
+    @classmethod
+    def validate_unsynced(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and len(set(value)) != len(value):
+            raise ValueError("unsynced must not contain duplicates")
+        return value
+
     @model_validator(mode="after")
     def validate_member_count(self):
-        expected = 1 if self.kind in {"four_credit", "hybrid"} else 2
-        if len(self.members) != expected:
-            raise ValueError(f"{self.kind} relationships require {expected} member(s)")
+        if self.kind == "four_credit" and len(self.members) != 1:
+            raise ValueError("four_credit relationships require 1 member")
+        if self.kind == "hybrid" and len(self.members) != 1:
+            raise ValueError("hybrid relationships require 1 member")
+        if self.kind == "coreq" and len(self.members) != 2:
+            raise ValueError("coreq relationships require 2 members")
+        if self.kind == "cross_listing" and len(self.members) < 2:
+            raise ValueError("cross_listing relationships require at least 2 members")
         if self.synced_fields is not None and self.kind != "cross_listing":
             raise ValueError("synced_fields is only meaningful for cross_listing relationships")
+        if self.unsynced is not None and self.kind != "cross_listing":
+            raise ValueError("unsynced is only meaningful for cross_listing relationships")
+        if self.synced_fields is not None and self.unsynced is not None:
+            raise ValueError("use unsynced; legacy synced_fields cannot be combined with it")
         return self
+
+    @property
+    def key(self) -> str:
+        canonical = "\0".join((self.kind, *sorted(self.members)))
+        return f"relationship-{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:20]}"
+
+    @property
+    def display_name(self) -> str:
+        return f"{self.kind}: {', '.join(sorted(self.members))}"
+
+    @property
+    def locked_fields(self) -> frozenset[str] | None:
+        if self.kind != "cross_listing":
+            return None
+        all_fields = frozenset({"instructor", "room", "time"})
+        if self.unsynced is not None:
+            return all_fields - frozenset(self.unsynced)
+        if self.synced_fields is not None:
+            return frozenset(self.synced_fields)
+        return all_fields
 
 
 class CoursesFileSchema(StrictModel):
@@ -483,15 +533,15 @@ class CoursesFileSchema(StrictModel):
             f"{item.subject} {item.number} {section}"
             for item in self.courses for section in item.sections
         }
-        ids = [item.id for item in self.relationships]
-        if len(ids) != len(set(ids)):
-            raise ValueError("relationship ids must be unique")
+        keys = [item.key for item in self.relationships]
+        if len(keys) != len(set(keys)):
+            raise ValueError("relationship identities must be unique")
         used: set[str] = set()
         for relationship in self.relationships:
             unknown = sorted(set(relationship.members) - offered)
             if unknown:
                 raise ValueError(
-                    f"relationship {relationship.id!r} references unknown sections: {unknown}"
+                    f"relationship {relationship.display_name!r} references unknown sections: {unknown}"
                 )
             repeated = sorted(set(relationship.members) & used)
             if repeated:

@@ -64,11 +64,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Iterable
 
 import pandas as pd
 
 from . import record_utils
 from .class_model import Class, HybridClass
+from .config_schema import CourseRelationshipSchema
 from .schedule_io import read_table
 from .schedule_model import Schedule
 
@@ -246,6 +248,7 @@ class CourseDemand:
 def analyze(
     schedule_path: str | Path,
     cube_path: str | Path,
+    *, relationships: Iterable[CourseRelationshipSchema] = (),
 ) -> list[CourseDemand]:
     """Cross-reference ``schedule_path`` against ``cube_path`` and return
     one ``CourseDemand`` per atomic course bucket, sorted by bucket name.
@@ -276,7 +279,9 @@ def analyze(
         if existing is None or (pd.isna(existing[1]) and pd.notna(capacity)):
             lookup[key] = (record_utils.text(row["CRN"]), capacity)
 
-    grouped = Schedule.from_dataframe(schedule_df)
+    grouped = Schedule.from_dataframe(
+        schedule_df, relationships=tuple(relationships),
+    )
 
     buckets: dict[str, dict] = {}
     unmatched: list[str] = []

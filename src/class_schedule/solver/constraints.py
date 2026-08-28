@@ -99,26 +99,27 @@ def add_pairwise_validity_constraints(
 ) -> None:
     for class_index, item in enumerate(class_list):
         indices = sections_by_class.get(class_index, [])
-        if len(indices) != 2:
+        if len(indices) < 2:
             continue
-        left_index, right_index = indices
         predicate = predicate_for(item)
         if predicate is None:
             # No pairwise rule at all for this instance (e.g. a
             # CrossListingClass pair with nothing locked) -- the two rows
             # are free to be assigned completely independently.
             continue
-        for left_candidate, left in enumerate(candidates[left_index]):
-            for right_candidate, right in enumerate(candidates[right_index]):
-                valid = predicate(
-                    apply_candidate(sections[left_index], left),
-                    apply_candidate(sections[right_index], right),
-                )
-                if not valid:
-                    model.add_bool_or([
-                        chosen[left_index][left_candidate].Not(),
-                        chosen[right_index][right_candidate].Not(),
-                    ])
+        for offset, left_index in enumerate(indices):
+            for right_index in indices[offset + 1:]:
+                for left_candidate, left in enumerate(candidates[left_index]):
+                    for right_candidate, right in enumerate(candidates[right_index]):
+                        valid = predicate(
+                            apply_candidate(sections[left_index], left),
+                            apply_candidate(sections[right_index], right),
+                        )
+                        if not valid:
+                            model.add_bool_or([
+                                chosen[left_index][left_candidate].Not(),
+                                chosen[right_index][right_candidate].Not(),
+                            ])
 
 
 @dataclass(frozen=True)

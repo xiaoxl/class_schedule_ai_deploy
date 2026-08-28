@@ -46,8 +46,8 @@ class EditApiTests(unittest.TestCase):
         return [
             _record(),
             _record(
-                Number="1113", Section="001", **{"Time Slot": "T 9:20am"},
-                Duration=75,
+                Number="1113", Section="001", **{"Time Slot": "TR 9:20am"},
+                Duration=80,
             ),
         ]
 
@@ -92,7 +92,7 @@ class EditApiTests(unittest.TestCase):
         # field on one row also touch the other" (Class.edit_targets, see
         # docs/codes.md) -- the web UI reads it instead of re-deriving its
         # own guess. This coreq pair's rows are on disjoint weekdays (MWF
-        # vs T), so room/time never link even though instructor always
+        # vs TR), so room/time never link even though instructor always
         # does for CoreqClass.
         response = self.client.post("/api/edit", json=self._edit_payload(
             field="instructor",

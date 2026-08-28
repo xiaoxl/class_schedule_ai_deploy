@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from .class_model import CrossListingClass, FourCreditClass, HybridClass
+from .class_model import CoreqClass, CrossListingClass, FourCreditClass, HybridClass, Section
+from .config_schema import CourseRelationshipSchema, CoursesFileSchema
 from .instructor_identity import is_new_instructor, is_new_professor
 from .pattern_rules import section_pattern_role
 from .schedule_io import read_table
@@ -33,18 +33,17 @@ def infer_configuration_from_template(
 ) -> InferredConfiguration:
     """Return seven TOML files inferred from a CSV/XLSX schedule template.
 
-    Same-section rows are classified by the domain model as hybrid or
-    four-credit. Cross-listings require a nonblank matching ``Cross-List``
-    marker. Corequisites are deliberately not inferred.
+    Four-credit and Hybrid classes use intrinsic recognition. Corequisite
+    and cross-listing relationships are inferred here exactly once and are
+    then persisted as explicit configuration; ordinary schedule loading does
+    not repeat these guesses.
     """
     records = read_table(template).dropna(how="all").to_dict(orient="records")
     if not records:
         raise ValueError("Cannot infer configuration from an empty template")
-    schedule = Schedule.from_records(
-        records,
-        infer_legacy_relationships=False,
-        infer_marked_cross_lists=True,
-    )
+    base = Schedule.from_records(records)
+    relationships = infer_relationships_from_template(base)
+    schedule = Schedule.from_records(records, relationships=relationships)
     sections = [section for item in schedule.classes for section in item.sections]
     if not sections:
         raise ValueError("Template contains no schedulable course sections")
@@ -71,7 +70,7 @@ def infer_configuration_from_template(
         (section.subject, section.number, section.section.upper())
         for section in sections
     }
-    relationships = _inferred_relationships(schedule)
+    inferred_relationships = _inferred_relationships(schedule)
     rooms = {
         (section.building, section.room)
         for section in sections if section.room
@@ -89,7 +88,7 @@ def infer_configuration_from_template(
         files=encoded,
         course_count=len(courses),
         section_count=len(offerings),
-        relationship_count=len(relationships),
+        relationship_count=len(inferred_relationships),
         room_count=len(rooms),
         time_pattern_count=len(patterns),
         person_count=len(people),
@@ -220,30 +219,150 @@ def _preferences_toml(sections, header: str) -> str:
     return "".join(blocks)
 
 
-def _inferred_relationships(
+def _member(section: Section) -> str:
+    return f"{section.subject} {section.number} {section.section.upper()}"
+
+
+def _same_assignment(sections: list[Section]) -> bool:
+    first, *rest = sections
+    if all(section.is_online for section in sections):
+        return all(
+            section.instructor == first.instructor
+            and not section.has_meeting_time
+            and not section.room
+            and not section.building
+            for section in sections
+        )
+    return all(
+        not section.is_online
+        and section.instructor == first.instructor
+        and section.time_slot == first.time_slot
+        and section.duration == first.duration
+        and section.room == first.room
+        and section.building == first.building
+        for section in rest
+    )
+
+
+def _cross_unsynced(sections: list[Section]) -> list[str]:
+    first, *rest = sections
+    result = []
+    if any(section.instructor != first.instructor for section in rest):
+        result.append("instructor")
+    if any(
+        section.room != first.room or section.building != first.building
+        for section in rest
+    ):
+        result.append("room")
+    if any(
+        section.time_slot != first.time_slot or section.duration != first.duration
+        for section in rest
+    ):
+        result.append("time")
+    return result
+
+
+def infer_relationships_from_template(
     schedule: Schedule,
-) -> list[tuple[str, list[str], frozenset[str] | None]]:
-    relationships = []
+) -> tuple[CourseRelationshipSchema, ...]:
+    """Infer explicit relationships from a template-only Schedule."""
+    relationships: list[CourseRelationshipSchema] = []
+    consumed: set[str] = set()
+
+    # Intrinsic kinds were already recognized without configuration.
+    for item in schedule.classes:
+        kind = (
+            "hybrid" if isinstance(item, HybridClass)
+            else "four_credit" if isinstance(item, FourCreditClass)
+            else None
+        )
+        if kind is None:
+            continue
+        members = list(dict.fromkeys(_member(section) for section in item.sections))
+        relationships.append(CourseRelationshipSchema(kind=kind, members=members))
+        consumed.update(members)
+
+    sections = [
+        section for item in schedule.classes for section in item.sections
+        if _member(section) not in consumed
+    ]
+
+    # A nonblank source marker is strongest and may identify N members.
+    marked: dict[str, list[Section]] = {}
+    for section in sections:
+        if section.cross_list:
+            marked.setdefault(section.cross_list, []).append(section)
+    for group in marked.values():
+        members = list(dict.fromkeys(_member(section) for section in group))
+        if len(members) < 2 or any(member in consumed for member in members):
+            continue
+        relationships.append(CourseRelationshipSchema(
+            kind="cross_listing", members=members,
+            unsynced=_cross_unsynced(group),
+        ))
+        consumed.update(members)
+
+    # Honors and the known MATH 5173 / STAT 4173 pair require a truly
+    # shared assignment; online rows qualify only when time/location are empty.
+    for left_index, left in enumerate(sections):
+        left_member = _member(left)
+        if left_member in consumed:
+            continue
+        for right in sections[left_index + 1:]:
+            right_member = _member(right)
+            if right_member in consumed:
+                continue
+            recognized = (
+                CrossListingClass.is_honors_pair(left, right)
+                or CrossListingClass.is_known_pair(left, right)
+            )
+            if recognized and _same_assignment([left, right]):
+                relationships.append(CourseRelationshipSchema(
+                    kind="cross_listing",
+                    members=[left_member, right_member],
+                    unsynced=[],
+                ))
+                consumed.update((left_member, right_member))
+                break
+
+    # Coreq defaults are inference-only; runtime uses the emitted config.
+    for left_index, left in enumerate(sections):
+        left_member = _member(left)
+        if left_member in consumed:
+            continue
+        for right in sections[left_index + 1:]:
+            right_member = _member(right)
+            if right_member in consumed:
+                continue
+            if CoreqClass.is_coreq_pair(left, right):
+                relationships.append(CourseRelationshipSchema(
+                    kind="coreq", members=[left_member, right_member],
+                ))
+                consumed.update((left_member, right_member))
+                break
+    return tuple(relationships)
+
+
+def _inferred_relationships(schedule: Schedule) -> list[CourseRelationshipSchema]:
+    relationships: list[CourseRelationshipSchema] = []
     for item in schedule.classes:
         kind = (
             "hybrid" if isinstance(item, HybridClass)
             else "four_credit" if isinstance(item, FourCreditClass)
             else "cross_listing" if isinstance(item, CrossListingClass)
+            else "coreq" if isinstance(item, CoreqClass)
             else None
         )
         if kind is None:
             continue
-        members = list(dict.fromkeys(
-            f"{section.subject} {section.number} {section.section.upper()}"
-            for section in item.sections
+        members = list(dict.fromkeys(_member(section) for section in item.sections))
+        unsynced = (
+            sorted(CrossListingClass.ALL_SYNCED_FIELDS - item.synced_fields)
+            if isinstance(item, CrossListingClass) else None
+        )
+        relationships.append(CourseRelationshipSchema(
+            kind=kind, members=members, unsynced=unsynced,
         ))
-        # A cross-listing's synced_fields is otherwise re-derived from
-        # whatever the current rows happen to show every time the schedule
-        # is reloaded (see docs/codes.md) -- baking in what the template
-        # actually had at inference time turns that one-shot heuristic into
-        # a persisted, human-editable decision instead.
-        synced_fields = item.synced_fields if isinstance(item, CrossListingClass) else None
-        relationships.append((kind, members, synced_fields))
     return relationships
 
 
@@ -262,26 +381,26 @@ def _courses_toml(schedule: Schedule, header: str) -> str:
             f"number = {_quote(number)}\n"
             f"sections = {_array(sorted(values))}\n"
         )
-    for index, (kind, members, synced_fields) in enumerate(
-        _inferred_relationships(schedule), 1,
-    ):
-        slug = re.sub(r"[^a-z0-9]+", "-", "-".join(members).lower()).strip("-")
+    inferred = _inferred_relationships(schedule)
+    for relationship in inferred:
         block = (
             "\n[[relationships]]\n"
-            f"id = {_quote(f'inferred-{kind}-{slug}-{index}')}\n"
-            f"kind = {_quote(kind)}\n"
-            f"members = {_array(members)}\n"
+            f"kind = {_quote(relationship.kind)}\n"
+            f"members = {_array(relationship.members)}\n"
         )
-        # synced_fields is opt-in, not opt-out (see docs/codes.md): omitting
-        # it now defaults to fully locked, so a template where the pair
-        # already matches on all three fields needs nothing written at all
-        # -- only a template that shows some field diverging needs the
-        # explicit, narrower list, to keep that divergence from being
-        # silently re-locked by the default.
-        if (
-            synced_fields is not None
-            and synced_fields != CrossListingClass.ALL_SYNCED_FIELDS
-        ):
-            block += f"synced_fields = {_array(sorted(synced_fields))}\n"
+        if relationship.kind == "cross_listing":
+            block += f"unsynced = {_array(relationship.unsynced or [])}\n"
         blocks.append(block)
-    return "".join(blocks)
+    text = "".join(blocks)
+    parsed = CoursesFileSchema.model_validate(tomllib.loads(text))
+    # Round-trip verification: the generated explicit relationships must
+    # reconstruct exactly the same atomic kind/member partition.
+    rebuilt = Schedule.from_records(
+        [record for item in schedule.classes for record in item.to_records()],
+        relationships=parsed.relationships,
+    )
+    expected = sorted((type(item).__name__, tuple(sorted(item.course_ids))) for item in schedule.classes)
+    actual = sorted((type(item).__name__, tuple(sorted(item.course_ids))) for item in rebuilt.classes)
+    if actual != expected:
+        raise ValueError("Inferred courses.toml failed relationship round-trip verification")
+    return text

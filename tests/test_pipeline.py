@@ -9,7 +9,10 @@ from pathlib import Path
 import pandas as pd
 
 from class_schedule.class_model import HybridClass, NormalClass, Section
-from class_schedule.config_schema import CatalogCourseSchema, CatalogsFileSchema, CoursesFileSchema
+from class_schedule.config_schema import (
+    CatalogCourseSchema, CatalogsFileSchema, CourseRelationshipSchema,
+    CoursesFileSchema,
+)
 from class_schedule.data_cleaning import (
     NORMALIZED_COLUMNS,
     clean_dataframe,
@@ -66,7 +69,9 @@ class DataCleaningTests(unittest.TestCase):
         result = clean_dataframe(frame)
         self.assertEqual(len(set(result.normalized["Cross-List"])), 1)
         self.assertEqual(result.normalized.iloc[0]["Cross-List"], "")
-        self.assertEqual(len(Schedule.from_dataframe(result.normalized)), 1)
+        self.assertEqual(len(Schedule.from_dataframe(
+            result.normalized, infer_legacy_relationships=True,
+        )), 1)
 
 
 class ScheduleIOTests(unittest.TestCase):
@@ -80,7 +85,13 @@ class ScheduleIOTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "schedule.csv"
             frame.to_csv(path, index=False)
-            schedule = read_schedule(path)
+            schedule = read_schedule(path, relationships=(
+                CourseRelationshipSchema(
+                    kind="cross_listing",
+                    members=["MATH 5173 TC1", "STAT 4173 TC1"],
+                    unsynced=[],
+                ),
+            ))
 
         self.assertEqual(len(schedule), 1)
         self.assertEqual(
@@ -248,6 +259,21 @@ class OverrideTests(unittest.TestCase):
 
 
 class ConfigLayoutTests(unittest.TestCase):
+    def test_relationship_identity_is_derived_and_order_independent(self):
+        left = CourseRelationshipSchema(
+            kind="cross_listing",
+            members=["MATH 5173 TC1", "STAT 4173 TC1", "BIO 4103 TC1"],
+            unsynced=["room"],
+        )
+        right = CourseRelationshipSchema(
+            kind="cross_listing",
+            members=["BIO 4103 TC1", "STAT 4173 TC1", "MATH 5173 TC1"],
+            unsynced=["time"],
+        )
+        self.assertEqual(left.key, right.key)
+        self.assertNotIn("room", left.locked_fields)
+        self.assertIn("room", right.locked_fields)
+
     @staticmethod
     def make_package(root: Path, name: str) -> Path:
         package = root / name
@@ -382,7 +408,7 @@ class ConfigLayoutTests(unittest.TestCase):
         # declared pair whose current data doesn't actually satisfy it has
         # to surface as a hard violation too, the same as every other
         # atomic-class kind's business rule (see docs/codes.md). This was
-        # a real gap: schedule_issues used to only check recognition.
+        # a real gap: validation reporting used to check only recognition.
         violations = check_atomic_class_rules(schedule)
         cross_listing_violations = [
             v for v in violations if v.rule == "cross_listing_invalid"

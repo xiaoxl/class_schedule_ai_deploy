@@ -79,6 +79,9 @@ title = "College Algebra"
 credits = 3
 ```
 
+`credits` is optional. When omitted, the final numeric digit of `number` is
+used; an explicit value always wins.
+
 The package-level `courses.toml` lists offered sections:
 
 ```toml
@@ -92,26 +95,34 @@ Every offered course must exist in `catalogs.toml`. Relationships refer to compl
 
 ```toml
 [[relationships]]
-id = "math-1110-1113-003-coreq"
 kind = "coreq"
 members = ["MATH 1110 003", "MATH 1113 003"]
 ```
 
-`coreq` and `cross_listing` relationships have two members. `four_credit` and `hybrid` describe multiple meeting rows within one section and therefore have one member. A section may belong to only one declared relationship.
+Relationship IDs are derived internally from `kind` plus sorted canonical
+members and are not authored. `coreq` has exactly two members;
+`cross_listing` has two or more. `four_credit` and `hybrid` describe multiple
+meeting rows within one section and therefore have one member. A section may
+belong to only one declared relationship.
 
-The TOML declares only identity and relationship kind. Same-instructor, same-room, back-to-back, shared-meeting, credit, editing, and export behavior remain authoritative in the existing Python atomic-class types. Explicit relationships are applied before legacy import recognition.
+Coreq and CrossListing are never guessed during ordinary loading; their
+default/legacy recognition exists only in template inference. Four-credit and
+same-section `Fxx`/`Mxx` Hybrid recognition remains intrinsic.
 
-A `cross_listing` relationship may also declare `synced_fields`, an array drawn from `"instructor"`, `"room"`, `"time"`:
+A `cross_listing` relationship declares fields allowed to diverge with
+`unsynced`, drawn from `"instructor"`, `"room"`, and `"time"`:
 
 ```toml
 [[relationships]]
-id = "math-5173-stat-4173"
 kind = "cross_listing"
 members = ["MATH 5173 TC1", "STAT 4173 TC1"]
-synced_fields = ["instructor", "room"]
+unsynced = ["time"]
 ```
 
-This is a persisted decision, not a live check: whichever fields are listed stay in sync (the solver keeps them matching); any field left out is free to diverge independently across the two rows, with no conflict between them. `synced_fields` is opt-in, not opt-out: a declared `cross_listing` relationship that doesn't mention `synced_fields` at all defaults to locking **all three** fields -- a declared cross-listing is assumed to be one single, fully-shared offering unless a field is explicitly left out to mark it as free to diverge. (A cross-listing pair recognized without any declared relationship at all -- a shared `Cross-List` marker, a known course pair, an honors/regular section pair -- has no config to consult, so that path still auto-detects from whatever the rows currently show.) `从模板推断` (template inference) writes `synced_fields` explicitly regardless, from whatever the imported template actually showed, so an inferred package's behavior doesn't depend on this default at all.
+This is persisted policy, not a live guess. Omitted `unsynced` and
+`unsynced = []` both mean all three fields remain synchronized. Inference
+writes the exact mismatching fields it observes. Legacy `synced_fields` input
+is temporarily accepted for migration but is never generated.
 
 ## People, preferences, and constraints
 
@@ -151,7 +162,10 @@ min_course_number_inclusive = 1914
 allow_back_to_back = true
 ```
 
-`catalogs.toml` is the sole credit authority in package workflows. A missing catalog course, invalid input credit, or input/catalog credit disagreement is an error. The course-number-last-digit inference remains only in the unconfigured low-level domain API.
+`catalogs.toml` is the package credit authority. A missing catalog course,
+invalid input credit, or input/catalog disagreement is an error. A catalog
+entry may omit `credits`, in which case the last course-number digit is its
+resolved credit value everywhere, including the solver and reports.
 
 All course selectors are cross-validated. Instructor qualifications must reference catalog courses; preference and constraint sections must be offered; timeslot selectors must reference real courses. Package loading also verifies that every declared relationship has applicable meeting-pattern roles before the solver runs.
 

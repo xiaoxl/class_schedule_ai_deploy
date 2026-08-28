@@ -139,13 +139,7 @@ def rebuild_work_views(
         source = "generated_default"
 
     if config is not None:
-        schedule, report = reconcile_records(
-            records, config,
-            # A config-only seed must use only the relationships explicitly
-            # declared in its inferred courses.toml. In particular, do not
-            # resurrect legacy corequisites that inference intentionally omits.
-            infer_legacy_relationships=template is not None,
-        )
+        schedule, report = reconcile_records(records, config)
         if template is None:
             schedule = _assign_default_instructors(schedule, config)
         audit = render_reconciliation(report)
@@ -376,8 +370,6 @@ def _with_assignment(item, instructor: str, time_spec, room):
         sections.append(replace(section, **changes))
     placed = copy.copy(item)
     placed.sections = tuple(sections)
-    if hasattr(item, "schedule_issues"):
-        placed.schedule_issues = ()
     return placed
 
 

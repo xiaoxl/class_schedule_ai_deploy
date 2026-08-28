@@ -49,6 +49,8 @@ def publish_version(
     manifest: dict[str, object],
     applied_overrides: bytes,
     reconciliation: bytes,
+    hard_violations=(),
+    soft_findings=(),
     final: bool = False,
     replace_destination: bool = False,
 ) -> PublishedPaths:
@@ -73,8 +75,14 @@ def publish_version(
         reconciliation_path = staging / "reconciliation.toml"
 
         schedule.to_dataframe().to_csv(schedule_path, index=False)
-        schedule.to_instructor_excel(instructor_path)
-        schedule.to_room_excel(room_path)
+        schedule.to_instructor_excel(
+            instructor_path, hard_violations=hard_violations,
+            soft_findings=soft_findings,
+        )
+        schedule.to_room_excel(
+            room_path, hard_violations=hard_violations,
+            soft_findings=soft_findings,
+        )
         pd.DataFrame(attempts_rows).to_csv(attempts_path, index=False)
         baseline_path.write_bytes(baseline_bytes)
         changes = tuple(dict.fromkeys(diff_schedules(baseline, schedule)))

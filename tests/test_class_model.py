@@ -60,10 +60,13 @@ class SectionTests(unittest.TestCase):
         section = make_section(time_slot="MWF 9:00am", duration=50)
         self.assertEqual(section.end.strftime("%H:%M"), "09:50")
 
-    def test_math_1110_credit_override_is_applied_at_construction(self):
-        section = make_section(number="1110", credits=0)
-        self.assertEqual(section.credits, 2)
+    def test_explicit_credit_is_authoritative(self):
+        section = make_section(number="1110", credits=2)
         self.assertEqual(section.credit_hours, 2)
+
+    def test_missing_credit_is_inferred_from_final_digit(self):
+        section = make_section(number="1914", credits=None)
+        self.assertEqual(section.credit_hours, 4)
 
     def test_credit_override_is_scoped_to_math_1110(self):
         section = make_section(subject="STAT", number="1110", credits=1.5)
@@ -72,14 +75,14 @@ class SectionTests(unittest.TestCase):
 
 class FourCreditClassTests(unittest.TestCase):
     def test_mwf_plus_t_same_instructor_is_four_credit(self):
-        left = make_section(time_slot="MWF 9:00am", section="001")
-        right = make_section(time_slot="T 9:00am", duration=75, section="001")
+        left = make_section(number="1914", time_slot="MWF 9:00am", section="001")
+        right = make_section(number="1914", time_slot="T 9:00am", duration=80, section="001")
         self.assertTrue(FourCreditClass.is_four_credit(left, right))
         FourCreditClass((left, right))  # constructs without raising
 
     def test_mwf_plus_r_same_instructor_is_four_credit(self):
-        left = make_section(time_slot="MWF 9:00am")
-        right = make_section(time_slot="R 9:00am", duration=75)
+        left = make_section(number="1914", time_slot="MWF 9:00am")
+        right = make_section(number="1914", time_slot="R 9:00am", duration=80)
         self.assertTrue(FourCreditClass.is_four_credit(left, right))
 
     def test_same_days_is_not_four_credit(self):
@@ -98,24 +101,34 @@ class FourCreditClassTests(unittest.TestCase):
         self.assertFalse(FourCreditClass.is_four_credit(left, right))
 
     def test_large_time_gap_constructs_with_a_schedule_issue(self):
-        left = make_section(time_slot="MWF 8:00am")
-        right = make_section(time_slot="T 1:00pm", duration=80)
+        left = make_section(number="1914", time_slot="MWF 8:00am")
+        right = make_section(number="1914", time_slot="T 1:00pm", duration=80)
 
         item = FourCreditClass((left, right))
 
         self.assertTrue(FourCreditClass.is_four_credit(left, right))
         self.assertFalse(FourCreditClass.is_valid_schedule(left, right))
-        self.assertEqual(len(item.schedule_issues), 1)
-        self.assertIn("300 minutes apart", item.schedule_issues[0])
+        self.assertEqual(len(item.validation_report()), 1)
+        self.assertIn("300 minutes apart", item.validation_report()[0])
 
     def test_ninety_minute_time_gap_is_valid(self):
-        left = make_section(time_slot="MWF 8:00am")
-        right = make_section(time_slot="R 9:30am", duration=80)
+        left = make_section(number="1914", time_slot="MWF 8:00am")
+        right = make_section(number="1914", time_slot="R 9:30am", duration=80)
 
         item = FourCreditClass((left, right))
 
         self.assertTrue(FourCreditClass.is_valid_schedule(left, right))
-        self.assertEqual(item.schedule_issues, ())
+        self.assertEqual(item.validation_report(), ())
+        self.assertTrue(item.validate())
+        self.assertEqual(item.validation_report(), ())
+
+    def test_partial_meeting_must_be_eighty_minutes(self):
+        item = FourCreditClass((
+            make_section(number="1914", time_slot="MWF 9:00am"),
+            make_section(number="1914", time_slot="T 9:30am", duration=75),
+        ))
+        self.assertFalse(item.validate())
+        self.assertIn("80 minutes", item.validation_report()[0])
 
     def test_instructor_links_both_rows_time_and_room_stay_independent(self):
         item = FourCreditClass((
@@ -132,13 +145,13 @@ class HybridClassTests(unittest.TestCase):
     def test_m_prefixed_physical_and_tba_pair_is_hybrid(self):
         left = make_section(section="M01", room="101")
         right = make_section(
-            section="M01", time_slot="TBA", duration=None, room=""
+            section="M01", time_slot="TBA", duration=None, room="", building=""
         )
         self.assertTrue(HybridClass.is_hybrid(left, right))
 
     def test_f_prefixed_online_and_physical_pair_is_hybrid(self):
         left = make_section(
-            section="F01", time_slot="ONLINE", duration=None, room=""
+            section="F01", time_slot="ONLINE", duration=None, room="", building=""
         )
         right = make_section(section="F01", room="101")
         self.assertTrue(HybridClass.is_hybrid(left, right))
@@ -215,6 +228,23 @@ class HybridClassTests(unittest.TestCase):
 
 
 class CrossListingClassTests(unittest.TestCase):
+    def test_three_members_are_supported_and_credit_uses_the_maximum(self):
+        sections = (
+            make_section(subject="MATH", number="1113", section="001", credits=3),
+            make_section(subject="STAT", number="2104", section="001", credits=4),
+            make_section(subject="CS", number="2002", section="001", credits=2),
+        )
+        item = CrossListingClass.from_configured_sections(sections)
+        self.assertEqual(item.credit_hours, 4)
+        self.assertEqual(item.edit_targets("instructor", 1), (0, 1, 2))
+        self.assertTrue(item.validate())
+
+    def test_configured_members_do_not_need_an_inference_marker(self):
+        item = CrossListingClass.from_configured_sections((
+            make_section(subject="MATH", number="3003", section="001"),
+            make_section(subject="STAT", number="4003", section="002"),
+        ))
+        self.assertTrue(item.validate())
     def test_matching_cross_list_value_is_cross_listing(self):
         left = make_section(subject="MATH", number="1113", cross_list="XL1")
         right = make_section(subject="STAT", number="2103", cross_list="XL1")
@@ -286,7 +316,7 @@ class CrossListingClassTests(unittest.TestCase):
         ))
 
     def test_configured_pair_that_currently_violates_its_own_lock_reports_a_schedule_issue(self):
-        # Regression: schedule_issues used to only ever check recognition
+        # Regression: validation reporting used to check only recognition
         # (_issues) -- a configured pair whose synced_fields lock the two
         # rows to match, but whose actual current data doesn't (e.g. a
         # declared relationship defaulting to ALL_SYNCED_FIELDS over a
@@ -302,7 +332,7 @@ class CrossListingClassTests(unittest.TestCase):
         )
         item = CrossListingClass.from_configured_sections((left, right))
         self.assertEqual(item.synced_fields, CrossListingClass.ALL_SYNCED_FIELDS)
-        self.assertEqual(len(item.schedule_issues), 3)
+        self.assertEqual(len(item.validation_report()), 3)
         predicate = item.pairwise_predicate()
         self.assertFalse(predicate(left, right))
 
@@ -316,12 +346,12 @@ class CrossListingClassTests(unittest.TestCase):
             instructor="Alice", room="101", time_slot="TR 11:00am", duration=80,
         )
         item = CrossListingClass.from_configured_sections((left, right))
-        self.assertEqual(item.schedule_issues, ())
+        self.assertEqual(item.validation_report(), ())
         predicate = item.pairwise_predicate()
         self.assertTrue(predicate(left, right))
 
     def test_apply_edit_does_not_report_a_sync_issue_for_an_unlocked_field(self):
-        # apply_edit recomputes schedule_issues after restoring
+        # validation_report uses the restored persisted lock policy
         # synced_fields (see docs/codes.md) -- confirms that recompute
         # doesn't false-positive on a field that was never locked to
         # begin with.
@@ -336,10 +366,10 @@ class CrossListingClassTests(unittest.TestCase):
         item = CrossListingClass.from_configured_sections(
             (left, right), synced_fields=frozenset({"instructor"}),
         )
-        self.assertEqual(item.schedule_issues, ())
+        self.assertEqual(item.validation_report(), ())
         updated = item.apply_edit("room", 0, building="Rothwell", room="205")
         self.assertEqual(updated.synced_fields, frozenset({"instructor"}))
-        self.assertEqual(updated.schedule_issues, ())
+        self.assertEqual(updated.validation_report(), ())
 
     def test_no_shared_fields_leaves_instructor_room_time_unconstrained(self):
         left = make_section(
@@ -471,7 +501,7 @@ class CoreqClassTests(unittest.TestCase):
 
     def test_within_30_minutes_different_days_is_valid_schedule(self):
         left = make_section(number="1113", time_slot="MWF 9:00am", duration=50, room="101")
-        right = make_section(number="0903", time_slot="T 9:20am", duration=75, room="102")
+        right = make_section(number="0903", time_slot="TR 9:20am", duration=80, room="102")
         self.assertTrue(CoreqClass.is_valid_schedule(left, right))
 
     def test_credit_hours_add_both_courses(self):
@@ -511,7 +541,7 @@ class CoreqClassTests(unittest.TestCase):
         self.assertEqual(back_to_back.edit_targets("room", 0), (0, 1))
         disjoint_days = CoreqClass((
             make_section(number="1113", time_slot="MWF 9:00am", duration=50, room="101"),
-            make_section(number="0903", time_slot="T 9:20am", duration=75, room="102"),
+            make_section(number="0903", time_slot="TR 9:20am", duration=80, room="102"),
         ))
         self.assertEqual(disjoint_days.edit_targets("room", 0), (0,))
 
@@ -521,9 +551,9 @@ class CoreqClassTests(unittest.TestCase):
         # matching room. apply_edit should carry the untouched row's room
         # over automatically instead of leaving a fresh coreq_invalid gap.
         left = make_section(number="1113", time_slot="MWF 9:00am", duration=50, room="101")
-        right = make_section(number="0903", time_slot="T 9:20am", duration=75, room="205")
+        right = make_section(number="0903", time_slot="TR 9:20am", duration=80, room="205")
         item = CoreqClass((left, right))
-        self.assertEqual(item.schedule_issues, ())  # valid to start (30-minute rule)
+        self.assertEqual(item.validation_report(), ())
 
         moved = item.apply_edit("time", 1, time_slot="MWF 9:50am", duration=50)
 
@@ -531,11 +561,11 @@ class CoreqClassTests(unittest.TestCase):
         self.assertTrue(CoreqClass._back_to_back(moved_left, moved_right))
         self.assertEqual(moved_right.room, "101")
         self.assertEqual(moved_right.building, moved_left.building)
-        self.assertEqual(moved.schedule_issues, ())
+        self.assertEqual(moved.validation_report(), ())
 
     def test_time_edit_that_stays_disjoint_does_not_touch_room(self):
         left = make_section(number="1113", time_slot="MWF 9:00am", duration=50, room="101")
-        right = make_section(number="0903", time_slot="T 9:20am", duration=75, room="205")
+        right = make_section(number="0903", time_slot="TR 9:20am", duration=80, room="205")
         item = CoreqClass((left, right))
 
         moved = item.apply_edit("time", 1, time_slot="R 9:10am", duration=75)

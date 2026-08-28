@@ -48,11 +48,11 @@ from .template_workspace import (
 )
 from .schedule_model import (
     GroupingError,
+    EvaluationContext,
     HardViolation,
     RecordReference,
     Schedule,
     SoftFinding,
-    evaluate_schedule,
     summarize_instructor_loads,
 )
 
@@ -510,7 +510,12 @@ def create_app() -> FastAPI:
         method = methods.get(view)
         if method is None:
             raise HTTPException(404, f"Unknown export view: {view}")
-        content = _excel_bytes(schedule, method)
+        evaluation = _evaluate_current_schedule(schedule, config)
+        content = _excel_bytes(
+            schedule, method,
+            hard_violations=evaluation.hard_violations,
+            soft_findings=evaluation.soft_findings,
+        )
         filename = f"{config.package_id}_current_{view}.xlsx"
         return Response(
             content=content,
@@ -630,6 +635,8 @@ def create_app() -> FastAPI:
             }],
             report=report, manifest=manifest, applied_overrides=no_overrides,
             reconciliation=reconciliation,
+            hard_violations=evaluation.hard_violations,
+            soft_findings=evaluation.soft_findings,
         )
         logger.info(
             "Published browser schedule as %s/%s (%d hard violation(s))",
@@ -1052,11 +1059,15 @@ def _delete_package_template(package: str) -> dict:
     return _configuration_file_payload(package)
 
 
-def _excel_bytes(schedule: Schedule, method_name: str) -> bytes:
+def _excel_bytes(schedule: Schedule, method_name: str, **kwargs) -> bytes:
     """Build one shared Schedule Excel view without persistent server state."""
     with tempfile.TemporaryDirectory() as folder:
         path = Path(folder) / "export.xlsx"
-        getattr(schedule, method_name)(path)
+        method = getattr(schedule, method_name)
+        if method_name == "to_raw_excel":
+            method(path)
+        else:
+            method(path, **kwargs)
         return path.read_bytes()
 
 
@@ -1214,13 +1225,7 @@ def _analysis_payload(
     schedule: Schedule, config: solver_module.SolverConfig,
 ) -> dict:
     """Serialize the same deterministic evaluation used by CLI publication."""
-    evaluation = evaluate_schedule(
-        schedule, config.preferences, config.persons, config.global_rules,
-        config.meeting_patterns,
-        config.constraint_rules,
-        config.workload_policy, config.back_to_back_policy,
-        config.new_instructor_policy, config.new_professor_policy,
-    )
+    evaluation = _evaluate_current_schedule(schedule, config)
     loads = [
         {
             "name": row.name, "hours": row.hours, "target": row.target,
@@ -1248,6 +1253,22 @@ def _analysis_payload(
         "soft_total": evaluation.soft_penalty,
         "soft": [_serialize_soft(f) for f in evaluation.soft_findings],
     }
+
+
+def _evaluate_current_schedule(
+    schedule: Schedule, config: solver_module.SolverConfig,
+):
+    return schedule.evaluate(EvaluationContext(
+        preferences=config.preferences,
+        persons=config.persons,
+        global_rules=config.global_rules,
+        meeting_patterns=config.meeting_patterns,
+        constraint_rules=config.constraint_rules,
+        workload_policy=config.workload_policy,
+        back_to_back_policy=config.back_to_back_policy,
+        new_instructor_policy=config.new_instructor_policy,
+        new_professor_policy=config.new_professor_policy,
+    ))
 
 
 def _serialize_reference(reference: RecordReference) -> dict:

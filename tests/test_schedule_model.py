@@ -1,16 +1,24 @@
 import datetime
+import tempfile
 import unittest
+from pathlib import Path
+
+from openpyxl import load_workbook
 
 from class_schedule.class_model import (
     CoreqClass, CrossListingClass, FourCreditClass, HybridClass, NormalClass, Section,
 )
-from class_schedule.config_schema import NewInstructorPolicySchema, NewProfessorPolicySchema
+from class_schedule.config_schema import (
+    CourseRelationshipSchema, NewInstructorPolicySchema, NewProfessorPolicySchema,
+)
 from class_schedule.instructor_identity import new_instructor_name, new_professor_name
 from class_schedule.schedule_model import (
     ConstraintRule,
     GroupingError,
+    HardViolation,
     PersonRecord,
     PreferenceRecord,
+    RecordReference,
     Schedule,
     TimeWindow,
     check_atomic_class_rules,
@@ -265,6 +273,40 @@ class EvaluateRequiredRoomTests(unittest.TestCase):
 
 
 class GroupingTests(unittest.TestCase):
+    def test_runtime_does_not_infer_coreq_or_cross_listing_without_config(self):
+        coreq = [
+            make_record(Number="0903", Section="001"),
+            make_record(Number="1113", Section="001", **{"Time Slot": "TR 9:20am"}, Duration=80),
+        ]
+        cross = [
+            make_record(Number="5173", Section="TC1"),
+            make_record(Subject="STAT", Number="4173", Section="TC1"),
+        ]
+        schedule = Schedule.from_records(coreq + cross)
+        self.assertEqual(len(schedule), 4)
+        self.assertTrue(all(isinstance(item, NormalClass) for item in schedule))
+
+    def test_configured_cross_listing_groups_three_members(self):
+        relationship = CourseRelationshipSchema(
+            kind="cross_listing",
+            members=["MATH 3003 001", "STAT 4004 001", "CS 2002 001"],
+            unsynced=["instructor", "room", "time"],
+        )
+        records = [
+            make_record(Subject="MATH", Number="3003", Credits=3, Instructor="Alice"),
+            make_record(Subject="STAT", Number="4004", Credits=4, Instructor="Bob"),
+            make_record(Subject="CS", Number="2002", Credits=2, Instructor="Carol"),
+        ]
+        schedule = Schedule.from_records(records, relationships=(relationship,))
+        self.assertEqual(len(schedule), 1)
+        item = schedule.classes[0]
+        self.assertIsInstance(item, CrossListingClass)
+        self.assertEqual(len(item.sections), 3)
+        self.assertEqual(item.credit_hours, 4)
+        self.assertEqual(teaching_loads(schedule), {
+            "Alice": 4, "Bob": 4, "Carol": 4,
+        })
+
     def test_invalid_section_is_reported_as_grouping_error_with_source_row(self):
         record = make_record(Section="")
 
@@ -276,10 +318,10 @@ class GroupingTests(unittest.TestCase):
 
     def test_mwf_and_tr_same_course_same_instructor_groups_as_four_credit(self):
         records = [
-            make_record(**{"Time Slot": "MWF 9:00am"}, Duration=50),
-            make_record(**{"Time Slot": "T 9:00am"}, Duration=75),
+            make_record(Number="1914", **{"Time Slot": "MWF 9:00am"}, Duration=50),
+            make_record(Number="1914", **{"Time Slot": "T 9:00am"}, Duration=80),
         ]
-        schedule = Schedule.from_records(records)
+        schedule = Schedule.from_records(records, infer_marked_cross_lists=True)
         self.assertEqual(len(schedule), 1)
         self.assertIsInstance(schedule.classes[0], FourCreditClass)
 
@@ -288,7 +330,7 @@ class GroupingTests(unittest.TestCase):
             make_record(Subject="MATH", Number="1113", **{"Cross-List": "XL1"}),
             make_record(Subject="STAT", Number="2103", **{"Cross-List": "XL1"}),
         ]
-        schedule = Schedule.from_records(records)
+        schedule = Schedule.from_records(records, infer_legacy_relationships=True)
         self.assertEqual(len(schedule), 1)
         self.assertIsInstance(schedule.classes[0], CrossListingClass)
 
@@ -305,7 +347,7 @@ class GroupingTests(unittest.TestCase):
                 Instructor="Jordan, Scott M.",
             ),
         ]
-        schedule = Schedule.from_records(records)
+        schedule = Schedule.from_records(records, infer_legacy_relationships=True)
         self.assertEqual(len(schedule), 1)
         self.assertIsInstance(schedule.classes[0], CrossListingClass)
         self.assertEqual(teaching_loads(schedule)["Jordan, Scott M."], 3)
@@ -345,17 +387,17 @@ class GroupingTests(unittest.TestCase):
                 Instructor="Growns, Landon C.",
             ),
         ]
-        schedule = Schedule.from_records(records)
+        schedule = Schedule.from_records(records, infer_legacy_relationships=True)
         self.assertIsInstance(schedule.classes[0], CrossListingClass)
         self.assertEqual(schedule.classes[0].credit_hours, 3)
         loads = teaching_loads(schedule)
         self.assertEqual(loads["Jordan, Scott M."], 3)
         self.assertEqual(loads["Growns, Landon C."], 3)
 
-    def test_math_1110_credit_override_survives_atomic_round_trip(self):
+    def test_explicit_catalog_credit_survives_atomic_round_trip(self):
         schedule = Schedule.from_records([
             make_record(
-                Subject="MATH", Number="1110", Section="003", Credits="0",
+                Subject="MATH", Number="1110", Section="003", Credits="2",
             ),
         ])
         item = schedule.classes[0]
@@ -368,7 +410,7 @@ class GroupingTests(unittest.TestCase):
             make_record(Subject="MATH", Number="5173", Section="TC1"),
             make_record(Subject="STAT", Number="4173", Section="TC2"),
         ]
-        schedule = Schedule.from_records(records)
+        schedule = Schedule.from_records(records, infer_legacy_relationships=True)
         self.assertEqual(len(schedule), 2)
 
     def test_legacy_configured_marker_is_removed_on_import(self):
@@ -382,7 +424,7 @@ class GroupingTests(unittest.TestCase):
                 **{"Cross-List": "configured:MATH 5173|STAT 4173"},
             ),
         ]
-        schedule = Schedule.from_records(records)
+        schedule = Schedule.from_records(records, infer_legacy_relationships=True)
         self.assertEqual(len(schedule), 1)
         self.assertTrue(all(
             not section.cross_list for section in schedule.classes[0].sections
@@ -393,7 +435,7 @@ class GroupingTests(unittest.TestCase):
             make_record(Section="001", Instructor="Alice", Room="101"),
             make_record(Section="H01", Instructor="Alice", Room="101"),
         ]
-        schedule = Schedule.from_records(records)
+        schedule = Schedule.from_records(records, infer_legacy_relationships=True)
         self.assertEqual(len(schedule), 1)
         self.assertIsInstance(schedule.classes[0], CrossListingClass)
 
@@ -404,7 +446,7 @@ class GroupingTests(unittest.TestCase):
             make_record(Subject="MATH", Number="1113", Section="001", **{"Time Slot": "MWF 9:00am"}),
             make_record(Subject="MATH", Number="0903", Section="001", **{"Time Slot": "MWF 9:50am"}),
         ]
-        schedule = Schedule.from_records(records)
+        schedule = Schedule.from_records(records, infer_legacy_relationships=True)
         self.assertEqual(len(schedule), 1)
         self.assertIsInstance(schedule.classes[0], CoreqClass)
 
@@ -416,7 +458,7 @@ class GroupingTests(unittest.TestCase):
     def test_three_rows_same_identity_is_grouping_error(self):
         records = [make_record() for _ in range(3)]
         with self.assertRaises(GroupingError):
-            Schedule.from_records(records)
+            Schedule.from_records(records, infer_legacy_relationships=True)
 
     def test_course_schedule_report_shaped_hybrid_pair_groups_correctly(self):
         # Shaped exactly like ATU's "Course Schedule Report" export (see
@@ -480,7 +522,7 @@ class GroupingTests(unittest.TestCase):
             make_record(Subject="MATH", Number="1110", Section="001"),
         ]
         with self.assertRaises(GroupingError):
-            Schedule.from_records(records)
+            Schedule.from_records(records, infer_legacy_relationships=True)
 
     def test_concurrent_enrollment_prefix_is_dropped(self):
         records = [make_record(Section="P01")]
@@ -520,7 +562,7 @@ class RoundTripReferenceStabilityTests(unittest.TestCase):
             make_record(Number="0903", Section="002", Instructor="Eve"),
             make_record(
                 Number="1113", Section="002", Instructor="Eve",
-                **{"Time Slot": "T 9:20am"}, Duration=75,
+                **{"Time Slot": "TR 9:20am"}, Duration=80,
             ),
         ]
         # Built through the same grouping pipeline the real system always
@@ -529,14 +571,27 @@ class RoundTripReferenceStabilityTests(unittest.TestCase):
         # (special kinds recognized first, plain rows last) is part of
         # what has to survive the round trip, not something this test
         # should sidestep.
-        schedule = Schedule.from_records(records)
+        relationships = (
+            CourseRelationshipSchema(
+                kind="cross_listing",
+                members=["MATH 5173 TC1", "STAT 4173 TC1"],
+                unsynced=[],
+            ),
+            CourseRelationshipSchema(
+                kind="coreq",
+                members=["MATH 0903 002", "MATH 1113 002"],
+            ),
+        )
+        schedule = Schedule.from_records(records, relationships=relationships)
         self.assertEqual(
             sorted(type(item).__name__ for item in schedule.classes),
             ["CoreqClass", "CrossListingClass", "FourCreditClass", "HybridClass", "NormalClass"],
         )
         before = _references(schedule)
 
-        reloaded = Schedule.from_records(schedule.to_records())
+        reloaded = Schedule.from_records(
+            schedule.to_records(), relationships=relationships,
+        )
 
         self.assertEqual(_references(reloaded), before)
         self.assertEqual(
@@ -785,6 +840,31 @@ class CheckNewHireCountsTests(unittest.TestCase):
         capped = [v for v in violations if v.rule == "new_professor_count"]
         self.assertEqual(len(capped), 1)
         self.assertEqual(capped[0].references, ())
+
+
+class WorkbookIssueTests(unittest.TestCase):
+    def test_weekly_workbook_lists_and_highlights_structured_issues(self):
+        schedule = Schedule.from_records([make_record(Instructor="Alice")])
+        violation = HardViolation(
+            "meeting_pattern", "MATH 1113-001", "Configured pattern mismatch",
+            references=(RecordReference(0, 0, "MATH 1113-001"),),
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "instructor.xlsx"
+            schedule.to_instructor_excel(path, hard_violations=(violation,))
+            workbook = load_workbook(path)
+        self.assertIn("Issues", workbook.sheetnames)
+        self.assertEqual(workbook["Issues"]["A2"].value, "Hard")
+        instructor_sheet = next(
+            ws for ws in workbook.worksheets
+            if ws.title != "Issues" and str(ws["A1"].value).endswith("-- Alice")
+        )
+        course_cell = next(
+            cell for row in instructor_sheet.iter_rows() for cell in row
+            if "MATH 1113-001" in str(cell.value or "")
+        )
+        self.assertIsNotNone(course_cell.comment)
+        self.assertIn("Configured pattern mismatch", course_cell.comment.text)
 
 
 if __name__ == "__main__":

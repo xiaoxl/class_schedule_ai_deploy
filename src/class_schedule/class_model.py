@@ -1,11 +1,11 @@
-"""Atomic class model backed by one or two CSV records.
+"""Atomic class model backed by one or more CSV records.
 
 This module has no dependency on Schedule and knows nothing about
 collections of classes -- it only models a single table row (``Section``) and
-a single normalized atomic class of one or two rows. ``NormalClass`` (one row)
-is the base of the hierarchy; ``SpecialClass`` (two normalized rows) is the base
-for the four two-row kinds -- ``FourCreditClass``, ``HybridClass``,
-``CrossListingClass``, ``CoreqClass`` -- each of which owns its own
+a single normalized atomic class. ``NormalClass`` (one row) is the base of the
+hierarchy; ``SpecialClass`` is the two-row base for ``FourCreditClass``,
+``HybridClass``, and ``CoreqClass``. ``CrossListingClass`` accepts two or more
+rows. Each kind owns its own
 recognition rule and validation. Grouping many rows into many classes (and
 back) is a collection-level concern that belongs to whatever owns the full
 table -- e.g. ``Schedule`` -- not to this module.
@@ -14,6 +14,7 @@ table -- e.g. ``Schedule`` -- not to this module.
 from __future__ import annotations
 
 import datetime
+import re
 from enum import StrEnum
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
@@ -21,13 +22,6 @@ from typing import ClassVar
 
 from . import record_utils
 from .instructor_identity import canonical_instructor
-
-# Course numbers encode credit hours in their last digit by convention
-# (e.g. "1914" -> 4 credits, "0803" -> 3 credits). These full-course
-# exceptions are authoritative and are applied while constructing Section,
-# before the record enters an atomic class or is flattened back to a draft.
-_CREDIT_HOUR_OVERRIDES: dict[str, float] = {"MATH 1110": 2.0}
-
 
 class DeliveryMode(StrEnum):
     """How a section is delivered, independent of whether its time is known."""
@@ -37,7 +31,8 @@ class DeliveryMode(StrEnum):
     ARRANGED = "arranged"
 
 
-def _infer_credit_hours(number: str) -> int:
+def infer_credit_hours(number: str) -> int:
+    """Infer catalog credits from the final numeric course-number digit."""
     return int(number[-1]) if number and number[-1].isdigit() else 0
 
 
@@ -66,11 +61,6 @@ class Section:
         self.time_slot = record_utils.text(self.time_slot)
         if not self.subject or not self.number or not self.section:
             raise ValueError("Each record requires Subject, Number, and Section")
-        credit_override = _CREDIT_HOUR_OVERRIDES.get(
-            f"{self.subject} {self.number}"
-        )
-        if credit_override is not None:
-            self.credits = credit_override
         record_utils.parse_slot(self.time_slot)
         if not self.is_online and self.duration is None:
             raise ValueError(
@@ -122,7 +112,7 @@ class Section:
         return (
             self.credits
             if self.credits is not None
-            else _infer_credit_hours(self.number)
+            else infer_credit_hours(self.number)
         )
 
     @property
@@ -204,43 +194,38 @@ class Section:
 class NormalClass:
     """A class represented by exactly one CSV record.
 
-    Base of the whole hierarchy: ``SpecialClass`` (two CSV records) and its
-    four kinds inherit ``num_of_rows`` and ``validate_structure`` from this
-    class, unchanged -- none of them override it. Business/recognition
-    rules for those four kinds live in ``_issues``/``schedule_issues``
-    instead (see docs/codes.md's "Never-Block Scheduling" design): a row
-    count mismatch is the one thing that can still make construction
-    itself fail, everything else is reported, not rejected. A class's
-    kind is its Python type -- ``isinstance``/``type()`` -- there is no
-    separate tag.
+    Base of the hierarchy. Every concrete kind exposes ``validate`` and
+    ``validation_report``; row-count failure is constructor-fatal while
+    other business failures remain reportable/editable. A class's kind is
+    its Python type -- there is no separate tag.
     """
 
     sections: tuple[Section, ...]
 
-    num_of_rows: ClassVar[int] = 1
-
     def __post_init__(self) -> None:
-        self.validate_structure()
+        # Row-count failures remain constructor-fatal because the atomic
+        # object cannot safely provide its public operations without its
+        # required records. All business validity remains report-only.
+        report = NormalClass.validation_report(self)
+        if report:
+            raise ValueError(report[0])
 
-    def validate_structure(self) -> None:
-        """Raise ``ValueError`` unless ``self.sections`` has the right
-        row count for this kind -- the one structural property that can
-        still make construction fail (see docs/codes.md). Each
-        individual ``Section`` is already guaranteed legal on its own by
-        the time it gets here, since ``Section.__post_init__`` validates
-        it at construction; an invalid ``Section`` can't exist to be
-        passed in. Business/recognition rules for the two-row kinds are
-        never checked here -- see ``_issues``/``schedule_issues`` on each
-        of them instead.
-        """
-        if len(self.sections) != self.num_of_rows:
-            detail = (
-                f" ({self.sections[0].course_id})" if self.sections else ""
-            )
-            raise ValueError(
-                f"{type(self).__name__} requires exactly "
-                f"{self.num_of_rows} CSV record(s){detail}"
-            )
+    def validation_report(self) -> tuple[str, ...]:
+        """Return every reason this atomic class is currently invalid."""
+        return self._exact_row_count_report(1)
+
+    def _exact_row_count_report(self, expected: int) -> tuple[str, ...]:
+        if len(self.sections) == expected:
+            return ()
+        detail = f" ({self.sections[0].course_id})" if self.sections else ""
+        return (
+            f"{type(self).__name__} requires exactly "
+            f"{expected} CSV record(s){detail}",
+        )
+
+    def validate(self) -> bool:
+        """Whether this atomic class currently satisfies its own rules."""
+        return not self.validation_report()
 
     # ---- import (CSV records -> objects) ----
 
@@ -368,9 +353,12 @@ class NormalClass:
 
 @dataclass(slots=True)
 class SpecialClass(NormalClass):
-    """Base of the four kinds represented by exactly two CSV records."""
+    """Base of the three kinds represented by exactly two CSV records."""
 
-    num_of_rows: ClassVar[int] = 2
+    def __post_init__(self) -> None:
+        structural = self._exact_row_count_report(2)
+        if structural:
+            raise ValueError(structural[0])
 
 
 @dataclass(slots=True)
@@ -379,12 +367,14 @@ class FourCreditClass(SpecialClass):
 
     MAX_START_DIFFERENCE_MINUTES: ClassVar[int] = 90
     schedule_issue_rule: ClassVar[str] = "four_credit_invalid"
-    schedule_issues: tuple[str, ...] = field(init=False, default=())
-
     def __post_init__(self) -> None:
         super(FourCreditClass, self).__post_init__()
-        left, right = self.sections
-        self.schedule_issues = self._issues(left, right)
+
+    def validation_report(self) -> tuple[str, ...]:
+        structural = self._exact_row_count_report(2)
+        if structural:
+            return structural
+        return self._issues(*self.sections)
 
     @classmethod
     def _issues(cls, left: Section, right: Section) -> tuple[str, ...]:
@@ -399,11 +389,19 @@ class FourCreditClass(SpecialClass):
                 f"{left.course_id} / {right.course_id} four-credit rows "
                 "are not the same course",
             )
+        if left.credit_hours != 4 or right.credit_hours != 4:
+            return (f"{left.course_id} is not a four-credit course",)
         if not cls.is_four_credit(left, right):
             return (
                 f"{left.course_id} four-credit rows must share an "
                 "instructor and pair one MWF meeting with one T or R "
                 "meeting",
+            )
+        partial = left if left.days in {"T", "R"} else right
+        if partial.duration != 80:
+            return (
+                f"{left.course_id} T/R four-credit meeting must last "
+                f"80 minutes (currently {partial.duration})",
             )
         difference = cls.start_difference_minutes(left, right)
         if difference > cls.MAX_START_DIFFERENCE_MINUTES:
@@ -471,8 +469,6 @@ class HybridClass(SpecialClass):
     """
 
     schedule_issue_rule: ClassVar[str] = "hybrid_invalid"
-    schedule_issues: tuple[str, ...] = field(init=False, default=())
-
     def __post_init__(self) -> None:
         physical = [section for section in self.sections if section.has_meeting_time]
         if len(physical) == 1 and len(self.sections) in (1, 2):
@@ -486,12 +482,17 @@ class HybridClass(SpecialClass):
                     for section in self.sections
                 )
         super(HybridClass, self).__post_init__()
+
+    def validation_report(self) -> tuple[str, ...]:
+        structural = self._exact_row_count_report(2)
+        if structural:
+            return structural
         left, right = self.sections
-        self.schedule_issues = () if self.is_valid_schedule(left, right) else (
-            f"{left.course_id} rows do not form a valid hybrid pairing: "
-            "need the same course, one M- or F-prefixed physical meeting "
-            "with a room and a companion without one, and a shared "
-            "instructor",
+        return () if self.is_valid_schedule(left, right) else (
+            f"{left.course_id} / {right.course_id} rows do not form a "
+            "valid hybrid pairing: need one physical meeting with a room, "
+            "one online/arranged row without time or location, and a "
+            "shared instructor",
         )
 
     @staticmethod
@@ -511,7 +512,7 @@ class HybridClass(SpecialClass):
 
         Falls back to the first row rather than raising when neither (or
         both) rows qualify -- ``is_hybrid`` no longer guarantees exactly
-        one match (see ``schedule_issues``), but this class must stay
+        one match (see ``validation_report``), but this class must stay
         readable/exportable regardless.
         """
         for section in self.sections:
@@ -541,24 +542,25 @@ class HybridClass(SpecialClass):
 
     @staticmethod
     def is_hybrid(left: Section, right: Section) -> bool:
+        if left.identity != right.identity:
+            return False
+        if not re.fullmatch(r"[FM]\d\d", left.section.upper()):
+            return False
         if left.instructor != right.instructor:
             return False
-        physical = left if left.has_meeting_time else right
-        if not HybridClass.is_hybrid_physical(physical):
+        if left.has_meeting_time == right.has_meeting_time:
             return False
-        return (
-            left.has_meeting_time != right.has_meeting_time
-            and all(
-                section.has_meeting_time == bool(section.room)
-                for section in (left, right)
-            )
+        physical = left if left.has_meeting_time else right
+        online = right if left.has_meeting_time else left
+        return bool(physical.room) and not any(
+            (online.has_meeting_time, online.room, online.building)
         )
 
     @staticmethod
     def is_hybrid_physical(section: Section) -> bool:
         """Return whether one imported row is sufficient to build a Hybrid."""
         return (
-            section.section.upper().startswith(("M", "F"))
+            bool(re.fullmatch(r"[FM]\d\d", section.section.strip().upper()))
             and section.has_meeting_time
             and bool(section.room)
         )
@@ -603,8 +605,8 @@ class HybridClass(SpecialClass):
 
 
 @dataclass(slots=True)
-class CrossListingClass(SpecialClass):
-    """Two catalog rows that represent one cross-listed offering."""
+class CrossListingClass(NormalClass):
+    """Two or more catalog rows that represent one cross-listed offering."""
 
     COURSE_PAIRS: ClassVar[list[set[str]]] = [
         {"MATH 5173", "STAT 4173"},
@@ -617,16 +619,29 @@ class CrossListingClass(SpecialClass):
         {"instructor", "room", "time"},
     )
     synced_fields: frozenset[str] = field(init=False, default=frozenset())
-    schedule_issues: tuple[str, ...] = field(init=False, default=())
-
     def __post_init__(self) -> None:
-        super(CrossListingClass, self).__post_init__()
-        left, right = self.sections
-        self.synced_fields = self._synced_fields(left, right)
-        self.schedule_issues = self._issues(left, right) + self._sync_issues(left, right)
+        structural = self._row_count_report()
+        if structural:
+            raise ValueError(structural[0])
+        self.synced_fields = self._synced_fields(self.sections)
+
+    def _row_count_report(self) -> tuple[str, ...]:
+        if len(self.sections) >= 2:
+            return ()
+        return ("CrossListingClass requires at least 2 CSV records",)
+
+    def validation_report(self) -> tuple[str, ...]:
+        structural = self._row_count_report()
+        if structural:
+            return structural
+        return self._issues(self.sections) + self._sync_issues(self.sections)
+
+    @property
+    def credit_hours(self) -> float:
+        return max(section.credit_hours for section in self.sections)
 
     @staticmethod
-    def _synced_fields(left: Section, right: Section) -> frozenset[str]:
+    def _synced_fields(sections: tuple[Section, ...]) -> frozenset[str]:
         """Which of {instructor, room, time} this specific pair's source
         data already had matching -- decided once at construction and
         fixed for the life of the instance (see docs/codes.md). Only
@@ -637,65 +652,52 @@ class CrossListingClass(SpecialClass):
         "no information" defaults to "must match", never to "may differ".
         """
         locked = set()
-        if left.instructor == right.instructor:
+        first, *rest = sections
+        if all(section.instructor == first.instructor for section in rest):
             locked.add("instructor")
-        if left.room == right.room and left.building == right.building:
+        if all(
+            section.room == first.room and section.building == first.building
+            for section in rest
+        ):
             locked.add("room")
-        if left.time_slot == right.time_slot and left.duration == right.duration:
+        if all(
+            section.time_slot == first.time_slot and section.duration == first.duration
+            for section in rest
+        ):
             locked.add("time")
         return frozenset(locked)
 
     @classmethod
     def from_configured_sections(
         cls,
-        sections: tuple[Section, Section],
+        sections: tuple[Section, ...],
         *,
         synced_fields: frozenset[str] | None = None,
     ) -> "CrossListingClass":
         """Build an explicitly configured pair without a course whitelist.
 
-        ``synced_fields`` is opt-in, not opt-out: a `courses.toml`
-        relationship names only the fields allowed to diverge (by leaving
-        them out of the list), and a relationship that doesn't declare
-        ``synced_fields`` at all defaults to fully locked
-        (``ALL_SYNCED_FIELDS``) -- a *declared* cross-listing is assumed to
-        be one single, fully-shared offering unless told otherwise. This is
-        deliberately not the same fallback ``__post_init__`` uses for a
-        pair recognized *without* an explicit relationship (shared
-        Cross-List marker, known course pair, honors pairing) -- there,
-        with no config to consult at all, auto-detecting from whatever the
-        rows currently show is the only option. See docs/codes.md.
+        The schema converts public ``unsynced`` configuration into this
+        internal locked-field set. Omitted/empty ``unsynced`` therefore
+        supplies ``ALL_SYNCED_FIELDS``. Automatic template inference may
+        instead pass the set observed in source rows, but ordinary loading
+        never guesses this policy.
         """
         item = cls.__new__(cls)
         item.sections = sections
-        SpecialClass.validate_structure(item)
-        left, right = sections
+        structural = item._row_count_report()
+        if structural:
+            raise ValueError(structural[0])
         item.synced_fields = (
             synced_fields if synced_fields is not None
             else cls.ALL_SYNCED_FIELDS
         )
-        item.schedule_issues = cls._issues(left, right) + item._sync_issues(left, right)
         return item
 
     @classmethod
-    def _issues(cls, left: Section, right: Section) -> tuple[str, ...]:
-        """Every reason ``is_valid_schedule`` might fail, as a report.
-
-        Construction never rejects a row-level adjustment (see
-        docs/codes.md); this is what a caller uses to detect and describe
-        an illegal state after the fact instead.
-        """
-        if left.identity == right.identity:
-            return (
-                f"{left.course_id} cross-listing rows must be two "
-                "different courses",
-            )
-        if not cls.is_cross_listing(left, right):
-            return (
-                f"{left.course_id} / {right.course_id} rows are not "
-                "recognized as one cross-listing (no shared Cross-List "
-                "value, known course pair, or honors-section pairing)",
-            )
+    def _issues(cls, sections: tuple[Section, ...]) -> tuple[str, ...]:
+        identities = [section.identity for section in sections]
+        if len(identities) != len(set(identities)):
+            return ("cross-listing members must be different sections",)
         return ()
 
     @classmethod
@@ -704,37 +706,43 @@ class CrossListingClass(SpecialClass):
         combined with whichever fields this instance's ``synced_fields``
         locked -- see ``pairwise_predicate``.
         """
-        return not cls._issues(left, right)
+        return left.identity != right.identity
 
-    def _sync_issues(self, left: Section, right: Section) -> tuple[str, ...]:
+    def _sync_issues(self, sections: tuple[Section, ...]) -> tuple[str, ...]:
         """Every reason the two rows currently violate *this instance's*
         ``synced_fields`` lock -- separate from ``_issues`` (recognition,
         the same fixed rule for every instance of the kind) because
         ``synced_fields`` is a per-instance decision (see docs/codes.md),
-        not a per-kind one. Both ``schedule_issues`` and
+        not a per-kind one. Both ``validation_report`` and
         ``pairwise_predicate`` call this, so a schedule that's illegal for
         the solver is never silently "clean" in hard-violation reporting,
         and vice versa.
         """
         locked = self.synced_fields
         issues = []
-        if "instructor" in locked and left.instructor != right.instructor:
+        left, *rest = sections
+        labels = " / ".join(section.course_id for section in sections)
+        if "instructor" in locked and any(
+            section.instructor != left.instructor for section in rest
+        ):
             issues.append(
-                f"{left.course_id} / {right.course_id} are declared to "
+                f"{labels} are declared to "
                 "share an instructor but currently differ"
             )
-        if "room" in locked and (
-            left.room != right.room or left.building != right.building
+        if "room" in locked and any(
+            section.room != left.room or section.building != left.building
+            for section in rest
         ):
             issues.append(
-                f"{left.course_id} / {right.course_id} are declared to "
+                f"{labels} are declared to "
                 "share a room but currently differ"
             )
-        if "time" in locked and (
-            left.time_slot != right.time_slot or left.duration != right.duration
+        if "time" in locked and any(
+            section.time_slot != left.time_slot or section.duration != left.duration
+            for section in rest
         ):
             issues.append(
-                f"{left.course_id} / {right.course_id} are declared to "
+                f"{labels} are declared to "
                 "share a time but currently differ"
             )
         return tuple(issues)
@@ -784,7 +792,7 @@ class CrossListingClass(SpecialClass):
         decided per instance at construction (see docs/codes.md), so a
         pair that started matching stays matching, while a pair that
         started independent (e.g. two different rooms) stays free to
-        diverge further. Shares ``_sync_issues`` with ``schedule_issues``
+        diverge further. Shares ``_sync_issues`` with ``validation_report``
         (see ``__post_init__``/``from_configured_sections``/``apply_edit``)
         so the solver's rule and hard-violation reporting can never
         disagree about what "currently violates the lock" means.
@@ -792,7 +800,7 @@ class CrossListingClass(SpecialClass):
         def _predicate(left: Section, right: Section) -> bool:
             if not self.is_valid_schedule(left, right):
                 return False
-            return not self._sync_issues(left, right)
+            return not self._sync_issues((left, right))
 
         return _predicate
 
@@ -800,7 +808,7 @@ class CrossListingClass(SpecialClass):
         # The one kind whose linking is per-instance, not per-kind -- see
         # synced_fields (docs/codes.md): a field the source data already
         # had matching stays linked, one that didn't stays independent.
-        return (0, 1) if field in self.synced_fields else (record_index,)
+        return tuple(range(len(self.sections))) if field in self.synced_fields else (record_index,)
 
     def apply_edit(
         self, field: str, record_index: int, **changes: object,
@@ -820,15 +828,6 @@ class CrossListingClass(SpecialClass):
         )
         updated.synced_fields = self.synced_fields
         # __post_init__ (inside the replace() above) already set
-        # schedule_issues too, but using the auto-detected synced_fields
-        # it had *before* the line above restored the real ones -- redo it
-        # now that synced_fields is right, or an edit could leave a stale
-        # (or missing) sync_issues entry behind.
-        left, right = updated.sections
-        updated.schedule_issues = (
-            CrossListingClass._issues(left, right)
-            + updated._sync_issues(left, right)
-        )
         return updated
 
     @staticmethod
@@ -858,12 +857,14 @@ class CoreqClass(SpecialClass):
         {"MATH 1113", "MATH 1110"},
     ]
     schedule_issue_rule: ClassVar[str] = "coreq_invalid"
-    schedule_issues: tuple[str, ...] = field(init=False, default=())
-
     def __post_init__(self) -> None:
         super(CoreqClass, self).__post_init__()
-        left, right = self.sections
-        self.schedule_issues = self._issues(left, right)
+
+    def validation_report(self) -> tuple[str, ...]:
+        structural = self._exact_row_count_report(2)
+        if structural:
+            return structural
+        return self._issues(*self.sections)
 
     @classmethod
     def from_configured_sections(
@@ -872,9 +873,9 @@ class CoreqClass(SpecialClass):
         """Build an explicitly configured pair while retaining coreq behavior."""
         item = cls.__new__(cls)
         item.sections = sections
-        SpecialClass.validate_structure(item)
-        left, right = sections
-        item.schedule_issues = cls._issues(left, right)
+        structural = item._exact_row_count_report(2)
+        if structural:
+            raise ValueError(structural[0])
         return item
 
     @property
@@ -913,7 +914,7 @@ class CoreqClass(SpecialClass):
         right_start = right.start.hour * 60 + right.start.minute
         left_end = left_start + (left.duration or 0)
         right_end = right_start + (right.duration or 0)
-        shared_days = bool(set(left.days or "") & set(right.days or ""))
+        shared_days = left.days == right.days == "MWF"
         return shared_days and (
             0 <= right_start - left_end <= 15
             or 0 <= left_start - right_end <= 15
@@ -933,6 +934,8 @@ class CoreqClass(SpecialClass):
         if left.identity == right.identity:
             return (f"{left.course_id} coreq rows must be two different courses",)
         label = f"{left.course_id} / {right.course_id}"
+        if left.section.upper() != right.section.upper():
+            return (f"{label} coreq members must use the same section number",)
         if left.instructor != right.instructor:
             return (f"{label} coreq meetings do not share an instructor",)
         if left.is_online and right.is_online:
@@ -946,7 +949,7 @@ class CoreqClass(SpecialClass):
             return (f"{label} coreq meetings require a valid time",)
         left_start = left.start.hour * 60 + left.start.minute
         right_start = right.start.hour * 60 + right.start.minute
-        shared_days = bool(set(left.days or "") & set(right.days or ""))
+        shared_days = left.days == right.days == "MWF"
         back_to_back = cls._back_to_back(left, right)
         if shared_days and not back_to_back:
             # Same weekday on both sides but not back-to-back: the two
@@ -968,6 +971,11 @@ class CoreqClass(SpecialClass):
                     f"{right.building} {right.room})",
                 )
             return ()
+        if {left.days, right.days} != {"MWF", "TR"}:
+            return (
+                f"{label} coreq meetings must be MWF back-to-back or "
+                "an MWF + TR five-day pairing",
+            )
         gap = abs(left_start - right_start)
         if gap > 30:
             return (

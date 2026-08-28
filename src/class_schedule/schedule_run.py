@@ -786,6 +786,8 @@ def run_term(
         manifest=manifest,
         applied_overrides=applied_overrides,
         reconciliation=reconciliation,
+        hard_violations=best.hard_violations,
+        soft_findings=best.soft_findings,
         final=is_final,
         replace_destination=replace_destination,
     )

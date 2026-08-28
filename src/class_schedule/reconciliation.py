@@ -74,7 +74,7 @@ def _record(config: SolverConfig, identity: str, role: str, atomic: frozenset[st
         room = location.room if location else ""
     return {
         "Subject": subject, "Number": number, "Section": section,
-        "Type": "Lecture", "Title": catalog.title, "Credits": catalog.credits,
+        "Type": "Lecture", "Title": catalog.title, "Credits": catalog.resolved_credits,
         "Time Slot": time_slot, "Duration": duration,
         "Building": building, "Room": room,
         "Instructor": placeholder or _placeholder(config, [identity]),
@@ -98,7 +98,7 @@ def _synthesize_relationship(config: SolverConfig, relationship) -> list[dict[st
             for member in relationship.members
         ]
     credits = {
-        f"{item.subject} {item.number}": item.credits
+        f"{item.subject} {item.number}": item.resolved_credits
         for item in config.catalogs.courses
     }
     member_courses = [" ".join(member.split()[:2]) for member in relationship.members]
@@ -134,7 +134,7 @@ def _synthesize_relationship(config: SolverConfig, relationship) -> list[dict[st
 
 def reconcile_records(
     records: list[Mapping[str, object]], config: SolverConfig,
-    *, infer_legacy_relationships: bool = True,
+    *, infer_legacy_relationships: bool = False,
 ) -> tuple[Schedule, ReconciliationReport]:
     """Make the imported template exactly match courses.toml."""
     desired = {
@@ -189,16 +189,17 @@ def reconcile_records(
     for identity in sorted(missing):
         relationship = relationship_by_member.get(identity)
         if relationship is not None:
-            if relationship.id in generated_relationships:
+            if relationship.key in generated_relationships:
                 continue
             absent_members = set(relationship.members) - present
             if absent_members != set(relationship.members):
                 raise ValueError(
-                    f"Imported template contains only part of relationship {relationship.id}"
+                    "Imported template contains only part of relationship "
+                    f"{relationship.display_name}"
                 )
             kept.extend(_synthesize_relationship(config, relationship))
             added.update(relationship.members)
-            generated_relationships.add(relationship.id)
+            generated_relationships.add(relationship.key)
         else:
             course = " ".join(identity.split()[:2])
             kept.append(_record(

@@ -25,6 +25,7 @@ from pathlib import Path
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.cell.cell import MergedCell
+from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from . import record_utils
@@ -46,6 +47,7 @@ from .class_model import (
     CrossListingClass,
     FourCreditClass,
     HybridClass,
+    infer_credit_hours,
     NormalClass,
     Section,
 )
@@ -89,7 +91,7 @@ class Schedule:
         persons: Mapping[str, "PersonRecord"] | None = None,
         relationships: Iterable[CourseRelationshipSchema] = (),
         catalogs: Iterable[CatalogCourseSchema] = (),
-        infer_legacy_relationships: bool = True,
+        infer_legacy_relationships: bool = False,
         infer_marked_cross_lists: bool = False,
     ) -> "Schedule":
         """Group a complete table of CSV records into atomic classes."""
@@ -107,7 +109,7 @@ class Schedule:
         persons: Mapping[str, "PersonRecord"] | None = None,
         relationships: Iterable[CourseRelationshipSchema] = (),
         catalogs: Iterable[CatalogCourseSchema] = (),
-        infer_legacy_relationships: bool = True,
+        infer_legacy_relationships: bool = False,
         infer_marked_cross_lists: bool = False,
     ) -> "Schedule":
         """Group a complete DataFrame into atomic classes."""
@@ -145,13 +147,23 @@ class Schedule:
         """One row per CSV record, in the schedule's own column order."""
         _write_raw_excel(self.to_dataframe(), path)
 
-    def to_instructor_excel(self, path: str | Path) -> None:
+    def to_instructor_excel(
+        self, path: str | Path, *, hard_violations=(), soft_findings=(),
+    ) -> None:
         """One worksheet per instructor: a Monday-Friday weekly grid."""
-        _weekly_workbook(self, group="instructor").save(path)
+        _weekly_workbook(
+            self, group="instructor", hard_violations=hard_violations,
+            soft_findings=soft_findings,
+        ).save(path)
 
-    def to_room_excel(self, path: str | Path) -> None:
+    def to_room_excel(
+        self, path: str | Path, *, hard_violations=(), soft_findings=(),
+    ) -> None:
         """One worksheet per room: a Monday-Friday weekly grid."""
-        _weekly_workbook(self, group="room").save(path)
+        _weekly_workbook(
+            self, group="room", hard_violations=hard_violations,
+            soft_findings=soft_findings,
+        ).save(path)
 
     # ---- lookup ----
 
@@ -160,6 +172,14 @@ class Schedule:
 
     def __len__(self) -> int:
         return len(self.classes)
+
+    def teaching_loads(self) -> dict[str, float]:
+        """Aggregate loads using each atomic class's own credit calculation."""
+        return teaching_loads(self)
+
+    def evaluate(self, context: "EvaluationContext") -> "ScheduleEvaluation":
+        """Evaluate this schedule through one reusable configuration context."""
+        return context.evaluate(self)
 
     @property
     def course_ids(self) -> list[str]:
@@ -240,7 +260,7 @@ def _group_records(
     persons: Mapping[str, "PersonRecord"] | None = None,
     relationships: Iterable[CourseRelationshipSchema] = (),
     catalogs: Iterable[CatalogCourseSchema] = (),
-    infer_legacy_relationships: bool = True,
+    infer_legacy_relationships: bool = False,
     infer_marked_cross_lists: bool = False,
 ) -> list[Class]:
     """Group raw CSV records into atomic classes.
@@ -279,6 +299,11 @@ def _group_records(
                 [dict(normalized)],
             )
         if catalog is not None:
+            catalog_credits = (
+                catalog.credits
+                if catalog.credits is not None
+                else float(infer_credit_hours(catalog.number))
+            )
             raw_credits = record_utils.text(record_utils.value(normalized, "Credits"))
             if raw_credits:
                 try:
@@ -288,14 +313,14 @@ def _group_records(
                         f"{subject} {number} has invalid input Credits={raw_credits!r}",
                         [dict(normalized)],
                     ) from error
-                if abs(input_credits - catalog.credits) > 1e-9:
+                if abs(input_credits - catalog_credits) > 1e-9:
                     raise GroupingError(
                         f"{subject} {number} has input Credits={input_credits:g}, "
-                        f"but catalogs.toml declares {catalog.credits:g}",
+                        f"but catalogs.toml declares {catalog_credits:g}",
                         [dict(normalized)],
                     )
             normalized["Title"] = catalog.title
-            normalized["Credits"] = catalog.credits
+            normalized["Credits"] = catalog_credits
         if record_utils.text(normalized.get("Cross-List")).startswith("configured:"):
             # Normalize the supported ``configured:`` compatibility marker;
             # known pairs are recognized directly by CrossListingClass.
@@ -361,14 +386,8 @@ def _take_configured_relationships(
             elif relationship.kind == "four_credit":
                 item = FourCreditClass(rows)
             elif relationship.kind == "cross_listing":
-                if len(rows) != 2:
-                    raise ValueError("configured cross-listing requires two source rows")
-                synced_fields = (
-                    frozenset(relationship.synced_fields)
-                    if relationship.synced_fields is not None else None
-                )
                 item = CrossListingClass.from_configured_sections(
-                    rows, synced_fields=synced_fields,
+                    rows, synced_fields=relationship.locked_fields,
                 )
             else:
                 if len(rows) != 2:
@@ -398,11 +417,12 @@ def _take_same_course(
             )
         if len(group) == 2:
             left, right = group
-            target = (
-                HybridClass
-                if HybridClass.is_hybrid(left, right)
-                else FourCreditClass
-            )
+            if re.fullmatch(r"[FM]\d\d", left.section.upper()):
+                target = HybridClass
+            elif max(left.credit_hours, right.credit_hours) == 4:
+                target = FourCreditClass
+            else:
+                continue
             try:
                 found.append(target((left, right)))
             except ValueError as error:
@@ -437,18 +457,12 @@ def _take_cross_list_column(
     found: list[Class] = []
     consumed: set[int] = set()
     for cross_list, group in by_cross_list.items():
-        if len(group) > 2:
-            raise GroupingError(
-                f"Cross-List {cross_list!r} has more than two CSV records",
-                [section.to_record() for section in group],
-            )
-        if len(group) == 2:
-            left, right = group
+        if len(group) >= 2:
             try:
                 found.append(CrossListingClass(tuple(group)))
             except ValueError as error:
                 raise GroupingError(
-                    str(error), [left.to_record(), right.to_record()]
+                    str(error), [section.to_record() for section in group]
                 ) from error
             consumed.update(id(section) for section in group)
     return found, [
@@ -1256,16 +1270,16 @@ def check_conflicts(schedule: "Schedule") -> list[HardViolation]:
 def check_atomic_class_rules(schedule: "Schedule") -> list[HardViolation]:
     """Report nonfatal construction issues that adjustment must repair.
 
-    Sourced from each class's own ``schedule_issues``/``schedule_issue_rule``
-    (all four two-row kinds -- see docs/codes.md) rather
+    Sourced from each class's own ``validation_report``/``schedule_issue_rule``
+    (all special kinds -- see docs/codes.md) rather
     than a separate per-kind mapping kept here: any kind that carries
-    ``schedule_issues`` is reported the same way, with no per-kind branch
+    validation messages are reported the same way, with no per-kind branch
     to remember to add.
     """
     violations: list[HardViolation] = []
     by_class = _references_by_class(schedule)
     for class_index, item in enumerate(schedule.classes):
-        issues = getattr(item, "schedule_issues", ())
+        issues = item.validation_report()
         if not issues:
             continue
         rule = item.schedule_issue_rule
@@ -1593,6 +1607,29 @@ class ScheduleEvaluation:
     soft_findings: tuple[SoftFinding, ...]
 
 
+@dataclass(frozen=True)
+class EvaluationContext:
+    """All configuration needed to evaluate a Schedule, kept out of the model."""
+
+    preferences: Mapping[str, PreferenceRecord]
+    persons: Mapping[str, PersonRecord]
+    global_rules: tuple[PreferenceRule, ...] = ()
+    meeting_patterns: tuple[MeetingPatternLike, ...] = ()
+    constraint_rules: tuple[ConstraintRule, ...] = ()
+    workload_policy: WorkloadPolicySchema | None = None
+    back_to_back_policy: BackToBackPolicySchema | None = None
+    new_instructor_policy: NewInstructorPolicySchema | None = None
+    new_professor_policy: NewProfessorPolicySchema | None = None
+
+    def evaluate(self, schedule: Schedule) -> ScheduleEvaluation:
+        return evaluate_schedule(
+            schedule, self.preferences, self.persons, self.global_rules,
+            self.meeting_patterns, self.constraint_rules,
+            self.workload_policy, self.back_to_back_policy,
+            self.new_instructor_policy, self.new_professor_policy,
+        )
+
+
 def evaluate_schedule(
     schedule: "Schedule",
     preferences: dict[str, PreferenceRecord],
@@ -1667,7 +1704,10 @@ def _write_raw_excel(df: pd.DataFrame, path: str | Path) -> None:
             )
 
 
-def _weekly_workbook(schedule: "Schedule", *, group: str) -> Workbook:
+def _weekly_workbook(
+    schedule: "Schedule", *, group: str,
+    hard_violations=(), soft_findings=(),
+) -> Workbook:
     """``group`` is ``"instructor"`` or ``"room"``."""
     # Keep each section paired with the atomic class (``Class``) it came
     # from -- ``_build_weekly_sheet`` needs that to tell a real
@@ -1694,6 +1734,7 @@ def _weekly_workbook(schedule: "Schedule", *, group: str) -> Workbook:
     if not groups:
         ws = workbook.create_sheet("No scheduled data")
         ws["A1"] = f"No rows with {group} assignments."
+        _add_issues_sheet(workbook, hard_violations, soft_findings)
         return workbook
 
     used_titles: set[str] = set()
@@ -1701,7 +1742,87 @@ def _weekly_workbook(schedule: "Schedule", *, group: str) -> Workbook:
         title = _safe_sheet_title(resource, used_titles)
         ws = workbook.create_sheet(title)
         _build_weekly_sheet(ws, resource, groups[resource], group)
+    _add_issues_sheet(workbook, hard_violations, soft_findings)
+    _highlight_referenced_issues(
+        workbook, schedule, group, hard_violations, soft_findings,
+    )
     return workbook
+
+
+def _add_issues_sheet(workbook: Workbook, hard_violations, soft_findings) -> None:
+    issues = [
+        ("Hard", item.rule, item.subject, item.message, item.references)
+        for item in hard_violations
+    ] + [
+        ("Soft", item.rule, item.instructor, item.message, item.references)
+        for item in soft_findings
+    ]
+    if not issues:
+        return
+    ws = workbook.create_sheet("Issues", 0)
+    ws.append(("Severity", "Rule", "Subject", "Message", "Courses"))
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="305496")
+    for severity, rule, subject, message, refs in issues:
+        ws.append((severity, rule, subject, message, ", ".join(
+            ref.course_id for ref in refs
+        )))
+        color = "FFC7CE" if severity == "Hard" else "FFF2CC"
+        for cell in ws[ws.max_row]:
+            cell.fill = PatternFill("solid", fgColor=color)
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    for column, width in zip("ABCDE", (11, 24, 24, 80, 45)):
+        ws.column_dimensions[column].width = width
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+
+def _highlight_referenced_issues(
+    workbook: Workbook, schedule: "Schedule", group: str,
+    hard_violations, soft_findings,
+) -> None:
+    def resource_for(ref: RecordReference, item) -> str:
+        if group == "instructor" and isinstance(item, SoftFinding):
+            return item.instructor
+        if group == "instructor" and item.rule in {
+            "instructor_conflict", "hard_load_cap", "new_hire_contract_load",
+        }:
+            return item.subject
+        if group == "room" and item.rule == "room_conflict":
+            return item.subject
+        try:
+            section = schedule.classes[ref.class_index].sections[ref.record_index]
+        except IndexError:
+            return ""
+        if group == "instructor":
+            return section.instructor
+        return f"{section.building} {section.room}".strip()
+
+    findings = [
+        (item, "FF0000", "FFFFFF") for item in hard_violations
+    ] + [
+        (item, "FFD966", "1F1F1F") for item in soft_findings
+    ]
+    for item, fill, font in findings:
+        for ref in item.references:
+            resource = resource_for(ref, item)
+            if not resource:
+                continue
+            sheet = next((ws for ws in workbook.worksheets if ws.title != "Issues" and ws["A1"].value and str(ws["A1"].value).endswith(f"-- {resource}")), None)
+            if sheet is None:
+                continue
+            for row in sheet.iter_rows():
+                for cell in row:
+                    if ref.course_id not in str(cell.value or ""):
+                        continue
+                    # Hard always wins over a prior soft highlight.
+                    if fill != "FF0000" and cell.fill.fgColor.rgb in {"00FF0000", "FFFF0000"}:
+                        continue
+                    cell.fill = PatternFill("solid", fgColor=fill)
+                    cell.font = Font(size=9, bold=True, color=font)
+                    messages = str(cell.comment.text) + "\n" if cell.comment else ""
+                    cell.comment = Comment(messages + item.message, "Schedule audit")
 
 
 def _merged_anchor(ws, row: int, column: int):

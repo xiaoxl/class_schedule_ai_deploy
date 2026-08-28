@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from class_schedule.config_schema import CourseRelationshipSchema
+
 from class_schedule.section_demand import (
     analyze,
     load_headcounts,
@@ -102,14 +104,16 @@ class LoadScheduleRowsTests(unittest.TestCase):
 
 
 class AnalyzeTests(unittest.TestCase):
-    def _run(self, schedule_rows, cube_rows):
+    def _run(self, schedule_rows, cube_rows, *, relationships=()):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             schedule_path = tmp_path / "sched.csv"
             cube_path = tmp_path / "cube.xlsx"
             write_schedule(schedule_path, schedule_rows)
             write_cube(cube_path, cube_rows)
-            return {d.course: d for d in analyze(schedule_path, cube_path)}
+            return {d.course: d for d in analyze(
+                schedule_path, cube_path, relationships=relationships,
+            )}
 
     def test_concurrent_enrollment_sections_are_excluded(self):
         results = self._run(
@@ -152,6 +156,10 @@ class AnalyzeTests(unittest.TestCase):
                 _row("MATH", "1003", "TC1", "20006", "-13 / 0 / na", time_slot="TBA", duration=None, room=""),
             ],
             [("20005", 22, 13), ("20006", 22, 13)],
+            relationships=(CourseRelationshipSchema(
+                kind="coreq",
+                members=["MATH 0803 TC1", "MATH 1003 TC1"],
+            ),),
         )
         self.assertIn("MATH 0803 / MATH 1003", results)
         self.assertNotIn("MATH 0803", results)

@@ -1539,3 +1539,30 @@ with references covering both rows of the class.
 
 `docs/scheduling-rules.md`'s hard-constraints bullet updated to match
 (no longer says "charged only to its first row's instructor").
+
+## Addendum, 2026-08-27: configuration-authoritative relationships and unified validation
+
+This addendum supersedes older passages above that describe automatic runtime
+Coreq/CrossListing recognition, manual relationship IDs, two-member-only
+cross-listings, `synced_fields` as the preferred syntax, or
+`validate_structure`/`schedule_issues` as the evaluation entry point.
+
+- Normal loading gets Coreq and CrossListing membership only from
+  `courses.toml`. Template inference owns the legacy/default guesses and
+  verifies its generated package by reloading the explicit relationships.
+- Four-credit and same-section `Fxx`/`Mxx` Hybrid recognition remains
+  intrinsic. Hybrid means two rows with the identical section name, one
+  physical and one without time/location.
+- Relationship identity is the derived `kind|sorted members` key. New files do
+  not write `id`. Cross-listing policy is written as `unsynced`; omitted or
+  empty means instructor, room, and time are all linked.
+- CrossListing supports N members, uses the maximum member credit, and assigns
+  that full credit once to every distinct instructor in the atomic class.
+- The atomic validation API is `validate()` plus `validation_report()`.
+  `Schedule` evaluation calls the report; the old `schedule_issues` mirror has
+  been removed.
+- `Schedule.evaluate(EvaluationContext(...))` is the object-facing evaluation
+  API; `evaluate_schedule()` remains the pure shared implementation.
+- Weekly exports include a complete Issues sheet and use structured
+  `RecordReference` values for hard/soft highlighting. The web issue list no
+  longer truncates after eight entries.

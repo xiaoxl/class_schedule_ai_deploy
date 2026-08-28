@@ -1,39 +1,78 @@
 # Scheduling Rules
 
-## Atomic classes
+## Recognition and inference
 
-The solver schedules atomic classes and counts each atomic class once.
+Ordinary schedule loading is deterministic. `courses.toml` is authoritative
+for Coreq and CrossListing relationships; when a relationship is absent those
+rows remain normal classes. Four-credit and Hybrid classes retain intrinsic
+recognition:
 
-- `NormalClass`: one ordinary row.
-- `FourCreditClass`: an MWF row paired with Tuesday or Thursday, same instructor, start times no more than 90 minutes apart.
-- `HybridClass`: a physical meeting plus a derived online companion, same instructor. Only the physical row appears on the grid.
-- `CrossListingClass`: two rows recognized as one cross-listed offering (a shared Cross-List marker, a known course pair, or an honors/regular section pair). Whichever of instructor/room/time the source data already had matching for a given pair is kept in sync going forward; whichever it didn't is free to diverge independently -- there is no requirement that all three match, and the two rows are never checked against each other for conflicts.
-- `CoreqClass`: a whitelisted or configured pair of two different courses, same instructor; the two meetings must be either both online, back-to-back in the same room, or on disjoint weekdays starting within 30 minutes of each other.
+- two records with the same course/section and four credits form a
+  `FourCreditClass`;
+- an `Fxx` or `Mxx` section is a `HybridClass`; its two records have exactly
+  the same section name, with one physical row and one online/arranged row.
 
-### Nonfatal atomic-class issues
+Template inference is a separate operation. It emits explicit Coreq defaults,
+honors and MATH 5173/STAT 4173 cross-listings only when their assignments are
+shared, and every N-member group carrying the same nonblank `Cross-List`
+marker. The generated seven-file package is reloaded using only the emitted
+configuration before it is accepted.
 
-Construction never rejects a row-level adjustment on any of the four kinds above -- see `docs/codes.md`'s "Never-Block Scheduling" section for the full design. Each kind defines one `is_valid_schedule(left, right)` covering everything in its bullet above; failing it still constructs the class, recording the problem as `schedule_issues` and reporting it through `evaluate_schedule()` as a hard violation (`four_credit_invalid` / `hybrid_invalid` / `coreq_invalid` / `cross_listing_invalid`) rather than raising. The solver still requires the full rule via `pairwise_predicate`, unconditionally for all four kinds -- so a pairing broken in a way the solver can actually fix (time, room) gets repaired, while one broken in a way it can't (e.g. a hybrid pairing whose physical/online shape no longer holds) correctly reports the solve attempt infeasible instead of silently shipping something invalid.
+Relationship IDs are not authored. The internal stable key is derived from
+the relationship kind plus its sorted canonical members. Legacy `id` and
+`synced_fields` input remain readable during migration, but newly generated
+configuration writes `unsynced`.
 
-## Hard constraints
+## Atomic classes and validation
 
-- Every section selects one legal candidate.
-- Atomic classes cannot overlap for the same instructor or room.
-- Multi-row classes retain their structural relationship.
-- Locked fields cannot change.
-- Explicit constraints and solver load caps must hold. `evaluate_schedule()` reports these too now (`hard_load_cap`, `new_hire_contract_load`, `new_instructor_count`/`new_professor_count`) -- not only enforced during solving, so a schedule that already breaks one of them is visible before the next solve, not only rejected once one is attempted. Each mirrors the solver's own definition exactly: a configured instructor's cap is `max_load + hard_load_cap_tolerance`; a New Instructor/New Professor identity's contract load has no added tolerance at all; and a class with rows split across different instructors (a CrossListingClass whose `synced_fields` doesn't include `"instructor"`) charges *every* one of them the class's full credit hours, same as `teaching_loads()` -- the solver's own load model (`add_load_terms`) counts every row of a class this way too, not only its first (see `docs/codes.md`).
-- Qualification (`persons.toml`'s `courses` list) is deliberately *not* one of these -- the solver keeps a section's current instructor as a candidate even when unqualified (and falls back to them when no qualified candidate exists at all), so "the current instructor isn't listed as qualified" is not something the solver ever actually refuses.
+Every atomic class exposes `validate() -> bool` and
+`validation_report() -> tuple[str, ...]`. The report is authoritative and the
+boolean is its wrapper. Row-count and business rules live in the concrete
+class validation implementation; there is no separate structural validation
+API. A valid `Section` is still required for construction, and an unusable row
+count remains constructor-fatal. Other business-invalid states remain editable
+and are reported as hard findings.
 
-## New Instructor
+- `NormalClass`: exactly one record.
+- `FourCreditClass`: exactly two records for the same four-credit section;
+  MWF plus T or R, same instructor, T/R duration exactly 80 minutes, and start
+  times at most 90 minutes apart. Rooms may differ.
+- `HybridClass`: exactly two records with the same `Fxx` or `Mxx` section and
+  instructor. One has a physical time and room; the other has neither time nor
+  location.
+- `CoreqClass`: exactly two configured members with the same section number
+  and instructor. Both may be online. Physical meetings are either MWF
+  back-to-back with a 0–15 minute gap in the same room, or a strict MWF + TR
+  five-day pair whose starts differ by at most 30 minutes; the latter rooms
+  may differ.
+- `CrossListingClass`: at least two configured members. Members do not
+  conflict with each other. The class credit is the maximum member credit,
+  and every distinct instructor appearing in the class receives that full
+  credit once. All of instructor/room/time are synchronized by default;
+  `unsynced = ["room"]`, for example, permits only rooms to diverge. Synced
+  edits update every member.
 
-Two scalable pools grow and shrink with the schedule:
+Catalog credits are authoritative when present. If omitted, credits are
+inferred from the final numeric digit of the course number. `teaching_loads()`
+does not contain another credit rule; it aggregates each class's
+`credit_hours`.
 
-- `new_instructor`, `new_instructor 2`, and so on teach through the configured maximum course number.
-- `new_professor`, `new_professor 2`, and so on teach from the configured minimum course number upward.
+## Schedule evaluation and output
 
-Contract load, course-number eligibility, and back-to-back policy come from the corresponding `[new_instructor]` and `[new_professor]` sections in `constraints.toml`; no production policy number is hard-coded in the solver.
+`Schedule.evaluate(EvaluationContext(...))` is the thin public entry point;
+the pure `evaluate_schedule()` function remains the implementation shared by
+CLI, solver attempts, reports, and the web API. Structured `RecordReference`
+values locate findings within that same response's Schedule and are never
+persisted identifiers.
 
-## Soft objectives and validation
+Hard checks include atomic-class validation, instructor/room overlap,
+configured meeting patterns and constraints, load caps, dynamic-position
+contract caps, and allowed New Instructor/New Professor counts. Qualification
+is not currently hard: the solver deliberately preserves a section's existing
+instructor even when that course is absent from `persons.toml`.
 
-The objective considers instructor/time/room changes, preferences, back-to-back rules, contract load, and New Instructor use. `schedule_model.evaluate_schedule()` is shared by CLI validation, solver attempts, reports, and the web API. Teaching load always comes from atomic classes through `teaching_loads()`.
-
-A successful solver status is not sufficient by itself. Hard violations never block saving or exporting (see "Nonfatal atomic-class issues" above), but review them along with workload and soft findings before treating a version as done.
+All three current-view downloads remain available even when findings exist.
+Instructor and location workbooks keep conflicting meetings visible, include
+an `Issues` worksheet, mark referenced hard findings red, and mark referenced
+soft findings yellow. The web issue panel displays the complete finding list
+and uses structured references rather than parsing message text.
