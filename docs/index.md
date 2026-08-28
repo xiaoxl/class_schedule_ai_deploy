@@ -84,6 +84,8 @@ uv run class-schedule final 27S ver10
 - [Manual adjustments and versioning](manual-adjustments.md)
 - [Demand analysis](demand-analysis.md)
 - [Delivery mode design](codes.md)
+- [API inventory and audit](api-audit.md)
+- [Next-step plan](plan.md)
 
 ## Tests
 
