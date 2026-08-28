@@ -129,6 +129,7 @@ def _validate(args: argparse.Namespace) -> int:
         schedule, config.preferences, config.persons, config.global_rules,
         config.meeting_patterns, config.constraint_rules,
         config.workload_policy, config.back_to_back_policy,
+        config.new_instructor_policy, config.new_professor_policy,
     )
     print(
         f"Atomic classes: {evaluation.atomic_classes}; "

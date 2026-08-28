@@ -157,6 +157,32 @@ class EditApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409, response.text)
         self.assertIn("grouping changed", response.json()["detail"])
 
+    def test_response_hard_violations_carry_structured_references(self):
+        # A room edit that doesn't touch the instructor mismatch, so the
+        # coreq_invalid violation is still present in the response --
+        # asserts _serialize_hard's references (see docs/codes.md), not
+        # just that the violation exists.
+        records = self._coreq_records()
+        records[1]["Instructor"] = "Growns, Landon C."
+
+        response = self.client.post("/api/edit", json=self._edit_payload(
+            records=records, record_index=1,
+            field="room", value={"building": "Rothwell", "room": "221"},
+        ))
+
+        self.assertEqual(response.status_code, 200, response.text)
+        hard = response.json()["violations"]["hard"]
+        coreq_issues = [item for item in hard if item["rule"] == "coreq_invalid"]
+        self.assertEqual(len(coreq_issues), 1)
+        references = coreq_issues[0]["references"]
+        self.assertEqual(
+            {
+                (r["class_index"], r["record_index"], r["course_id"])
+                for r in references
+            },
+            {(0, 0, "MATH 0903-001"), (0, 1, "MATH 1113-001")},
+        )
+
     def test_changed_target_row_snapshot_is_rejected_without_editing(self):
         payload = self._edit_payload(
             record_index=1, field="time",

@@ -49,6 +49,7 @@ from .template_workspace import (
 from .schedule_model import (
     GroupingError,
     HardViolation,
+    RecordReference,
     Schedule,
     SoftFinding,
     evaluate_schedule,
@@ -555,6 +556,7 @@ def create_app() -> FastAPI:
             schedule, config.preferences, config.persons, config.global_rules,
             config.meeting_patterns, config.constraint_rules,
             config.workload_policy, config.back_to_back_policy,
+            config.new_instructor_policy, config.new_professor_policy,
         )
         # Hard violations never block publication (see docs/codes.md) -- they
         # are recorded in the report/manifest and returned below instead, so
@@ -1217,6 +1219,7 @@ def _analysis_payload(
         config.meeting_patterns,
         config.constraint_rules,
         config.workload_policy, config.back_to_back_policy,
+        config.new_instructor_policy, config.new_professor_policy,
     )
     loads = [
         {
@@ -1247,11 +1250,20 @@ def _analysis_payload(
     }
 
 
+def _serialize_reference(reference: RecordReference) -> dict:
+    return {
+        "class_index": reference.class_index,
+        "record_index": reference.record_index,
+        "course_id": reference.course_id,
+    }
+
+
 def _serialize_hard(violation: HardViolation) -> dict:
     return {
         "rule": violation.rule,
         "subject": violation.subject,
         "message": violation.message,
+        "references": [_serialize_reference(r) for r in violation.references],
     }
 
 
@@ -1264,6 +1276,7 @@ def _serialize_soft(finding: SoftFinding) -> dict:
         "severity": (
             "orange" if finding.penalty >= SOFT_SEVERITY_THRESHOLD else "yellow"
         ),
+        "references": [_serialize_reference(r) for r in finding.references],
     }
 
 

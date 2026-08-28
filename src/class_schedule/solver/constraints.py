@@ -311,14 +311,35 @@ def add_load_terms(
     scale = 10
     per_instructor: dict[str, list] = {}
     for class_index, item in enumerate(class_list):
-        primary = sections_by_class[class_index][0]
         units = int(round(item.credit_hours * scale))
         if not units:
             continue
-        for candidate_index, candidate in enumerate(candidates[primary]):
-            per_instructor.setdefault(candidate.instructor, []).append(
-                units * chosen[primary][candidate_index]
-            )
+        # Every distinct instructor possible anywhere among this class's
+        # rows contributes at most one `units` charge for this class --
+        # matching schedule_model.teaching_loads()'s "any row crediting
+        # them counts the whole class once" definition, not just the
+        # first row's candidate (see docs/codes.md). For every kind
+        # except an instructor-unsynced CrossListingClass, every row's
+        # candidates already have to agree on instructor in any feasible
+        # solution (pairwise_predicate forbids otherwise), so this only
+        # actually changes behavior for that one case; everywhere else it
+        # computes the identical answer the old primary-row-only version
+        # did, just by a more general route.
+        by_instructor: dict[str, list] = {}
+        for section_index in sections_by_class[class_index]:
+            for candidate_index, candidate in enumerate(candidates[section_index]):
+                by_instructor.setdefault(candidate.instructor, []).append(
+                    chosen[section_index][candidate_index]
+                )
+        for instructor, selected in by_instructor.items():
+            if len(selected) == 1:
+                taught = selected[0]
+            else:
+                taught = model.new_bool_var(f"taught_c{class_index}_{instructor}")
+                for variable in selected:
+                    model.add(variable <= taught)
+                model.add(taught <= sum(selected))
+            per_instructor.setdefault(instructor, []).append(units * taught)
 
     objective_terms = []
     for instructor, terms in per_instructor.items():

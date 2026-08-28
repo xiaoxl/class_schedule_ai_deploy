@@ -520,6 +520,14 @@ class ConfigurationFileManagementTests(unittest.TestCase):
         self.assertIn('submitEdit(classIndex,recordIndex,"time",{days:newDays,start})', script)
         self.assertIn("expected_course_ids:item.course_ids", script)
         self.assertIn('expected_time_slot:row["Time Slot"]', script)
+        # Hard/soft findings carry structured `references` now (see
+        # docs/codes.md) -- the frontend must read those, never guess
+        # which course a finding is about from its free-text message.
+        self.assertIn("function issueViewModel", script)
+        self.assertIn("function validReferences", script)
+        self.assertIn("RULE_VIEW", script)
+        self.assertNotIn('message||"").includes(', script)
+        self.assertNotIn("function softIssue", script)
 
     def test_replacing_template_keeps_only_the_latest_original_filename(self):
         package = self.config_root / "27S"

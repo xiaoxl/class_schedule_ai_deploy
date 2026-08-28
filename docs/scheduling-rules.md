@@ -20,7 +20,8 @@ Construction never rejects a row-level adjustment on any of the four kinds above
 - Atomic classes cannot overlap for the same instructor or room.
 - Multi-row classes retain their structural relationship.
 - Locked fields cannot change.
-- Explicit constraints and solver load caps must hold.
+- Explicit constraints and solver load caps must hold. `evaluate_schedule()` reports these too now (`hard_load_cap`, `new_hire_contract_load`, `new_instructor_count`/`new_professor_count`) -- not only enforced during solving, so a schedule that already breaks one of them is visible before the next solve, not only rejected once one is attempted. Each mirrors the solver's own definition exactly: a configured instructor's cap is `max_load + hard_load_cap_tolerance`; a New Instructor/New Professor identity's contract load has no added tolerance at all; and a class with rows split across different instructors (a CrossListingClass whose `synced_fields` doesn't include `"instructor"`) charges *every* one of them the class's full credit hours, same as `teaching_loads()` -- the solver's own load model (`add_load_terms`) counts every row of a class this way too, not only its first (see `docs/codes.md`).
+- Qualification (`persons.toml`'s `courses` list) is deliberately *not* one of these -- the solver keeps a section's current instructor as a candidate even when unqualified (and falls back to them when no qualified candidate exists at all), so "the current instructor isn't listed as qualified" is not something the solver ever actually refuses.
 
 ## New Instructor
 

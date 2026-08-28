@@ -377,6 +377,7 @@ def _evaluate_attempt(number: int, result: SolveResult, config: SolverConfig) ->
         result.schedule, config.preferences, config.persons, config.global_rules,
         config.meeting_patterns, config.constraint_rules,
         config.workload_policy, config.back_to_back_policy,
+        config.new_instructor_policy, config.new_professor_policy,
     )
     return Attempt(
         number=number,
@@ -432,6 +433,7 @@ def _report(
         baseline, config.preferences, config.persons, config.global_rules,
         config.meeting_patterns, config.constraint_rules,
         config.workload_policy, config.back_to_back_policy,
+        config.new_instructor_policy, config.new_professor_policy,
     )
     before_loads = baseline_evaluation.loads
     after_loads = teaching_loads(after)

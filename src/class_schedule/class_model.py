@@ -205,9 +205,14 @@ class NormalClass:
     """A class represented by exactly one CSV record.
 
     Base of the whole hierarchy: ``SpecialClass`` (two CSV records) and its
-    four kinds inherit from this class and override ``validate`` to add
-    their own recognition rule, plus ``num_of_rows``. A class's kind is its
-    Python type -- ``isinstance``/``type()`` -- there is no separate tag.
+    four kinds inherit ``num_of_rows`` and ``validate_structure`` from this
+    class, unchanged -- none of them override it. Business/recognition
+    rules for those four kinds live in ``_issues``/``schedule_issues``
+    instead (see docs/codes.md's "Never-Block Scheduling" design): a row
+    count mismatch is the one thing that can still make construction
+    itself fail, everything else is reported, not rejected. A class's
+    kind is its Python type -- ``isinstance``/``type()`` -- there is no
+    separate tag.
     """
 
     sections: tuple[Section, ...]
@@ -215,17 +220,18 @@ class NormalClass:
     num_of_rows: ClassVar[int] = 1
 
     def __post_init__(self) -> None:
-        self.validate()
+        self.validate_structure()
 
-    def validate(self) -> None:
-        """Raise ``ValueError`` unless ``self.sections`` is legal.
-
-        Subclasses call ``super().validate()`` first, then add their own
-        recognition rule. This base check is just the row count -- each
+    def validate_structure(self) -> None:
+        """Raise ``ValueError`` unless ``self.sections`` has the right
+        row count for this kind -- the one structural property that can
+        still make construction fail (see docs/codes.md). Each
         individual ``Section`` is already guaranteed legal on its own by
         the time it gets here, since ``Section.__post_init__`` validates
         it at construction; an invalid ``Section`` can't exist to be
-        passed in.
+        passed in. Business/recognition rules for the two-row kinds are
+        never checked here -- see ``_issues``/``schedule_issues`` on each
+        of them instead.
         """
         if len(self.sections) != self.num_of_rows:
             detail = (
@@ -617,7 +623,7 @@ class CrossListingClass(SpecialClass):
         super(CrossListingClass, self).__post_init__()
         left, right = self.sections
         self.synced_fields = self._synced_fields(left, right)
-        self.schedule_issues = self._issues(left, right)
+        self.schedule_issues = self._issues(left, right) + self._sync_issues(left, right)
 
     @staticmethod
     def _synced_fields(left: Section, right: Section) -> frozenset[str]:
@@ -662,13 +668,13 @@ class CrossListingClass(SpecialClass):
         """
         item = cls.__new__(cls)
         item.sections = sections
-        SpecialClass.validate(item)
+        SpecialClass.validate_structure(item)
         left, right = sections
         item.synced_fields = (
             synced_fields if synced_fields is not None
             else cls.ALL_SYNCED_FIELDS
         )
-        item.schedule_issues = cls._issues(left, right)
+        item.schedule_issues = cls._issues(left, right) + item._sync_issues(left, right)
         return item
 
     @classmethod
@@ -699,6 +705,39 @@ class CrossListingClass(SpecialClass):
         locked -- see ``pairwise_predicate``.
         """
         return not cls._issues(left, right)
+
+    def _sync_issues(self, left: Section, right: Section) -> tuple[str, ...]:
+        """Every reason the two rows currently violate *this instance's*
+        ``synced_fields`` lock -- separate from ``_issues`` (recognition,
+        the same fixed rule for every instance of the kind) because
+        ``synced_fields`` is a per-instance decision (see docs/codes.md),
+        not a per-kind one. Both ``schedule_issues`` and
+        ``pairwise_predicate`` call this, so a schedule that's illegal for
+        the solver is never silently "clean" in hard-violation reporting,
+        and vice versa.
+        """
+        locked = self.synced_fields
+        issues = []
+        if "instructor" in locked and left.instructor != right.instructor:
+            issues.append(
+                f"{left.course_id} / {right.course_id} are declared to "
+                "share an instructor but currently differ"
+            )
+        if "room" in locked and (
+            left.room != right.room or left.building != right.building
+        ):
+            issues.append(
+                f"{left.course_id} / {right.course_id} are declared to "
+                "share a room but currently differ"
+            )
+        if "time" in locked and (
+            left.time_slot != right.time_slot or left.duration != right.duration
+        ):
+            issues.append(
+                f"{left.course_id} / {right.course_id} are declared to "
+                "share a time but currently differ"
+            )
+        return tuple(issues)
 
     @staticmethod
     def is_cross_listing(left: Section, right: Section) -> bool:
@@ -745,24 +784,15 @@ class CrossListingClass(SpecialClass):
         decided per instance at construction (see docs/codes.md), so a
         pair that started matching stays matching, while a pair that
         started independent (e.g. two different rooms) stays free to
-        diverge further.
+        diverge further. Shares ``_sync_issues`` with ``schedule_issues``
+        (see ``__post_init__``/``from_configured_sections``/``apply_edit``)
+        so the solver's rule and hard-violation reporting can never
+        disagree about what "currently violates the lock" means.
         """
-        locked = self.synced_fields
-
         def _predicate(left: Section, right: Section) -> bool:
             if not self.is_valid_schedule(left, right):
                 return False
-            if "instructor" in locked and left.instructor != right.instructor:
-                return False
-            if "room" in locked and (
-                left.room != right.room or left.building != right.building
-            ):
-                return False
-            if "time" in locked and (
-                left.time_slot != right.time_slot or left.duration != right.duration
-            ):
-                return False
-            return True
+            return not self._sync_issues(left, right)
 
         return _predicate
 
@@ -789,6 +819,16 @@ class CrossListingClass(SpecialClass):
             field, record_index, **changes,
         )
         updated.synced_fields = self.synced_fields
+        # __post_init__ (inside the replace() above) already set
+        # schedule_issues too, but using the auto-detected synced_fields
+        # it had *before* the line above restored the real ones -- redo it
+        # now that synced_fields is right, or an edit could leave a stale
+        # (or missing) sync_issues entry behind.
+        left, right = updated.sections
+        updated.schedule_issues = (
+            CrossListingClass._issues(left, right)
+            + updated._sync_issues(left, right)
+        )
         return updated
 
     @staticmethod
@@ -832,7 +872,7 @@ class CoreqClass(SpecialClass):
         """Build an explicitly configured pair while retaining coreq behavior."""
         item = cls.__new__(cls)
         item.sections = sections
-        SpecialClass.validate(item)
+        SpecialClass.validate_structure(item)
         left, right = sections
         item.schedule_issues = cls._issues(left, right)
         return item

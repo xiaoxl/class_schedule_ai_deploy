@@ -285,6 +285,62 @@ class CrossListingClassTests(unittest.TestCase):
             ),
         ))
 
+    def test_configured_pair_that_currently_violates_its_own_lock_reports_a_schedule_issue(self):
+        # Regression: schedule_issues used to only ever check recognition
+        # (_issues) -- a configured pair whose synced_fields lock the two
+        # rows to match, but whose actual current data doesn't (e.g. a
+        # declared relationship defaulting to ALL_SYNCED_FIELDS over a
+        # template that still shows different rooms), was reported as
+        # clean everywhere except pairwise_predicate. See docs/codes.md.
+        left = make_section(
+            subject="MATH", number="5173", section="TC1",
+            instructor="Alice", room="101", time_slot="TR 11:00am", duration=80,
+        )
+        right = make_section(
+            subject="STAT", number="4173", section="TC1",
+            instructor="Bob", room="205", time_slot="TR 2:00pm", duration=50,
+        )
+        item = CrossListingClass.from_configured_sections((left, right))
+        self.assertEqual(item.synced_fields, CrossListingClass.ALL_SYNCED_FIELDS)
+        self.assertEqual(len(item.schedule_issues), 3)
+        predicate = item.pairwise_predicate()
+        self.assertFalse(predicate(left, right))
+
+    def test_configured_pair_that_currently_satisfies_its_own_lock_has_no_schedule_issue(self):
+        left = make_section(
+            subject="MATH", number="5173", section="TC1",
+            instructor="Alice", room="101", time_slot="TR 11:00am", duration=80,
+        )
+        right = make_section(
+            subject="STAT", number="4173", section="TC1",
+            instructor="Alice", room="101", time_slot="TR 11:00am", duration=80,
+        )
+        item = CrossListingClass.from_configured_sections((left, right))
+        self.assertEqual(item.schedule_issues, ())
+        predicate = item.pairwise_predicate()
+        self.assertTrue(predicate(left, right))
+
+    def test_apply_edit_does_not_report_a_sync_issue_for_an_unlocked_field(self):
+        # apply_edit recomputes schedule_issues after restoring
+        # synced_fields (see docs/codes.md) -- confirms that recompute
+        # doesn't false-positive on a field that was never locked to
+        # begin with.
+        left = make_section(
+            subject="MATH", number="5173", section="TC1",
+            instructor="Alice", room="101", time_slot="TR 11:00am", duration=80,
+        )
+        right = make_section(
+            subject="STAT", number="4173", section="TC1",
+            instructor="Alice", room="101", time_slot="TR 11:00am", duration=80,
+        )
+        item = CrossListingClass.from_configured_sections(
+            (left, right), synced_fields=frozenset({"instructor"}),
+        )
+        self.assertEqual(item.schedule_issues, ())
+        updated = item.apply_edit("room", 0, building="Rothwell", room="205")
+        self.assertEqual(updated.synced_fields, frozenset({"instructor"}))
+        self.assertEqual(updated.schedule_issues, ())
+
     def test_no_shared_fields_leaves_instructor_room_time_unconstrained(self):
         left = make_section(
             subject="MATH", number="1113", cross_list="XL1",

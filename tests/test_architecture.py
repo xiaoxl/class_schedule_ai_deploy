@@ -10,8 +10,14 @@ from class_schedule.class_model import (
     NormalClass,
     Section,
 )
+from class_schedule.config_schema import (
+    NewInstructorPolicySchema,
+    NewProfessorPolicySchema,
+    WorkloadPolicySchema,
+)
 from class_schedule.schedule_model import load_persons, resolve_person_name, Schedule
 from class_schedule.solver import (
+    InfeasibleSchedule,
     MeetingPattern,
     RoomRecord,
     SolveStatus,
@@ -182,6 +188,72 @@ class SolverArchitectureTests(unittest.TestCase):
         solved = solve(Schedule([item]), config)
         a, b = solved.classes[0].sections
         self.assertTrue(CrossListingClass.is_shared_meeting(a, b))
+
+    def test_load_cap_counts_every_row_of_a_class_not_just_the_first(self):
+        """add_load_terms used to attribute a class's credit_hours to
+        only its first row's chosen instructor (see docs/codes.md's Plan
+        A / load-authority addenda) -- correct for every kind except an
+        instructor-unsynced CrossListingClass, where the second row's
+        instructor was never counted toward their own load cap at all.
+        Fixed to count every distinct instructor possible anywhere in a
+        class, once each.
+
+        Bob is the only usable instructor for both a 3-credit NormalClass
+        and the *second* row of a 3-credit CrossListingClass whose
+        instructor field is deliberately left unsynced (Carol has the
+        first row) -- no one else is qualified, and the New
+        Instructor/New Professor pools are barred entirely
+        (allowed_counts=[0]), so the solver has no way to reassign either
+        row away from its current (grandfathered) instructor. With
+        hard_load_cap_tolerance=0 and max_load=3, 3 (NormalClass) + 3
+        (CrossListingClass, once the second row counts) = 6 is
+        unavoidably over Bob's cap -- solving must raise
+        InfeasibleSchedule. Before the fix, the CrossListingClass's
+        second row was invisible to the load model, Bob's total never
+        exceeded 3, and this solved cleanly -- the bug this test exists
+        to catch.
+        """
+        from class_schedule.schedule_model import PersonRecord
+
+        solo = Section(
+            "MATH", "2003", "001", "MWF 8:00am", 50, "101", "Bob",
+            building="Corley",
+        )
+        left = Section(
+            "MATH", "5173", "TC1", "MWF 9:00am", 50, "101", "Carol",
+            building="Corley", cross_list="XL1",
+        )
+        right = Section(
+            "STAT", "5173", "TC1", "MWF 9:00am", 50, "101", "Bob",
+            building="Corley", cross_list="XL1",
+        )
+        pair = CrossListingClass.from_configured_sections(
+            (left, right), synced_fields=frozenset(),
+        )
+        config = SolverConfig(
+            persons={
+                "Bob": PersonRecord("Bob", 3),
+                "Carol": PersonRecord("Carol", 20),
+            },
+            preferences={},
+            meeting_patterns=[
+                MeetingPattern(
+                    "MWF", 50,
+                    (__import__("datetime").time(8), __import__("datetime").time(9)),
+                    frozenset({"normal", "cross_listing"}),
+                ),
+            ],
+            rooms=[RoomRecord("Corley", "101")],
+            version="test-config",
+            workload_policy=WorkloadPolicySchema(
+                overload_tolerance=0, far_overload_threshold=0,
+                hard_load_cap_tolerance=0,
+            ),
+            new_instructor_policy=NewInstructorPolicySchema(allowed_counts=[0]),
+            new_professor_policy=NewProfessorPolicySchema(allowed_counts=[0]),
+        )
+        with self.assertRaises(InfeasibleSchedule):
+            solve(Schedule([NormalClass((solo,)), pair]), config)
 
     def test_detailed_result_reports_solver_metadata(self):
         section = Section("MATH", "1113", "001", "MWF 9:00am", 50, "101", "Alice", building="Corley")

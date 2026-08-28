@@ -475,6 +475,15 @@ class MaxBackToBackTests(unittest.TestCase):
         total, findings = check_soft_preferences(schedule, preferences, {})
         b2b = [f for f in findings if f.rule == "back_to_back"]
         self.assertEqual(len(b2b), 1)
+        # The join is between the 2nd and 3rd class in the run (b, c) --
+        # _capped_back_to_back_findings takes (RecordReference, Section)
+        # pairs specifically so it can still report which two records
+        # this is, after re-sorting/re-filtering sections into a run
+        # (see docs/codes.md).
+        self.assertEqual(
+            {(r.class_index, r.record_index, r.course_id) for r in b2b[0].references},
+            {(1, 0, "MATH 1003-001"), (2, 0, "MATH 2914-001")},
+        )
 
     def test_fourth_in_a_row_is_flagged_twice(self):
         a = make_section(number="1113", section="001", instructor="Alice", **{"time_slot": "MWF 9:00am"}, duration=50)
@@ -506,6 +515,38 @@ class MaxBackToBackTests(unittest.TestCase):
         total, findings = check_soft_preferences(schedule, preferences, {})
         # a is isolated (gap before b); b, c form a run of 2 -- still within cap.
         self.assertEqual([f for f in findings if f.rule == "back_to_back"], [])
+
+    def test_two_unrelated_runs_that_share_a_course_id_pair_are_not_deduped(self):
+        # Regression: the dedup used to key on (prev.course_id,
+        # last.course_id) -- two *different* physical meetings that
+        # happen to share a course_id string (two distinct single-weekday
+        # classes reusing the same subject/number/section, on different
+        # days) would wrongly look like the same recurring join and the
+        # second one would be silently dropped. Now keyed on
+        # (class_index, record_index) pairs instead (see docs/codes.md).
+        monday = [
+            make_section(number="1001", section="A", instructor="Alice", **{"time_slot": "M 9:00am"}, duration=50),
+            make_section(number="1002", section="B", instructor="Alice", **{"time_slot": "M 9:50am"}, duration=50),
+            make_section(number="1003", section="C", instructor="Alice", **{"time_slot": "M 10:40am"}, duration=50),
+        ]
+        wednesday = [
+            make_section(number="1004", section="D", instructor="Alice", **{"time_slot": "W 9:00am"}, duration=50),
+            # Same course_id as Monday's 2nd/3rd classes, but genuinely
+            # different meetings (different weekday, different objects).
+            make_section(number="1002", section="B", instructor="Alice", **{"time_slot": "W 9:50am"}, duration=50),
+            make_section(number="1003", section="C", instructor="Alice", **{"time_slot": "W 10:40am"}, duration=50),
+        ]
+        schedule = Schedule([NormalClass((s,)) for s in monday + wednesday])
+        preferences = {"Alice": PreferenceRecord(name="Alice", allow_back_to_back=True, max_back_to_back=2)}
+
+        total, findings = check_soft_preferences(schedule, preferences, {})
+
+        b2b = [f for f in findings if f.rule == "back_to_back"]
+        self.assertEqual(len(b2b), 2)
+        self.assertEqual(
+            {tuple(sorted((r.class_index, r.record_index) for r in f.references)) for f in b2b},
+            {((1, 0), (2, 0)), ((4, 0), (5, 0))},
+        )
 
 
 class LoadGlobalRulesTests(unittest.TestCase):

@@ -924,3 +924,618 @@ gives *both* instructors the full 3, not 1.5 each. This is exactly the
 semantics `synced_fields` excluding `"instructor"` is for: two people
 each really teaching their own section of what the catalog treats as one
 shared course, not one teaching load shared between them.
+
+## Addendum, 2026-08-27: `/api/edit` verifies `class_index`/`record_index` against an identity snapshot; dev `httpx` swapped for `httpx2`
+
+Two follow-ups, closing the last open item from the review two addenda
+back (`class_index`/`record_index` as the sole identity `/api/edit`
+trusts) and a dependency-hygiene fix noticed alongside it.
+
+**`/api/edit` now rejects a stale/mis-targeted edit with 409 instead of
+trusting `class_index`/`record_index` alone.** The browser now sends,
+alongside the existing `class_index`/`record_index`: `expected_course_ids`
+(the target atomic class's `course_ids`, exactly as the last view payload
+gave them) and `expected_record` (`subject`/`number`/`section`/
+`expected_time_slot` -- the target row's own pre-edit snapshot). The
+handler re-groups `records` into a `Schedule` as before, indexes into it
+as before, but now compares both against what it actually landed on
+*before* touching anything:
+
+```python
+if (
+    requested_course_ids != actual_course_ids
+    or expected_identity != actual_identity
+):
+    raise HTTPException(
+        409,
+        "The schedule grouping changed before this edit; reload the "
+        "schedule and try again",
+    )
+```
+
+This is deliberately not a check against the flat `records` payload
+itself (frontend and backend agree on that by construction, since the
+frontend built both from the same `data`) -- it is a check against
+whatever row *grouping* actually produced at `class_index`/`record_index`
+this time, which is the thing that could silently drift if a future
+change ever made grouping order depend on something an edit can touch.
+`field`/`value` are still applied exactly as before once this passes;
+`Time Slot` in the snapshot is read-only identity, never a second way to
+set the new time (that's still `field`/`value`).
+
+Two new `tests/test_edit_api.py` cases:
+`test_changed_atomic_class_identity_is_rejected_without_editing` (wrong
+`expected_course_ids`) and
+`test_changed_target_row_snapshot_is_rejected_without_editing` (a
+correct `expected_course_ids` but a stale `expected_time_slot`), both
+asserting 409 and that nothing was applied.
+`tests/test_configuration_web.py`'s static-content sanity test gained two
+more `assertIn`s confirming `app.js`'s `submitEdit` actually sends both
+fields.
+
+**Dev dependency: `httpx` -> `httpx2`.** Every test run's
+`fastapi.testclient.TestClient` import had been emitting
+`StarletteDeprecationWarning: Using httpx with starlette.testclient is
+deprecated; install httpx2 instead` -- coming from the installed
+Starlette build itself, not a lint suggestion. `pyproject.toml`'s
+`[dependency-groups] dev` entry moved from `"httpx>=0.27"` to `"httpx2"`,
+`uv.lock` re-resolved. Verified: the warning is gone from a full `uv run
+python -m unittest discover -s tests` run, and the suite still passes
+(303 tests) -- `httpx2` really is what this environment's `TestClient`
+now expects, not a name that merely happens to resolve.
+
+## Addendum, 2026-08-27: `validate` renamed to `validate_structure`; `CrossListingClass.schedule_issues` was missing its own `synced_fields` lock
+
+A review of the "Never-Block Scheduling" design (the four two-row kinds'
+`_issues`/`schedule_issues`/`pairwise_predicate` split, described near the
+top of this doc) surfaced two things: one a stale name, the other a real
+gap unique to `CrossListingClass`.
+
+**`NormalClass.validate` renamed to `validate_structure`.** Its own
+docstring, and the class docstring above it, still said "subclasses
+override `validate` to add their own recognition rule" -- true before
+the redesign, false since (`git log` confirms all four kinds' `validate()`
+overrides were removed in the same commit that introduced
+`_issues`/`schedule_issues`; nothing has overridden it since). Left as
+`validate`, the name itself invites exactly the confusion this caused: it
+reads like "the place business rules live," when today it only checks row
+count -- everything else construction still enforces. Renamed (five call
+sites total, all inside `class_model.py`; nothing outside it called
+`.validate()` directly) and both docstrings corrected to say plainly what
+it does now and where the real rules live instead.
+
+**`CrossListingClass.schedule_issues` never reflected whether the current
+rows actually satisfied this instance's own `synced_fields` lock.** For
+the other three two-row kinds, `_issues`/`is_valid_schedule` is the
+*entire* rule both `schedule_issues` (hard-violation reporting) and
+`pairwise_predicate` (solver enforcement) share -- the two can never
+disagree, by construction. `CrossListingClass` broke that pattern without
+anyone deciding to: `_issues` only ever checked recognition (different
+courses, `is_cross_listing`); the `synced_fields` lock-consistency check
+existed *only* inside `pairwise_predicate`'s closure. Recognition-only
+issues meant a `CrossListingClass` whose current data violates its own
+declared lock -- most concretely, a `from_configured_sections` pair that
+defaults to `ALL_SYNCED_FIELDS` (see the opt-in addendum above) over
+source rows that don't actually match -- was reported as clean by
+`schedule_issues`, `evaluate_schedule`, `/api/analyze`, and every UI
+surface, while the solver would have refused to accept it as-is. Two
+engines silently checking different rules for the same instance is
+exactly the failure mode this whole design exists to prevent.
+
+Fixed with one new instance method, `_sync_issues(left, right)`, that
+`schedule_issues` and `pairwise_predicate` now both call instead of
+`pairwise_predicate` keeping its own inline copy:
+
+```python
+def _sync_issues(self, left: Section, right: Section) -> tuple[str, ...]:
+    locked = self.synced_fields
+    issues = []
+    if "instructor" in locked and left.instructor != right.instructor:
+        issues.append(...)
+    if "room" in locked and (left.room != right.room or left.building != right.building):
+        issues.append(...)
+    if "time" in locked and (left.time_slot != right.time_slot or left.duration != right.duration):
+        issues.append(...)
+    return tuple(issues)
+```
+
+`schedule_issues` is now `self._issues(left, right) + self._sync_issues(left, right)`
+in all three places it gets computed (`__post_init__`, `
+from_configured_sections`, and the `apply_edit` override -- which needed
+an explicit recompute, since the `replace()` inside it reruns
+`__post_init__` with the *wrong*, not-yet-restored `synced_fields` before
+the override puts the real ones back). `pairwise_predicate` shrank to
+`is_valid_schedule(...) and not self._sync_issues(...)` -- same behavior
+as before (confirmed by the pre-existing `pairwise_predicate` tests all
+still passing unchanged), just no longer a second copy of the comparison
+logic.
+
+Right after ordinary construction (`__post_init__`'s auto-detect path),
+`_sync_issues` is always empty by construction -- `synced_fields` there
+*is* "whichever fields currently match," so there's nothing to violate
+yet. The gap was only reachable through `from_configured_sections` (a
+declared lock the data doesn't actually satisfy) or, in principle, an
+edit -- though `edit_targets` already keeps every locked field's two rows
+moving together through `/api/edit`, so a `synced_fields` mismatch can't
+actually arise from that path today; the `apply_edit` recompute is
+correctness hygiene (and tested for not false-positiving on an *unlocked*
+field), not a fix for a reachable edit-time bug.
+
+Three new `tests/test_class_model.py` cases:
+`test_configured_pair_that_currently_violates_its_own_lock_reports_a_schedule_issue`
+(3 issues, one per mismatched locked field, and `pairwise_predicate`
+rejects the pair -- both agree),
+`test_configured_pair_that_currently_satisfies_its_own_lock_has_no_schedule_issue`
+(the clean case, both agree it's fine), and
+`test_apply_edit_does_not_report_a_sync_issue_for_an_unlocked_field` (no
+false positive after an edit to a field that was never locked). One
+extended `tests/test_pipeline.py` case
+(`test_configured_cross_listing_without_synced_fields_defaults_to_fully_locked`)
+now also asserts `check_atomic_class_rules` reports exactly 3
+`cross_listing_invalid` violations for the same fixture -- proving the fix
+reaches actual hard-violation reporting, not just the instance's own
+attribute.
+
+## Addendum, 2026-08-27: `RecordReference` -- structured, precise references replace `message`-string guessing
+
+Closing out a long design discussion (the "unified Rule Engine" proposal
+that preceded this was explicitly rejected as over-scoped for the one
+confirmed problem it was meant to fix -- see that discussion for why).
+The concrete, narrower problem: `HardViolation.subject`/`SoftFinding.message`
+were the *only* things the web UI had to work with for "which record is
+this about" -- and `subject` means a different kind of thing per rule
+(a room label for `room_conflict`, an instructor name for
+`instructor_conflict`/`overload`/`under_load`, a `course_id` for
+everything else), so the frontend fell back to guessing from `message`
+text (`String(item.message).includes(row.course_id)`), which is fragile
+and, for `room_conflict`/`instructor_conflict`, *never* worked at all
+(`subject` there was never a `course_id` to begin with). This addendum
+doesn't change what `subject`/`message` mean -- it adds a new, orthogonal,
+uniformly-shaped field instead.
+
+### `RecordReference`
+
+```python
+@dataclass(frozen=True)
+class RecordReference:
+    class_index: int
+    record_index: int
+    course_id: str
+```
+
+Points at one row of one atomic class in a specific `Schedule` --
+`class_index`/`record_index` are positions in *that* `Schedule`'s own
+`classes`/`sections` lists. Valid only for the serialized Schedule they
+were computed from, or its deterministic same-configuration
+flatten/regroup round trip (`to_records()` then `from_records()` with
+the same relationships/catalogs) -- never to be persisted across
+schedule revisions. `course_id` is a cheap, self-describing companion a
+consumer checks before trusting the indices.
+
+This was extensively re-litigated before landing on indices at all
+(course-identity-only tuples were considered and rejected): `class_index`/
+`record_index` are safe here in a way they are *not* for `/api/edit`'s
+`class_index`/`record_index` (see the "identity snapshot" addendum
+above) -- there, indices cross a request boundary holding client state
+that might be stale by the time it's used. Here, `data.classes` and
+`data.violations` are always replaced together from the same response
+(`/api/analyze`, `/api/edit`, `/api/solve` all do this), computed by the
+same `Schedule` object in the same request -- there is no staleness
+window. Course-id-only references were also rejected on their own merits:
+`FourCreditClass`'s two rows share one `course_id` (same course/section,
+only the weekday pattern differs), so a scheme without record-level
+indices literally cannot tell them apart.
+
+### `_indexed_sections(schedule)`
+
+```python
+def _indexed_sections(schedule):
+    for class_index, item in enumerate(schedule.classes):
+        for record_index, section in enumerate(item.sections):
+            yield RecordReference(class_index, record_index, section.course_id), item, section
+```
+
+The one place that decides what a reference's indices mean -- every
+`check_*` function below consumes it instead of each re-deriving its own
+`enumerate`. This directly closes two traps a per-function rewrite would
+have hit: `HybridClass.physical_section` is not reliably row 0 (it's
+found by content, not position -- confirmed by a new test that
+deliberately puts the online/TBA row first), and
+`_capped_back_to_back_findings` re-sorts/re-filters sections into
+per-weekday runs, so by the time it builds a finding there is no way to
+safely recover which atomic class/row a bare `Section` came from -- its
+signature changed to take `(RecordReference, Section)` pairs instead of
+bare `Section`s.
+
+### Where `references` come from, per rule
+
+- `check_conflicts` (`room_conflict`/`instructor_conflict`): both
+  classes' rows.
+- `check_atomic_class_rules`: **every record of the flagged atomic
+  class** -- not the minimal faulty subset. This is "the problem belongs
+  to this class," not a claim about which specific row is at fault (a
+  Coreq issue references both of its two different courses now, fixing
+  the old `item.course_ids[0]`-only report that silently dropped the
+  second course).
+- `check_constraint_rules`/`check_meeting_patterns`: the one row
+  checked (correctly the physical row's own index for `HybridClass`, per
+  above).
+- `check_soft_preferences`'s `overload`/`under_load`: **every record of
+  every atomic class the instructor appears in** -- via a new
+  `_class_references_by_instructor(schedule)` helper that mirrors
+  `teaching_loads()`'s own definition exactly (any row naming an
+  instructor credits that instructor with the whole class's
+  `credit_hours`; references have to cover the same set, or a
+  `CrossListingClass` with two different instructors would silently
+  lose the row that doesn't happen to name the one a finding is about).
+  Legitimately empty for an instructor currently teaching nothing (a
+  valid `under_load` case) -- not a bug.
+- `custom_rule`/`back_to_back`: the specific row(s) involved.
+
+### Web API and frontend
+
+`webapp.py`'s `_serialize_hard`/`_serialize_soft` add a `"references"`
+array (`{class_index, record_index, course_id}`). `app.js`:
+
+- `validReferences(item)` filters `item.references` to ones where
+  `courseId(data.classes[ref.class_index]?.sections[ref.record_index])`
+  still matches `ref.course_id` -- cheap insurance, not because a
+  mismatch is expected in practice.
+- `conflictIds()` now builds its highlight set straight from references
+  instead of `item.subject===row.course_id||message.includes(...)`.
+- `issueViewModel(item)` replaces `softIssue()` and now runs for **both**
+  hard and soft findings (`renderIssues()` used to pass `hard` straight
+  to `renderIssueItem` with no transform at all -- hard conflicts were
+  plain, unclickable text before this, a pre-existing gap this happened
+  to also close). A small `RULE_VIEW` map (rule name -> `"room"` /
+  `"instructor"` / `"course"`) decides which tab a finding's course links
+  navigate to -- deliberately kept out of the Python model, since it's a
+  display concern, not part of what a finding *is*. When `references` is
+  non-empty, courses/resource come from the referenced records; when
+  empty but `item.subject` is set (the zero-class `under_load` case),
+  it still falls back to a plain instructor-tab link -- only the
+  `message`-substring guess was deleted, not every fallback.
+- `renderIssueItem`'s links and the click-to-scroll handler now carry
+  and match on `data-record` as well as `data-class` (a `FourCreditClass`
+  reference needs both to pick the right one of its two same-`course_id`
+  rows). The course-list view's `.course-row` gained `data-class`/
+  `data-record` too -- previously only `.course-block` (the calendar
+  grid) had them, so a finding whose `RULE_VIEW` sends it to `"course"`
+  had no element to find or highlight at all.
+
+### Tests
+
+`RoundTripReferenceStabilityTests` (`test_schedule_model.py`) locks the
+flatten/regroup assumption `RecordReference` depends on: build a schedule
+with one of each of the five atomic-class kinds through the same
+`Schedule.from_records` pipeline the real system uses, then assert
+`Schedule.from_records(schedule.to_records())` reproduces the identical
+`(class_index, record_index, course_id)` set *and* class order. (An
+earlier, simpler version of this test hand-assembled the five classes in
+an arbitrary order via `Schedule([...])` directly and failed --
+`_group_records`'s pipeline stage order, not input row order, decides
+class order, so a schedule not itself produced by grouping isn't a valid
+stand-in for one that is. Fixed by building through `from_records` both
+times, which is what `/api/analyze` actually does.)
+
+Also added/extended: `room_conflict`/`instructor_conflict` reference both
+classes (`CheckConflictsTests`); `FourCreditClass`'s two same-`course_id`
+rows stay distinguishable by `record_index`; a `HybridClass` built with
+its physical row second still reports `record_index=1`, not 0; a
+`CoreqClass` violation references both of its (different) courses;
+overload references span a multi-row atomic class with two different
+instructors; `under_load` references are empty for a zero-class
+instructor; a capped back-to-back finding references exactly the two
+joining records; `/api/edit`'s response carries `references` on a real
+`coreq_invalid` violation; and a static-content check that `app.js` no
+longer contains a `message`-substring guess anywhere.
+
+## Addendum, 2026-08-27: three Solver-only hard limits now reported too (Plan A); qualification deliberately left out
+
+Closes three of the four gaps raised in the "Solver-only limits" audit
+(the fourth, qualification, turned out not to be one at all -- see
+below). All three were previously enforced *only* during solving --
+`evaluate_schedule()`/`/api/analyze` reported a schedule that already
+broke one of them as clean.
+
+**The `hard_load_cap` authority question, resolved as Plan A.**
+`teaching_loads()` (used by `overload`/`under_load`) credits every
+distinct instructor named anywhere in a class's rows with that class's
+full `credit_hours`. `solver/constraints.py`'s `add_load_terms` attributes
+a class's units to its *first row's* instructor only. These agree for
+every class whose rows share one instructor (everything except an
+instructor-unsynced `CrossListingClass`), and disagree only for that one
+case. Two options were on the table: fix the solver's load model to
+match `teaching_loads()`'s broader definition (Plan B), or have the new
+hard-cap report match the solver's current, narrower definition as-is
+(Plan A). Plan B was reconsidered mid-discussion and found to be a real
+CP-SAT modeling project of its own -- it needs a boolean indicator per
+(class, instructor) pair to avoid double-charging an instructor whose
+name appears on more than one of a class's rows, not a one-line formula
+change -- so it was set aside as separate, larger work. **Plan A
+shipped**: the report mirrors the solver's actual (incomplete) model
+exactly, so the two can never disagree about what's a hard violation,
+even though the model itself has a known, documented blind spot (a
+`CrossListingClass`'s second instructor's load isn't capped by either
+side, for that class's contribution).
+
+```python
+def _primary_section_instructor_loads(schedule):
+    """... item.sections[0].instructor gets the class's full
+    credit_hours; every other row's instructor gets nothing for this
+    class, matching add_load_terms exactly."""
+```
+
+**Three new rules, one shared helper.** `check_workload_hard_caps` reports
+`hard_load_cap` (a configured instructor past `max_load +
+hard_load_cap_tolerance`) and `new_hire_contract_load` (a New
+Instructor/New Professor identity past `contract_load` -- with *no*
+tolerance, matching the solver's own unconditional cap for dynamic
+identities) from the same per-instructor totals.
+`check_new_hire_counts` reports `new_instructor_count`/
+`new_professor_count`: the number of *distinct* New Instructor/New
+Professor identities actually in use, checked directly against
+`allowed_counts` -- not by re-deriving the solver's own `used` CP-SAT
+variables (`add_placeholder_count_terms`), which additionally assume
+contiguous use (identity 2 only counted if 1 already is). A raw or
+manually-edited schedule has no reason to satisfy that invariant, so
+counting directly is both simpler and correct where re-deriving it would
+risk being wrong. `references` for a count violation come back
+legitimately empty when the count itself is the problem at zero
+(`allowed_counts = [1]`, nobody currently in either dynamic pool).
+
+`evaluate_schedule()` gained two new optional parameters
+(`new_instructor_policy`/`new_professor_policy`) to reach these --
+defaulting to schema defaults when omitted, but every one of its six call
+sites (`cli.py`, both in `schedule_run.py`, both in `webapp.py`) was
+updated to pass the package's real configured policy, not the default.
+
+**Qualification is explicitly *not* one of these, and won't become a
+Hard rule under the "solver would never produce this" reasoning that
+justified the other three.** Re-reading `solver/candidates.py`'s
+`candidate_instructors` during this same discussion found:
+
+```python
+if section.instructor and (
+    not is_new_instructor(section.instructor)
+    and not is_new_professor(section.instructor)
+):
+    names.add(section.instructor)  # unconditional -- ignores person.courses
+```
+
+plus a `... or [section.instructor]` fallback when the candidate list
+would otherwise be empty. A section's *current* non-dynamic instructor is
+never excluded from candidates for lacking the course in `persons.toml`
+-- qualification only gates which *new* instructor the solver could
+reassign someone to, not whether an existing assignment is legal. So
+"the current instructor isn't qualified" is not something the solver
+ever actually refuses, and reporting it as Hard would misrepresent what
+the solver does. Leaning (not yet decided) toward a separate, unblocking
+`qualification_review`-style informational category later -- not
+implemented in this pass, since it would need a third UI bucket (not
+Hard, not the existing penalty-bearing Soft) rather than just a new rule
+name in the existing two, which is a bigger, separate design question
+than the three rules above.
+
+### Tests
+
+`CheckWorkloadHardCapsTests`/`CheckNewHireCountsTests`
+(`tests/test_schedule_model.py`): within-tolerance is clean; past it is a
+hard violation with correct references; a New Instructor identity has
+zero tolerance past its contract load (unlike a configured instructor);
+a diverging `CrossListingClass`'s load is charged only to its primary
+row's instructor (proving Plan A, not a bug); `allowed_counts` violations
+both when over and when under (the zero-used, empty-references case).
+`docs/scheduling-rules.md` updated to list what's now reported alongside
+what's deliberately still solver-only.
+
+## Addendum, 2026-08-27: cleanup pass on the `references` batch before moving on
+
+A review of the `references`/Plan-A work above (still all uncommitted at
+this point) before starting anything new found seven loose ends worth
+closing first, rather than letting them compound into the next batch.
+
+**`_indexed_sections` is now genuinely the only place index semantics are
+decided.** `check_atomic_class_rules`, `_class_references_by_instructor`,
+and `_primary_section_instructor_loads` each still had their own
+`enumerate(schedule.classes)`/`enumerate(item.sections)` building
+`RecordReference`s by hand -- correct today, but a second (third,
+fourth) copy of the same derivation that could silently drift from
+`_indexed_sections` if either ever changed independently. Added
+`_references_by_class(schedule) -> dict[int, tuple[RecordReference, ...]]`,
+grouping `_indexed_sections`' own output by `class_index`; all three
+now call it (or, for `check_new_hire_counts`'s per-row filter, iterate
+`_indexed_sections` directly) instead of re-deriving.
+
+**The `app.js` comment claiming `data.classes`/`data.violations` are
+"always replaced together" was wrong for `/api/analyze`** (`refreshAnalysis`
+only ever does `data.violations=body`). References stay valid there
+anyway, but for a different, more specific reason: `/api/analyze`
+reloads `data.classes`' own flattened records through the same
+deterministic grouping pipeline every time, which is exactly the
+invariant `RoundTripReferenceStabilityTests` locks. Comment rewritten to
+say that, not the false blanket claim.
+
+**`issueViewModel`'s two remaining design gaps, fixed together.** Both
+traced back to the same root cause: computing `resource` (which
+tab/room/whatever a click selects) *per referenced row* instead of once
+from the finding's own `subject`.
+
+- The no-references fallback (`if (item.subject) { treat as instructor
+  }`) fired for *any* finding with a truthy `subject` -- harmless for the
+  rules that actually have one today, but wrong in shape: `room_conflict`'s
+  `subject` is a room label, not an instructor, and a future room/course
+  rule that happened to have empty references would have been silently
+  sent to the instructor tab. Restricted to `view==="instructor"` (i.e.
+  only rules `RULE_VIEW` itself already maps there) -- an unknown rule
+  now defaults to `"course"`, not `"instructor"`, matching "don't
+  assume `subject` is a teacher" for anything not already declared as one.
+- The real bug: for `overload`/`under_load`, `references` spans a whole
+  atomic class (see the earlier addendum) -- for a `CrossListingClass`
+  with unsynced instructors, that means a reference can sit on a
+  *different* instructor's row than the one the finding is actually
+  about (an "Alice is overloaded" finding referencing both Alice's row
+  and Bob's row). The old code read `resource` off each referenced row's
+  own `Instructor` field, so clicking the Bob-row course link inside
+  Alice's overload finding navigated to Bob's tab. Fixed by computing
+  `resource` once, from `item.subject`, and reusing it for every course
+  link in the finding -- never recomputed per row. This is also strictly
+  simpler code (deleted the per-view `roomLabel(row)`/`row.Instructor`
+  branch entirely: `item.subject` was already exactly what those computed,
+  since a room/instructor conflict's two referenced rows share the
+  conflicting value by definition).
+
+**`_capped_back_to_back_findings`'s de-dup key switched from
+`(prev.course_id, last.course_id)` to
+`((class_index, record_index), (class_index, record_index))`.** Two
+different physical meetings can share a `course_id` string (two distinct
+single-weekday classes reusing one subject/number/section on different
+days -- not the same `"MWF"`-spanning row recurring, which is what the
+course-id key was originally *for*, and still correctly collapses under
+the new key too, since it's the same reference both times). The old key
+would have treated the second, unrelated join as a duplicate of the
+first and silently dropped it. New regression test:
+`test_two_unrelated_runs_that_share_a_course_id_pair_are_not_deduped`
+(`tests/test_preference_rules.py`).
+
+**Frontend behavior was only checked by static string presence, not by
+tracing execution.** This sandbox has no Node/npm and no browser
+automation library (`playwright`/`selenium` both absent) -- there is no
+way to actually execute `app.js` here. In lieu of that, the five
+scenarios raised were traced by hand against the code as it stands after
+the fixes above:
+
+1. A `room_conflict` link switches to Room view and its `currentResource`
+   (the room label) is guaranteed to already be in that view's resource
+   list, since the conflict requires two physical sections actually in
+   that room.
+2. A `meeting_pattern` link (Course view) lands on a `.course-row` with
+   matching `data-class`/`data-record` -- confirmed those attributes are
+   actually emitted there (added in the earlier `references` batch).
+3. A zero-class `under_load` finding's link sets `currentResource` to the
+   instructor's name, which is still present in the instructor resource
+   list (via `instructor_loads`) even with no classes; the scroll/highlight
+   step no-ops cleanly on `data-class===""` without erroring.
+4. An overload finding on a diverging `CrossListingClass` now sends every
+   course link to the correct instructor's tab (the fix above). One
+   residual, honest wrinkle: clicking the link for the *other*
+   instructor's row switches to the right tab but can't highlight that
+   specific block, because that row isn't rendered under the filtered
+   instructor view it just switched to -- the click-scroll step finds no
+   matching element and quietly no-ops (`if(!block)return`), not an
+   error, just no highlight for that one link.
+5. An invalid/stale reference is dropped by `validReferences`' `courseId`
+   check before it ever reaches rendering; a finding left with zero valid
+   references degrades to the fallback (or plain text) path, never a
+   crash (optional chaining guards an out-of-range index too).
+
+This is code-reading verification, not executed verification -- flagged
+here explicitly rather than implied as tested. A real manual check in a
+running browser is still worth doing before treating this batch as fully
+verified.
+
+**Trailing whitespace** (`docs/codes.md:1067`, `git diff --check`) removed.
+
+This addendum closes out the `RecordReference`/Plan-A batch described in
+the two addenda above it. Nothing here touches the solver or adds new
+reported rules -- `qualification_review` (still just a lean toward a
+non-blocking, non-penalized category, not implemented) is the only piece
+of the "Solver-only limits" work left open.
+
+## Addendum, 2026-08-27: Plan A retired -- `add_load_terms` now counts every row of a class
+
+Revisits the "Plan A vs Plan B" decision from the hard-load-cap addendum
+above. Plan A shipped there deliberately, matching the solver's then
+narrower (first-row-only) load model rather than fixing it, on the
+grounds that fixing it looked like a real CP-SAT modeling project, not a
+one-line change. On review, the actual fix turned out smaller than that
+first estimate suggested -- implemented directly rather than staying with
+the documented gap.
+
+**`solver/constraints.py`'s `add_load_terms`** used to attribute a
+class's `credit_hours` to its first row's chosen instructor only:
+
+```python
+primary = sections_by_class[class_index][0]
+for candidate_index, candidate in enumerate(candidates[primary]):
+    per_instructor.setdefault(candidate.instructor, []).append(
+        units * chosen[primary][candidate_index]
+    )
+```
+
+Now, for each class, every distinct instructor possible on *any* of its
+rows gets one boolean "does this class's assignment include this
+instructor" indicator -- the OR of that instructor's `chosen` variables
+across every row of the class, reusing the same "used" pattern
+`add_placeholder_count_terms` already used for a different purpose
+(one linear inequality per contributing variable, plus one summed
+upper bound) -- and that indicator, not a raw per-row `chosen` variable,
+is what gets multiplied by `units` and credited to the instructor:
+
+```python
+by_instructor: dict[str, list] = {}
+for section_index in sections_by_class[class_index]:
+    for candidate_index, candidate in enumerate(candidates[section_index]):
+        by_instructor.setdefault(candidate.instructor, []).append(
+            chosen[section_index][candidate_index]
+        )
+for instructor, selected in by_instructor.items():
+    taught = selected[0] if len(selected) == 1 else _or_indicator(selected, model)
+    per_instructor.setdefault(instructor, []).append(units * taught)
+```
+
+The `len(selected) == 1` special case keeps the model exactly as small
+as before for the overwhelming common case (a single-row class, or an
+instructor who's only a plausible candidate on one of a class's rows) --
+new variables are only created for a genuinely multi-row, multi-candidate
+case. For every kind except an instructor-unsynced `CrossListingClass`,
+`pairwise_predicate` already forbids any feasible solution where a
+class's rows disagree on instructor, so the OR is computing the exact
+same answer the old primary-row read did, just by a route that also
+happens to be correct for the one case that disagreed. The hard-cap
+constraint and the soft overload objective terms downstream of
+`per_instructor`/`total` needed no changes at all -- they were already
+correct given a correct `total`, they just never used to receive one for
+this case.
+
+**`schedule_model.check_workload_hard_caps`** dropped
+`_primary_section_instructor_loads` entirely and now calls
+`teaching_loads()`/`_class_references_by_instructor()` directly -- the
+same functions `overload`/`under_load` already used. There is no longer
+a "Plan A" definition to keep separate from `teaching_loads()`'s; fixing
+the solver made them the same thing, so reporting can (and must, to stay
+in sync) just use the one that already existed.
+
+**`add_placeholder_load_terms`** (a separate, purely optimization-side
+penalty for using New Instructor/New Professor credit hours at all, not
+a hard cap) still reads only `sections_by_class[class_index][0]` and was
+*not* changed here -- it's a soft preference weight, not a correctness
+question the way the hard cap was, and expanding it to the same
+multi-row treatment is a smaller, separate follow-up, not bundled into
+this pass.
+
+### Tests
+
+`tests/test_architecture.py::SolverArchitectureTests::test_load_cap_counts_every_row_of_a_class_not_just_the_first`:
+an actual `solve()` call, not just a unit check of the term-building
+function -- Bob is the only usable instructor for both a 3-credit
+`NormalClass` and the second (unsynced) row of a 3-credit
+`CrossListingClass` (New Instructor/New Professor pools barred via
+`allowed_counts=[0]`, no one else qualified), so with
+`hard_load_cap_tolerance=0` and `max_load=3`, his true total of 6 is
+unavoidably over cap -- `solve()` must raise `InfeasibleSchedule`.
+Verified this test actually depends on the fix (not just incidentally
+passing) by reverting `constraints.py` alone and re-running it in
+isolation: it fails with `InfeasibleSchedule not raised`, exactly as
+expected from the old primary-row-only model never seeing Bob's second
+row at all.
+
+`tests/test_schedule_model.py::CheckWorkloadHardCapsTests`'s Plan-A test
+(previously asserting only the primary instructor got capped) was
+rewritten to
+`test_diverging_cross_listing_load_is_charged_to_every_instructor`,
+asserting *both* instructors of a diverging pair get capped now, each
+with references covering both rows of the class.
+
+`docs/scheduling-rules.md`'s hard-constraints bullet updated to match
+(no longer says "charged only to its first row's instructor").

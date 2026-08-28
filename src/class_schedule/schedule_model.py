@@ -18,7 +18,7 @@ from __future__ import annotations
 import datetime
 import re
 import tomllib
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +33,8 @@ from .config_schema import (
     BackToBackPolicySchema,
     CourseRelationshipSchema,
     FlatPreferenceRuleSchema,
+    NewInstructorPolicySchema,
+    NewProfessorPolicySchema,
     PersonsFileSchema,
     PreferencesFileSchema,
     TimeWindowSchema,
@@ -47,6 +49,7 @@ from .class_model import (
     NormalClass,
     Section,
 )
+from .instructor_identity import is_new_instructor, is_new_professor
 from .pattern_rules import MeetingPatternLike, matches_configured_pattern
 
 _UNSET = object()
@@ -921,10 +924,67 @@ def parse_rule_time(raw: object) -> TimeWindow:
 
 
 @dataclass(frozen=True)
+class RecordReference:
+    """Points at one row of one atomic class in a specific ``Schedule`` --
+    what a web client needs to locate and highlight the record a finding
+    is about, instead of guessing from free-text ``message`` (see
+    docs/codes.md).
+
+    ``class_index``/``record_index`` are positions in that ``Schedule``'s
+    own ``classes``/``sections`` lists -- valid only for the serialized
+    Schedule they were computed from, or its deterministic
+    same-configuration flatten/regroup round trip (``to_records()`` then
+    ``from_records()`` with the same relationships/catalogs -- grouping
+    order is a function of each row's own identity fields, none of which
+    a web edit can touch). They must never be persisted across schedule
+    revisions. ``course_id`` is a cheap, self-describing companion a
+    consumer can check the reference still points where it expects
+    before trusting the indices.
+    """
+
+    class_index: int
+    record_index: int
+    course_id: str
+
+
+def _indexed_sections(
+    schedule: "Schedule",
+) -> Iterator[tuple[RecordReference, Class, Section]]:
+    """Every ``(reference, atomic class, section)`` triple in ``schedule``,
+    in the same order ``_serialize_schedule`` (webapp.py) enumerates it --
+    the one place that decides what a ``RecordReference``'s indices mean,
+    so every ``check_*``/finding-producing function below shares it
+    instead of each re-deriving its own ``enumerate`` (and risking a
+    kind-specific trap like ``HybridClass.physical_section`` not actually
+    being row 0).
+    """
+    for class_index, item in enumerate(schedule.classes):
+        for record_index, section in enumerate(item.sections):
+            yield (
+                RecordReference(class_index, record_index, section.course_id),
+                item, section,
+            )
+
+
+def _references_by_class(schedule: "Schedule") -> dict[int, tuple[RecordReference, ...]]:
+    """Every class's own records as ``RecordReference``s, grouped by
+    ``class_index`` -- derived from ``_indexed_sections`` so a "whole
+    class" reference set (``check_atomic_class_rules``,
+    ``_class_references_by_instructor``) never re-implements its own
+    ``enumerate(item.sections)``.
+    """
+    grouped: dict[int, list[RecordReference]] = {}
+    for ref, item, section in _indexed_sections(schedule):
+        grouped.setdefault(ref.class_index, []).append(ref)
+    return {index: tuple(refs) for index, refs in grouped.items()}
+
+
+@dataclass(frozen=True)
 class HardViolation:
     rule: str
     subject: str
     message: str
+    references: tuple[RecordReference, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -933,6 +993,7 @@ class SoftFinding:
     instructor: str
     message: str
     penalty: float
+    references: tuple[RecordReference, ...] = ()
 
 
 def teaching_loads(schedule: "Schedule") -> dict[str, float]:
@@ -1013,7 +1074,7 @@ _WEEKDAY_LETTERS = "MTWRF"
 
 
 def _capped_back_to_back_findings(
-    instructor: str, sections: list[Section], cap: int,
+    instructor: str, entries: list[tuple[RecordReference, Section]], cap: int,
     penalty: float,
 ) -> list[SoftFinding]:
     """Flag every meeting past the ``cap``-th in an instructor's own
@@ -1034,31 +1095,51 @@ def _capped_back_to_back_findings(
     finding, not three, matching how the plain (uncapped) pairwise check
     already treats one back-to-back class-pair as a single finding
     regardless of how many shared weekdays it recurs on.
+
+    ``entries`` carries each section's ``RecordReference`` alongside it
+    (instead of a bare ``list[Section]``) because by the time a run is
+    built here, the sections have been re-sorted/re-filtered per weekday
+    -- there is no way to safely recover which atomic class/row a given
+    ``Section`` came from after that without this.
     """
     findings: list[SoftFinding] = []
-    seen_joins: set[tuple[str, str]] = set()
+    # Keyed by (class_index, record_index) pairs, not course_id -- two
+    # different physical meetings can share a course_id (FourCreditClass's
+    # two rows are literally the same course/section), so a course_id key
+    # could wrongly treat two distinct joins as the same one and drop the
+    # second (see docs/codes.md).
+    seen_joins: set[tuple[tuple[int, int], tuple[int, int]]] = set()
     for day in _WEEKDAY_LETTERS:
-        day_sections = sorted(
-            (s for s in sections if s.days and day in s.days and s.start is not None),
-            key=lambda s: (s.start.hour, s.start.minute),
+        day_entries = sorted(
+            (
+                (ref, s) for ref, s in entries
+                if s.days and day in s.days and s.start is not None
+            ),
+            key=lambda pair: (pair[1].start.hour, pair[1].start.minute),
         )
-        run: list[Section] = []
-        for section in day_sections:
-            if run and run[-1].end == section.start:
-                run.append(section)
+        run: list[tuple[RecordReference, Section]] = []
+        for entry in day_entries:
+            ref, section = entry
+            if run and run[-1][1].end == section.start:
+                run.append(entry)
             else:
-                run = [section]
+                run = [entry]
             if len(run) > cap:
-                join = (run[-2].course_id, run[-1].course_id)
+                (prev_ref, prev), (last_ref, last) = run[-2], run[-1]
+                join = (
+                    (prev_ref.class_index, prev_ref.record_index),
+                    (last_ref.class_index, last_ref.record_index),
+                )
                 if join in seen_joins:
                     continue
                 seen_joins.add(join)
                 findings.append(SoftFinding(
                     "back_to_back", instructor,
-                    f"{instructor}: {run[-2].course_id} and "
-                    f"{run[-1].course_id} extend a same-day run past "
+                    f"{instructor}: {prev.course_id} and "
+                    f"{last.course_id} extend a same-day run past "
                     f"the {cap}-in-a-row cap",
                     penalty,
+                    references=(prev_ref, last_ref),
                 ))
     return findings
 
@@ -1144,14 +1225,13 @@ def check_conflicts(schedule: "Schedule") -> list[HardViolation]:
     here either; those values come from the workload policy.
     """
     entries = [
-        (item, section)
-        for item in schedule
-        for section in item.sections
+        (ref, item, section)
+        for ref, item, section in _indexed_sections(schedule)
         if not section.is_online
     ]
     violations: list[HardViolation] = []
-    for index, (item_a, a) in enumerate(entries):
-        for item_b, b in entries[index + 1:]:
+    for index, (ref_a, item_a, a) in enumerate(entries):
+        for ref_b, item_b, b in entries[index + 1:]:
             if item_a is item_b or not overlaps_in_time(a, b):
                 continue
             if a.room and a.building == b.building and a.room == b.room:
@@ -1160,6 +1240,7 @@ def check_conflicts(schedule: "Schedule") -> list[HardViolation]:
                     "room_conflict", location,
                     f"{a.course_id} and {b.course_id} both use {location} "
                     f"at an overlapping time ({a.time_slot} / {b.time_slot})",
+                    references=(ref_a, ref_b),
                 ))
             if a.instructor and a.instructor == b.instructor:
                 violations.append(HardViolation(
@@ -1167,6 +1248,7 @@ def check_conflicts(schedule: "Schedule") -> list[HardViolation]:
                     f"{a.course_id} and {b.course_id} both assign "
                     f"{a.instructor} at an overlapping time "
                     f"({a.time_slot} / {b.time_slot})",
+                    references=(ref_a, ref_b),
                 ))
     return violations
 
@@ -1181,13 +1263,19 @@ def check_atomic_class_rules(schedule: "Schedule") -> list[HardViolation]:
     to remember to add.
     """
     violations: list[HardViolation] = []
-    for item in schedule:
+    by_class = _references_by_class(schedule)
+    for class_index, item in enumerate(schedule.classes):
         issues = getattr(item, "schedule_issues", ())
         if not issues:
             continue
         rule = item.schedule_issue_rule
+        # The problem belongs to this atomic class as a whole -- every
+        # record is listed, not just whichever row a message happens to
+        # name. This is a "which class" pointer, not a claim that these
+        # are the minimal faulty rows (see docs/codes.md).
+        refs = by_class[class_index]
         violations.extend(
-            HardViolation(rule, item.course_ids[0], message)
+            HardViolation(rule, item.course_ids[0], message, references=refs)
             for message in issues
         )
     return violations
@@ -1199,42 +1287,43 @@ def check_constraint_rules(
     """Validate mandatory instructor/room rules against grouped data."""
     configured = tuple(rules)
     violations: list[HardViolation] = []
-    for item in schedule:
-        sections = (
-            (item.physical_section,)
-            if isinstance(item, HybridClass)
-            else item.sections
-        )
-        for section in sections:
-            course = f"{section.subject} {section.number}"
-            for rule in configured:
-                if not rule.applies_to(course, section.section):
-                    continue
-                if rule.allows(
-                    instructor=section.instructor,
-                    building=section.building,
-                    room=section.room,
-                    days=section.days,
-                    start=section.start,
-                    end=section.end,
-                    is_online=section.is_online,
-                ):
-                    continue
-                conditions = []
-                if rule.name is not None:
-                    conditions.append(f"name={rule.name!r}")
-                if rule.room is not None:
-                    conditions.append(f"room={list(rule.rooms)!r}")
-                if rule.time is not None:
-                    conditions.append("time=<configured window>")
-                action = "must match" if rule.direction == "+" else "must not match"
-                violations.append(HardViolation(
-                    "constraint_positive"
-                    if rule.direction == "+" else "constraint_negative",
-                    section.course_id,
-                    f"{section.course_id}: {action} "
-                    f"{', '.join(conditions)}",
-                ))
+    for ref, item, section in _indexed_sections(schedule):
+        # A HybridClass's online companion row is derived, not a real
+        # constraint target -- only its physical row is checked (matches
+        # the pre-references behavior, but now via the shared iteration
+        # helper instead of a second per-kind branch here).
+        if isinstance(item, HybridClass) and section is not item.physical_section:
+            continue
+        course = f"{section.subject} {section.number}"
+        for rule in configured:
+            if not rule.applies_to(course, section.section):
+                continue
+            if rule.allows(
+                instructor=section.instructor,
+                building=section.building,
+                room=section.room,
+                days=section.days,
+                start=section.start,
+                end=section.end,
+                is_online=section.is_online,
+            ):
+                continue
+            conditions = []
+            if rule.name is not None:
+                conditions.append(f"name={rule.name!r}")
+            if rule.room is not None:
+                conditions.append(f"room={list(rule.rooms)!r}")
+            if rule.time is not None:
+                conditions.append("time=<configured window>")
+            action = "must match" if rule.direction == "+" else "must not match"
+            violations.append(HardViolation(
+                "constraint_positive"
+                if rule.direction == "+" else "constraint_negative",
+                section.course_id,
+                f"{section.course_id}: {action} "
+                f"{', '.join(conditions)}",
+                references=(ref,),
+            ))
     return violations
 
 
@@ -1246,19 +1335,40 @@ def check_meeting_patterns(
     if not configured:
         return []
     violations: list[HardViolation] = []
-    for item in schedule:
-        for section in item.sections:
-            if section.is_online or matches_configured_pattern(
-                item, section, configured
-            ):
-                continue
-            violations.append(HardViolation(
-                "meeting_pattern",
-                section.course_id,
-                f"{section.course_id} uses an unconfigured meeting pattern: "
-                f"{section.time_slot} ({section.duration} minutes)",
-            ))
+    for ref, item, section in _indexed_sections(schedule):
+        if section.is_online or matches_configured_pattern(
+            item, section, configured
+        ):
+            continue
+        violations.append(HardViolation(
+            "meeting_pattern",
+            section.course_id,
+            f"{section.course_id} uses an unconfigured meeting pattern: "
+            f"{section.time_slot} ({section.duration} minutes)",
+            references=(ref,),
+        ))
     return violations
+
+
+def _class_references_by_instructor(
+    schedule: "Schedule",
+) -> dict[str, tuple[RecordReference, ...]]:
+    """Every record of every atomic class an instructor appears in.
+
+    Deliberately not "just the rows that literally name them" --
+    ``teaching_loads()`` credits an instructor a class's full
+    ``credit_hours`` the moment *any* row of that class names them (see
+    docs/codes.md), so overload/under_load references have to cover the
+    same set of records that definition draws from, or a CrossListingClass
+    with two different instructors would silently lose the row that
+    doesn't happen to name the one a finding is about.
+    """
+    by_class = _references_by_class(schedule)
+    by_instructor: dict[str, list[RecordReference]] = {}
+    for class_index, item in enumerate(schedule.classes):
+        for instructor in {s.instructor for s in item.sections if s.instructor}:
+            by_instructor.setdefault(instructor, []).extend(by_class[class_index])
+    return {name: tuple(refs) for name, refs in by_instructor.items()}
 
 
 def check_soft_preferences(
@@ -1287,12 +1397,14 @@ def check_soft_preferences(
     """
     workload_policy = workload_policy or WorkloadPolicySchema()
     back_to_back_policy = back_to_back_policy or BackToBackPolicySchema()
+    class_refs = _class_references_by_instructor(schedule)
     findings: list[SoftFinding] = [
         SoftFinding(
             "overload", status.instructor,
             f"{status.instructor}: {status.load:g} credit hours exceeds "
             f"max_load {status.max_load:g}",
             status.penalty,
+            references=class_refs.get(status.instructor, ()),
         )
         for status in _overload_statuses(
             schedule, persons, preferences, workload_policy,
@@ -1309,16 +1421,19 @@ def check_soft_preferences(
                 f"{instructor}: {load:g} credit hours is under max_load "
                 f"{person.max_load:g}",
                 deficit * workload_policy.penalties.underload_per_credit,
+                # Legitimately empty for an instructor currently teaching
+                # nothing (see docs/codes.md) -- the web UI still falls
+                # back to a plain instructor-tab link via `subject` then.
+                references=class_refs.get(instructor, ()),
             ))
 
     sections = [
-        section
-        for item in schedule
-        for section in item.sections
+        (ref, section)
+        for ref, item, section in _indexed_sections(schedule)
         if section.instructor
     ]
 
-    for section in sections:
+    for ref, section in sections:
         preference = preferences.get(section.instructor)
         course = f"{section.subject} {section.number}"
         applicable_rules = list(global_rules)
@@ -1337,35 +1452,133 @@ def check_soft_preferences(
                     f"{section.course_id}: matches a custom dislike rule "
                     f"(weight {rule.weight:g})",
                     rule.weight,
+                    references=(ref,),
                 ))
         if preference is None:
             continue
-    by_instructor: dict[str, list[Section]] = {}
-    for section in sections:
+    by_instructor: dict[str, list[tuple[RecordReference, Section]]] = {}
+    for ref, section in sections:
         if not section.is_online:
-            by_instructor.setdefault(section.instructor, []).append(section)
-    for instructor, instructor_sections in by_instructor.items():
+            by_instructor.setdefault(section.instructor, []).append((ref, section))
+    for instructor, instructor_entries in by_instructor.items():
         preference = preferences.get(instructor)
         if preference is None:
             continue
         if not preference.allow_back_to_back:
-            for i, left in enumerate(instructor_sections):
-                for right in instructor_sections[i + 1:]:
+            for i, (ref_left, left) in enumerate(instructor_entries):
+                for ref_right, right in instructor_entries[i + 1:]:
                     if is_back_to_back(left, right):
                         findings.append(SoftFinding(
                             "back_to_back", instructor,
                             f"{instructor}: {left.course_id} and "
                             f"{right.course_id} are back-to-back",
                             back_to_back_policy.penalty,
+                            references=(ref_left, ref_right),
                         ))
         elif preference.max_back_to_back is not None:
             findings.extend(_capped_back_to_back_findings(
-                instructor, instructor_sections, preference.max_back_to_back,
+                instructor, instructor_entries, preference.max_back_to_back,
                 back_to_back_policy.penalty,
             ))
 
     total = sum(finding.penalty for finding in findings)
     return total, findings
+
+
+def check_workload_hard_caps(
+    schedule: "Schedule",
+    persons: dict[str, PersonRecord],
+    workload_policy: WorkloadPolicySchema | None = None,
+    new_instructor_policy: NewInstructorPolicySchema | None = None,
+    new_professor_policy: NewProfessorPolicySchema | None = None,
+) -> list[HardViolation]:
+    """Report loads the solver would never actually produce: a hard cap
+    a configured instructor's ``hard_load_cap_tolerance`` allows no
+    further leeway past, or a New Instructor/New Professor identity's
+    contract load (which the solver enforces with *no* tolerance at all,
+    unlike a configured person -- see ``add_load_terms``). Distinct rules
+    (``hard_load_cap`` vs ``new_hire_contract_load``) since they're
+    different caps for different reasons, even though both come from the
+    same underlying per-instructor totals.
+
+    Uses ``teaching_loads()``/``_class_references_by_instructor()`` --
+    the same "every distinct instructor named anywhere in a class counts
+    it once" definition ``overload``/``under_load`` already use. This
+    used to be deliberately narrower (see the removed
+    ``_primary_section_instructor_loads``, "Plan A" in docs/codes.md),
+    matching what ``solver/constraints.py``'s ``add_load_terms`` used to
+    attribute -- only the class's first row's instructor. Now that
+    ``add_load_terms`` itself counts every row (see docs/codes.md), the
+    two definitions are simply the same one; keeping a second, narrower
+    copy here would reintroduce the exact report/solver disagreement this
+    whole design exists to prevent.
+    """
+    workload_policy = workload_policy or WorkloadPolicySchema()
+    new_instructor_policy = new_instructor_policy or NewInstructorPolicySchema()
+    new_professor_policy = new_professor_policy or NewProfessorPolicySchema()
+    totals = teaching_loads(schedule)
+    references = _class_references_by_instructor(schedule)
+    violations: list[HardViolation] = []
+    for instructor, load in sorted(totals.items()):
+        if is_new_instructor(instructor):
+            cap, rule = new_instructor_policy.contract_load, "new_hire_contract_load"
+        elif is_new_professor(instructor):
+            cap, rule = new_professor_policy.contract_load, "new_hire_contract_load"
+        else:
+            person = persons.get(instructor)
+            if person is None:
+                continue
+            cap = person.max_load + workload_policy.hard_load_cap_tolerance
+            rule = "hard_load_cap"
+        if load > cap:
+            violations.append(HardViolation(
+                rule, instructor,
+                f"{instructor}: {load:g} credit hours exceeds the hard "
+                f"cap of {cap:g}",
+                references=references.get(instructor, ()),
+            ))
+    return violations
+
+
+def check_new_hire_counts(
+    schedule: "Schedule",
+    new_instructor_policy: NewInstructorPolicySchema | None = None,
+    new_professor_policy: NewProfessorPolicySchema | None = None,
+) -> list[HardViolation]:
+    """Report when the number of *distinct* New Instructor/New Professor
+    identities actually in use falls outside ``allowed_counts``.
+
+    Counts identities directly from the current rows -- not the
+    solver's own ``used`` CP-SAT variables (``add_placeholder_count_terms``),
+    which additionally assume contiguous use (identity 2 only used if 1
+    already is); a raw/manually-edited schedule doesn't have to satisfy
+    that invariant, so re-deriving it here would risk under- or
+    over-counting. ``references`` legitimately comes back empty when the
+    count itself is the problem at zero (``allowed_counts = [1]`` but
+    none currently in use).
+    """
+    new_instructor_policy = new_instructor_policy or NewInstructorPolicySchema()
+    new_professor_policy = new_professor_policy or NewProfessorPolicySchema()
+    violations: list[HardViolation] = []
+    for label, rule, is_kind, policy in (
+        ("new_instructor", "new_instructor_count", is_new_instructor, new_instructor_policy),
+        ("new_professor", "new_professor_count", is_new_professor, new_professor_policy),
+    ):
+        used: set[str] = set()
+        refs: list[RecordReference] = []
+        for ref, item, section in _indexed_sections(schedule):
+            if section.instructor and is_kind(section.instructor):
+                used.add(section.instructor)
+                refs.append(ref)
+        count = len(used)
+        if count not in policy.allowed_counts:
+            violations.append(HardViolation(
+                rule, label,
+                f"{count} distinct {label} identities are in use; "
+                f"allowed counts are {policy.allowed_counts}",
+                references=tuple(refs),
+            ))
+    return violations
 
 
 @dataclass(frozen=True)
@@ -1389,6 +1602,8 @@ def evaluate_schedule(
     constraint_rules: Iterable[ConstraintRule] = (),
     workload_policy: WorkloadPolicySchema | None = None,
     back_to_back_policy: BackToBackPolicySchema | None = None,
+    new_instructor_policy: NewInstructorPolicySchema | None = None,
+    new_professor_policy: NewProfessorPolicySchema | None = None,
 ) -> ScheduleEvaluation:
     """Evaluate only domain objects; raw CSV rows are not accepted here."""
     soft_penalty, soft_findings = check_soft_preferences(
@@ -1404,6 +1619,13 @@ def evaluate_schedule(
             + check_conflicts(schedule)
             + check_meeting_patterns(schedule, meeting_patterns)
             + check_constraint_rules(schedule, constraint_rules)
+            + check_workload_hard_caps(
+                schedule, persons, workload_policy,
+                new_instructor_policy, new_professor_policy,
+            )
+            + check_new_hire_counts(
+                schedule, new_instructor_policy, new_professor_policy,
+            )
         ),
         soft_penalty=soft_penalty,
         soft_findings=tuple(soft_findings),

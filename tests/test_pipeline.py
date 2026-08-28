@@ -22,7 +22,9 @@ from class_schedule.overrides import (
     locks_for_section,
     validate_override_context,
 )
-from class_schedule.schedule_model import ConstraintRule, Schedule, TimeWindow
+from class_schedule.schedule_model import (
+    ConstraintRule, Schedule, TimeWindow, check_atomic_class_rules,
+)
 from class_schedule.schedule_io import read_schedule
 from class_schedule.schedule_io import read_table
 from class_schedule.reconciliation import reconcile_records
@@ -375,6 +377,28 @@ class ConfigLayoutTests(unittest.TestCase):
         self.assertEqual(type(item).__name__, "CrossListingClass")
         self.assertEqual(
             item.synced_fields, frozenset({"instructor", "room", "time"}),
+        )
+        # The default lock isn't just recorded on the instance -- a
+        # declared pair whose current data doesn't actually satisfy it has
+        # to surface as a hard violation too, the same as every other
+        # atomic-class kind's business rule (see docs/codes.md). This was
+        # a real gap: schedule_issues used to only check recognition.
+        violations = check_atomic_class_rules(schedule)
+        cross_listing_violations = [
+            v for v in violations if v.rule == "cross_listing_invalid"
+        ]
+        self.assertEqual(len(cross_listing_violations), 3)
+        # Both conflicting records must be locatable, not just the first
+        # -- this class's two rows are two different courses (MATH 5173 /
+        # STAT 4173), so a scheme that only ever names one row (like the
+        # pre-references check_atomic_class_rules did) would silently
+        # drop the other.
+        seen = {
+            (r.class_index, r.record_index, r.course_id)
+            for v in cross_listing_violations for r in v.references
+        }
+        self.assertEqual(
+            seen, {(0, 0, "MATH 5173-TC1"), (0, 1, "STAT 4173-TC1")},
         )
 
     def test_configured_cross_listing_can_leave_a_currently_matching_field_free(self):
