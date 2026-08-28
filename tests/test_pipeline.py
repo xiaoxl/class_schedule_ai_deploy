@@ -349,6 +349,70 @@ class ConfigLayoutTests(unittest.TestCase):
         self.assertEqual(type(item).__name__, "CrossListingClass")
         self.assertEqual(item.synced_fields, frozenset({"instructor", "room"}))
 
+    def test_configured_cross_listing_without_synced_fields_defaults_to_fully_locked(self):
+        # synced_fields is opt-in, not opt-out (see docs/codes.md): a
+        # declared cross_listing relationship that doesn't name
+        # synced_fields at all defaults to locking all three fields, even
+        # though room/time plainly differ in the source data here --
+        # auto-detecting from the current rows is only what the
+        # *unconfigured* recognition path (no explicit relationship) still
+        # does.
+        relationships = CoursesFileSchema.model_validate({
+            "courses": [
+                {"subject": "MATH", "number": "5173", "sections": ["TC1"]},
+                {"subject": "STAT", "number": "4173", "sections": ["TC1"]},
+            ],
+            "relationships": [{
+                "id": "configured-cross-listing", "kind": "cross_listing",
+                "members": ["MATH 5173 TC1", "STAT 4173 TC1"],
+            }],
+        }).relationships
+        schedule = Schedule.from_records([
+            {"Subject": "MATH", "Number": "5173", "Section": "TC1", "Time Slot": "TR 11:00am", "Duration": 80, "Building": "Corley", "Room": "101", "Instructor": "Alice"},
+            {"Subject": "STAT", "Number": "4173", "Section": "TC1", "Time Slot": "TR 2:00pm", "Duration": 50, "Building": "Rothwell", "Room": "205", "Instructor": "Bob"},
+        ], relationships=relationships)
+        item = schedule.classes[0]
+        self.assertEqual(type(item).__name__, "CrossListingClass")
+        self.assertEqual(
+            item.synced_fields, frozenset({"instructor", "room", "time"}),
+        )
+
+    def test_configured_cross_listing_can_leave_a_currently_matching_field_free(self):
+        # The inverse of the two tests above: synced_fields can also
+        # explicitly *exclude* a field that happens to already match in
+        # the source data, and that exclusion has to stick -- "the two
+        # rows currently agree" is not the same thing as "locked". Room
+        # and time both match here, but only "instructor" is declared, so
+        # the solver (via pairwise_predicate) must still let room/time
+        # move independently while continuing to enforce instructor.
+        relationships = CoursesFileSchema.model_validate({
+            "courses": [
+                {"subject": "MATH", "number": "5173", "sections": ["TC1"]},
+                {"subject": "STAT", "number": "4173", "sections": ["TC1"]},
+            ],
+            "relationships": [{
+                "id": "configured-cross-listing", "kind": "cross_listing",
+                "members": ["MATH 5173 TC1", "STAT 4173 TC1"],
+                "synced_fields": ["instructor"],
+            }],
+        }).relationships
+        schedule = Schedule.from_records([
+            {"Subject": "MATH", "Number": "5173", "Section": "TC1", "Time Slot": "TR 11:00am", "Duration": 80, "Building": "Corley", "Room": "101", "Instructor": "Alice"},
+            {"Subject": "STAT", "Number": "4173", "Section": "TC1", "Time Slot": "TR 11:00am", "Duration": 80, "Building": "Corley", "Room": "101", "Instructor": "Alice"},
+        ], relationships=relationships)
+        item = schedule.classes[0]
+        self.assertEqual(item.synced_fields, frozenset({"instructor"}))
+        left, right = item.sections
+        predicate = item.pairwise_predicate()
+        self.assertIsNotNone(predicate)
+        moved = replace(
+            right, room="205", building="Rothwell",
+            time_slot="TR 2:00pm", duration=50,
+        )
+        self.assertTrue(predicate(left, moved))
+        different_instructor = replace(right, instructor="Bob")
+        self.assertFalse(predicate(left, different_instructor))
+
     def test_synced_fields_is_rejected_for_a_non_cross_listing_relationship(self):
         with self.assertRaisesRegex(ValueError, "synced_fields"):
             CoursesFileSchema.model_validate({

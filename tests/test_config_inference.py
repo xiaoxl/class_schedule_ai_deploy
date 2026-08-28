@@ -73,13 +73,13 @@ class ConfigurationInferenceTests(unittest.TestCase):
                 if item["kind"] == "cross_listing"
             )
             # The template's MATH 5173/STAT 4173 rows already shared an
-            # instructor, room, and time -- that observed-at-inference state
-            # is baked in as a persisted decision (see docs/codes.md),
-            # rather than left to be re-derived from whatever a future load
-            # happens to show.
-            self.assertCountEqual(
-                cross_listing["synced_fields"], ["instructor", "room", "time"],
-            )
+            # instructor, room, and time -- and synced_fields is opt-in,
+            # not opt-out (see docs/codes.md): omitting it now defaults to
+            # fully locked, so a fully-matching template needs nothing
+            # written at all. (A template where some field genuinely
+            # diverged would still get an explicit, narrower list -- see
+            # the "opt-in" addendum.)
+            self.assertNotIn("synced_fields", cross_listing)
             self.assertEqual(
                 set(config.persons["Teacher, Alice"].courses),
                 {
@@ -93,6 +93,33 @@ class ConfigurationInferenceTests(unittest.TestCase):
             self.assertEqual(
                 tomllib.loads(inferred.files["constraints.toml"].decode()), {}
             )
+
+    def test_infers_a_narrower_synced_fields_when_the_template_pair_diverges(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            path = root / "source.csv"
+            pd.DataFrame([
+                self._row(
+                    "MATH", "5173", "TC1", "Biostatistics", 3,
+                    "TR 11:00am", 80, room="101", cross="BIO",
+                ),
+                self._row(
+                    "STAT", "4173", "TC1", "Biostatistics", 3,
+                    "TR 11:00am", 80, room="205", cross="BIO",
+                ),
+            ]).to_csv(path, index=False)
+
+            inferred = infer_configuration_from_template(path, package="TEST")
+            courses = tomllib.loads(inferred.files["courses.toml"].decode())
+            cross_listing = next(
+                item for item in courses["relationships"]
+                if item["kind"] == "cross_listing"
+            )
+            # Room diverges in the template (101 vs 205) -- unlike the
+            # fully-matching case above, that has to be written explicitly
+            # (as the narrower set that's actually still shared), or the
+            # opt-in default (fully locked) would silently re-lock it.
+            self.assertCountEqual(cross_listing["synced_fields"], ["instructor", "time"])
 
     def test_rejects_a_template_without_physical_times(self):
         with tempfile.TemporaryDirectory() as folder:

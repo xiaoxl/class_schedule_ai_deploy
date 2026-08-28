@@ -272,7 +272,16 @@ def _courses_toml(schedule: Schedule, header: str) -> str:
             f"kind = {_quote(kind)}\n"
             f"members = {_array(members)}\n"
         )
-        if synced_fields is not None:
+        # synced_fields is opt-in, not opt-out (see docs/codes.md): omitting
+        # it now defaults to fully locked, so a template where the pair
+        # already matches on all three fields needs nothing written at all
+        # -- only a template that shows some field diverging needs the
+        # explicit, narrower list, to keep that divergence from being
+        # silently re-locked by the default.
+        if (
+            synced_fields is not None
+            and synced_fields != CrossListingClass.ALL_SYNCED_FIELDS
+        ):
             block += f"synced_fields = {_array(sorted(synced_fields))}\n"
         blocks.append(block)
     return "".join(blocks)

@@ -139,6 +139,50 @@ class SolverArchitectureTests(unittest.TestCase):
         a, b = solved.classes[0].sections
         self.assertFalse(CrossListingClass.is_shared_meeting(a, b))
 
+    def test_declared_cross_listing_without_synced_fields_actually_converges_when_solved(self):
+        """The inverse of the test above, for the *declared*-relationship
+        path (see docs/codes.md's opt-in addendum): a courses.toml
+        cross_listing relationship that doesn't name synced_fields at all
+        defaults to fully locked, and that has to actually be enforced by
+        the solver, not just recorded on the instance -- both rows start
+        in different rooms/patterns (so the solver has real freedom not
+        to converge them), and pairwise_predicate must still force them
+        together.
+        """
+        from class_schedule.schedule_model import PersonRecord
+
+        # Same subject/number/duration family for both rows (only section
+        # differs) so a shared meeting is actually reachable -- room and
+        # start time still have two real options each, so a solve that
+        # converges them is choosing to, not forced by having nowhere else
+        # to go.
+        left = Section(
+            "MATH", "1113", "001", "MWF 8:00am", 50, "102", "Alice",
+            building="Corley", cross_list="XL1",
+        )
+        right = Section(
+            "MATH", "1113", "002", "MWF 9:00am", 50, "103", "Alice",
+            building="Corley", cross_list="XL1",
+        )
+        config = SolverConfig(
+            persons={"Alice": PersonRecord("Alice", 6, ("MATH 1113",))},
+            preferences={},
+            meeting_patterns=[
+                MeetingPattern(
+                    "MWF", 50,
+                    (__import__("datetime").time(8), __import__("datetime").time(9)),
+                    frozenset({"normal", "cross_listing"}),
+                ),
+            ],
+            rooms=[RoomRecord("Corley", "102"), RoomRecord("Corley", "103")],
+            version="test-config",
+        )
+        item = CrossListingClass.from_configured_sections((left, right))
+        self.assertEqual(item.synced_fields, CrossListingClass.ALL_SYNCED_FIELDS)
+        solved = solve(Schedule([item]), config)
+        a, b = solved.classes[0].sections
+        self.assertTrue(CrossListingClass.is_shared_meeting(a, b))
+
     def test_detailed_result_reports_solver_metadata(self):
         section = Section("MATH", "1113", "001", "MWF 9:00am", 50, "101", "Alice", building="Corley")
         result = solve_detailed(Schedule([NormalClass((section,))]), self._config())

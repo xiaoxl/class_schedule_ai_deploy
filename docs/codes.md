@@ -805,3 +805,122 @@ against what it actually indexed to before applying anything. Not
 implemented yet -- raised for a decision, not acted on unprompted, since
 today it would be defensive code against a hypothetical, not a fix for an
 observed failure.
+
+## Addendum, 2026-08-27: `synced_fields` is opt-in, not opt-out -- omitting it now means "fully locked," not "auto-detect"
+
+Follow-up to the review above: the fact that `27S`/`27F`'s two real
+`cross_listing` relationships (MATH 5173 TC1/STAT 4173 TC1, MATH 4123
+001/H01) don't declare `synced_fields` at all meant every schedule load
+was still re-*auto-detecting* it from whatever the current rows showed --
+harmless today only because all three fields happen to already match in
+both packages' actual data, but still the same "re-guessed every time"
+exposure `synced_fields` was built to close, just one level up (at
+`courses.toml`, not at `apply_edit`). The first fix proposed was to just
+write `synced_fields = ["instructor", "room", "time"]` into both files'
+four relationships. Instead, the default itself changed, closing the gap
+for every current and future declared relationship at once rather than
+one config edit at a time:
+
+**Before:** a declared `cross_listing` relationship without
+`synced_fields` fell back to the same auto-detection an *undeclared*
+(legacy-recognized) pair uses -- look at the current rows, lock whatever
+already matches.
+
+**Now:** `synced_fields` is opt-in to *divergence*, not opt-in to being
+locked. A declared relationship without `synced_fields` defaults to
+`CrossListingClass.ALL_SYNCED_FIELDS` (all three fields, fully locked) --
+declaring a cross-listing relationship at all is now itself the signal
+that this is meant to be one single, fully-shared offering; naming
+`synced_fields` explicitly is how you opt specific fields *out* of that
+lock (list only the ones that must still match; leave out the ones
+allowed to diverge). This only changes `CrossListingClass.from_configured_sections`'s
+default (used for a *declared* relationship) -- `__post_init__`'s
+auto-detection is unchanged and still the only option for a pair
+recognized without any relationship to consult at all (shared
+`Cross-List` marker, known course pair, honors pairing).
+
+```python
+ALL_SYNCED_FIELDS: ClassVar[frozenset[str]] = frozenset(
+    {"instructor", "room", "time"},
+)
+...
+item.synced_fields = (
+    synced_fields if synced_fields is not None
+    else cls.ALL_SYNCED_FIELDS  # was: cls._synced_fields(left, right)
+)
+```
+
+One practical consequence: writing `synced_fields` into `27S`/`27F`'s four
+relationships, as first proposed, is no longer *necessary* -- omitting it
+now gets the same fully-locked result the write would have produced,
+automatically, and for any future declared cross-listing too, not just
+these four. It may still be worth writing explicitly as documentation (a
+reader of `courses.toml` sees the lock without having to know the
+default), but it's no longer required to close the original gap.
+
+Tested by two new `tests/test_pipeline.py` cases, one for each direction:
+`test_configured_cross_listing_without_synced_fields_defaults_to_fully_locked`
+declares a relationship with rooms/times/instructors that plainly differ
+in the source rows and asserts `synced_fields` still comes back as all
+three fields, proving the pair is no longer being re-derived from the
+data at all; `test_configured_cross_listing_can_leave_a_currently_matching_field_free`
+is the inverse -- room and time both *currently match* in the source
+rows, but only `instructor` is declared, and `pairwise_predicate` still
+has to let room/time move independently (while continuing to enforce
+instructor) -- proving "the two rows happen to agree right now" is never
+mistaken for "this field is locked."
+
+## Addendum, 2026-08-27: template inference follows the same opt-in rule; end-to-end solver/workload proof
+
+Three follow-ups from the `synced_fields` opt-in change above, closing out
+the same discussion.
+
+**`config_inference.py` now omits `synced_fields` when the template
+already fully matches.** Inference (`_inferred_relationships`) still
+detects, from the template, which of instructor/room/time the pair
+already shares -- that part is unchanged, and still the only option for
+this legacy-recognition-based path (there's no declared relationship yet
+to default from). What changed is `_courses_toml`'s *writing* step: it
+used to always write `synced_fields = [...]` explicitly, even when the
+detected set was all three fields. Since omitting `synced_fields` now
+defaults to fully locked, writing all three explicitly is redundant --
+`_courses_toml` now skips the line entirely when the detected set equals
+`CrossListingClass.ALL_SYNCED_FIELDS`, and still writes the narrower,
+explicit list when the template shows a field genuinely diverging (that
+case still needs the write, or the default would silently re-lock it).
+`tests/test_config_inference.py`'s existing fully-matching-template case
+was updated to assert the key is *absent*; a new
+`test_infers_a_narrower_synced_fields_when_the_template_pair_diverges`
+covers the still-explicit case with a template whose two rows differ on
+room.
+
+**Confirmed end-to-end: the solver actually enforces the new default,
+not just the instance's own bookkeeping.** All the `synced_fields`
+testing up to this point exercised `pairwise_predicate` directly, never
+an actual CP-SAT solve. `tests/test_architecture.py` gained
+`test_declared_cross_listing_without_synced_fields_actually_converges_when_solved`:
+two rows built via `from_configured_sections` with no `synced_fields`
+(so `ALL_SYNCED_FIELDS`), starting in different rooms with two rooms and
+two start times genuinely available -- solving still converges them to
+one shared instructor/room/time, proving the default lock is actually
+binding on the solver, not just recorded on the object. This complements
+the pre-existing `test_cross_listing_rows_are_never_forced_to_converge`
+(the un-locked-field direction, via the legacy auto-detect path) -- the
+two together cover both "must converge" and "must not be forced to
+converge" at the actual solve layer.
+
+**Confirmed: a cross-listing pair with two different instructors credits
+both of them in full, not split.** `teaching_loads()`
+(`schedule_model.py`) already did this correctly -- for each atomic
+class, it credits *every distinct instructor* found across its rows with
+the class's full `credit_hours`, never dividing it -- but there was no
+test exercising a `CrossListingClass` whose two rows actually have
+different instructors (every existing cross-listing test used the same
+instructor on both rows). Added
+`tests/test_schedule_model.py::GroupingTests::test_two_different_instructors_each_get_full_credit_for_a_diverging_cross_listing`:
+two rows, two different instructors, `credit_hours` inferred as 3 either
+way (`"5173"`/`"4173"`'s trailing digit) -- asserts `teaching_loads()`
+gives *both* instructors the full 3, not 1.5 each. This is exactly the
+semantics `synced_fields` excluding `"instructor"` is for: two people
+each really teaching their own section of what the catalog treats as one
+shared course, not one teaching load shared between them.

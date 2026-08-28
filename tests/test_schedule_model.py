@@ -251,6 +251,33 @@ class GroupingTests(unittest.TestCase):
             not section.cross_list for section in schedule.classes[0].sections
         ))
 
+    def test_two_different_instructors_each_get_full_credit_for_a_diverging_cross_listing(self):
+        # synced_fields need not include "instructor" (see docs/codes.md)
+        # -- when it doesn't, the two rows can genuinely have different
+        # instructors. credit_hours still counts once per the course
+        # (SpecialClass.credit_hours, from the first row: 3, from the
+        # trailing digit of "5173"/"4173"), but teaching_loads() credits
+        # every distinct instructor teaching the class with that full
+        # amount, not a split -- a cross-listed section is a real
+        # teaching assignment for each of them, not one assignment shared
+        # between two people.
+        records = [
+            make_record(
+                Subject="MATH", Number="5173", Section="TC1",
+                Instructor="Jordan, Scott M.",
+            ),
+            make_record(
+                Subject="STAT", Number="4173", Section="TC1",
+                Instructor="Growns, Landon C.",
+            ),
+        ]
+        schedule = Schedule.from_records(records)
+        self.assertIsInstance(schedule.classes[0], CrossListingClass)
+        self.assertEqual(schedule.classes[0].credit_hours, 3)
+        loads = teaching_loads(schedule)
+        self.assertEqual(loads["Jordan, Scott M."], 3)
+        self.assertEqual(loads["Growns, Landon C."], 3)
+
     def test_math_1110_credit_override_survives_atomic_round_trip(self):
         schedule = Schedule.from_records([
             make_record(

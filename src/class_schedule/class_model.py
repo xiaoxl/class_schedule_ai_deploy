@@ -604,6 +604,12 @@ class CrossListingClass(SpecialClass):
         {"MATH 5173", "STAT 4173"},
     ]
     schedule_issue_rule: ClassVar[str] = "cross_listing_invalid"
+    #: The full lock, and the default for an explicitly declared
+    #: cross_listing relationship that doesn't name synced_fields at all
+    #: -- see from_configured_sections.
+    ALL_SYNCED_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {"instructor", "room", "time"},
+    )
     synced_fields: frozenset[str] = field(init=False, default=frozenset())
     schedule_issues: tuple[str, ...] = field(init=False, default=())
 
@@ -642,11 +648,17 @@ class CrossListingClass(SpecialClass):
     ) -> "CrossListingClass":
         """Build an explicitly configured pair without a course whitelist.
 
-        ``synced_fields`` lets a ``courses.toml`` relationship declare which
-        fields to keep in sync as a persisted decision (see docs/codes.md)
-        instead of re-deriving it from whatever the current rows happen to
-        show; omitted, it falls back to the same auto-detection every other
-        construction path uses.
+        ``synced_fields`` is opt-in, not opt-out: a `courses.toml`
+        relationship names only the fields allowed to diverge (by leaving
+        them out of the list), and a relationship that doesn't declare
+        ``synced_fields`` at all defaults to fully locked
+        (``ALL_SYNCED_FIELDS``) -- a *declared* cross-listing is assumed to
+        be one single, fully-shared offering unless told otherwise. This is
+        deliberately not the same fallback ``__post_init__`` uses for a
+        pair recognized *without* an explicit relationship (shared
+        Cross-List marker, known course pair, honors pairing) -- there,
+        with no config to consult at all, auto-detecting from whatever the
+        rows currently show is the only option. See docs/codes.md.
         """
         item = cls.__new__(cls)
         item.sections = sections
@@ -654,7 +666,7 @@ class CrossListingClass(SpecialClass):
         left, right = sections
         item.synced_fields = (
             synced_fields if synced_fields is not None
-            else cls._synced_fields(left, right)
+            else cls.ALL_SYNCED_FIELDS
         )
         item.schedule_issues = cls._issues(left, right)
         return item
