@@ -1,6 +1,12 @@
 .venv/
 __pycache__/
+.uv-cache/
 *.py[oc]
 output/
 work/
 config/
+out/
+examples/
+inputs/
+tests/
+.old/

@@ -568,7 +568,7 @@ def create_app() -> FastAPI:
         # Hard violations never block publication (see docs/codes.md) -- they
         # are recorded in the report/manifest and returned below instead, so
         # a version can always be saved and inspected, never refused.
-        output_root = Path("out")
+        output_root = Path("output")
         version = next_version(output_root / term)
         destination = output_root / term / version
         baseline_bytes = baseline.to_dataframe().to_csv(index=False).encode("utf-8")

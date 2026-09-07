@@ -50,7 +50,7 @@ class VersionTests(unittest.TestCase):
             self.assertEqual(next_version(root), "ver5")
 
     def test_infers_parent_only_from_an_exact_version_directory(self):
-        root = Path("out") / "27S"
+        root = Path("output") / "27S"
         self.assertEqual(
             infer_parent_version(root / "ver7" / "27S_ver7.csv", root), "ver7"
         )
@@ -135,7 +135,7 @@ class RunTermTests(unittest.TestCase):
                 "TEST",
                 input_path=input_path,
                 initial_path=input_path,
-                output_root=root / "out",
+                output_root=root / "output",
                 config_dir="config",
                 attempts=3,
                 time_limit_seconds=5,
@@ -192,7 +192,7 @@ class RunTermTests(unittest.TestCase):
 
             second = run_term(
                 "TEST", input_path=input_path, initial_path=input_path,
-                output_root=root / "out", config_dir="config",
+                output_root=root / "output", config_dir="config",
                 attempts=1, time_limit_seconds=5,
             )
             second_manifest = json.loads(
@@ -209,7 +209,7 @@ class RunTermTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must start from initial"):
                 run_term(
                     "TEST", input_path=bundle.schedule_path, parent="ver1",
-                    output_root=root / "out", config_dir="config",
+                    output_root=root / "output", config_dir="config",
                     attempts=1, time_limit_seconds=5,
                 )
 
@@ -238,7 +238,7 @@ class RunTermTests(unittest.TestCase):
             with self.assertRaisesRegex(TypeError, "changes_path"):
                 run_term(
                     "TEST", input_path=input_path, baseline_path=input_path,
-                    changes_path=changes_path, output_root=root / "out",
+                    changes_path=changes_path, output_root=root / "output",
                     config_dir="config", attempts=1, time_limit_seconds=5,
                     historical_backfill=True,
                 )
@@ -246,13 +246,13 @@ class RunTermTests(unittest.TestCase):
     def test_refuses_to_overwrite_an_existing_version(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            destination = root / "out" / "TEST" / "ver2"
+            destination = root / "output" / "TEST" / "ver2"
             destination.mkdir(parents=True)
             with self.assertRaises(FileExistsError):
                 run_term(
                     "TEST",
                     input_path=root / "missing.csv",
-                    output_root=root / "out",
+                    output_root=root / "output",
                     version="ver2",
                     attempts=1,
                 )
@@ -260,12 +260,12 @@ class RunTermTests(unittest.TestCase):
     def test_generates_a_parseable_template_bound_to_the_source_version(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            source = root / "out" / "TEST" / "ver3" / "TEST_ver3.csv"
+            source = root / "output" / "TEST" / "ver3" / "TEST_ver3.csv"
             self._write_source(source)
             destination = root / "revision.toml"
             written = create_override_template(
                 "TEST", "ver3", output_path=destination,
-                output_root=root / "out", config_dir="config",
+                output_root=root / "output", config_dir="config",
             )
             text = written.read_text(encoding="utf-8")
             self.assertIn('term = "TEST"', text)
@@ -275,7 +275,7 @@ class RunTermTests(unittest.TestCase):
     def test_embedded_override_refreshes_final_without_creating_a_version(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            output_root = root / "out"
+            output_root = root / "output"
             source = output_root / "TEST" / "ver3" / "TEST_ver3.csv"
             self._write_source(source, time_slot="MWF 10:00am")
             self._write_source(source.parent / "baseline.csv")
@@ -338,7 +338,7 @@ class RunTermTests(unittest.TestCase):
     def test_final_rejects_an_untouched_override_template(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            output_root = root / "out"
+            output_root = root / "output"
             source = output_root / "TEST" / "ver3" / "TEST_ver3.csv"
             self._write_source(source)
             (source.parent / "overrides.toml").write_text(
@@ -355,12 +355,12 @@ class RunTermTests(unittest.TestCase):
     def test_installs_an_embedded_workspace_and_preserves_the_old_override(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            source = root / "out" / "TEST" / "ver3" / "TEST_ver3.csv"
+            source = root / "output" / "TEST" / "ver3" / "TEST_ver3.csv"
             self._write_source(source)
             old = source.parent / "overrides.toml"
             old.write_text("# old applied input\n", encoding="utf-8")
             workspace = install_version_override_template(
-                "TEST", "ver3", output_root=root / "out", config_dir="config"
+                "TEST", "ver3", output_root=root / "output", config_dir="config"
             )
             self.assertIn('source_version = "ver3"', workspace.read_text())
             self.assertEqual(

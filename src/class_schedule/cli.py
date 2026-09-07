@@ -181,7 +181,7 @@ def build_parser() -> argparse.ArgumentParser:
     solve = commands.add_parser("solve", help="solve and publish a versioned result bundle")
     solve.add_argument("config_name")
     solve.add_argument("--input")
-    solve.add_argument("--output-root", default="out")
+    solve.add_argument("--output-root", default="output")
     solve.add_argument(
         "--version",
         help="explicit backfill version; normally omit to append the next verN",
@@ -213,11 +213,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     final = commands.add_parser(
         "final",
-        help="apply a verN's embedded overrides and refresh out/TERM/final",
+        help="apply a verN's embedded overrides and refresh output/TERM/final",
     )
     final.add_argument("config_name")
     final.add_argument("from_version", help="published source version, for example ver10")
-    final.add_argument("--output-root", default="out")
+    final.add_argument("--output-root", default="output")
     final.add_argument("--attempts", type=int, default=5)
     final.add_argument("--seconds", type=float, default=45.0)
     final.add_argument(
@@ -233,7 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
     template.add_argument("config_name")
     template.add_argument("from_version", help="published source version, for example ver10")
     template.add_argument("--output")
-    template.add_argument("--output-root", default="out")
+    template.add_argument("--output-root", default="output")
     template.set_defaults(handler=_override_template)
 
     validate = commands.add_parser("validate", help="evaluate a schedule without changing it")

@@ -9,7 +9,7 @@ cd "D:\Codes\Projects\Projects 26\class_schedule_ai_deploy"
 uv run uvicorn class_schedule.webapp:app --host 127.0.0.1 --port 8000
 ```
 
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Select a Ready package; its current working schedule loads automatically from `work/<package>/initial/initial.csv`. Edit it in Instructor, Room, or Course view, then select **Save New Version**. The package name is also the output namespace, for example `out/27S/verN/`.
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Select a Ready package; its current working schedule loads automatically from `work/<package>/initial/initial.csv`. Edit it in Instructor, Room, or Course view, then select **Save New Version**. The package name is also the output namespace, for example `output/27S/verN/`.
 
 The Configuration selector discovers complete packages directly under `config/`. The included package is `config/27S/`; copy that directory to create another independent package. CLI commands take that directory name as their single configuration argument.
 
@@ -28,7 +28,7 @@ uv run class-schedule final 27S ver10
 Typical version contents include:
 
 ```text
-out/27S/ver10/
+output/27S/ver10/
   schedule.csv
   schedule.xlsx
   schedule_instructor.xlsx

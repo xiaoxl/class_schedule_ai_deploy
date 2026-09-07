@@ -1,6 +1,6 @@
 # Class Schedule System
 
-This project reconciles CSV/XLSX schedule templates to `courses.toml`, groups rows into atomic classes, applies preferences, solves with OR-Tools CP-SAT, and publishes auditable versions under `out/<package>/verN/`.
+This project reconciles CSV/XLSX schedule templates to `courses.toml`, groups rows into atomic classes, applies preferences, solves with OR-Tools CP-SAT, and publishes auditable versions under `output/<package>/verN/`.
 
 ## Start the web interface
 
@@ -64,7 +64,7 @@ package (**Delete Configuration**) covers removal.
 5. Review workloads and findings. Finding links open the relevant Instructor or Room view.
 6. Review any hard conflicts, then select **Save New Version** -- saving is never blocked by them, but resolving what you can first keeps the published report clean. The output namespace is locked to the selected package.
 
-Browser saves use the same version publisher as solver output and are written to `out/27S/verN/`.
+Browser saves use the same version publisher as solver output and are written to `output/27S/verN/`.
 The three download buttons export the browser's current schedule, Instructor
 View, and Location View on demand. They work before or after solving and after
 manual edits; downloading does not create a new version.

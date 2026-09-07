@@ -134,7 +134,7 @@ def version_schedule_path(
     term: str,
     version: str,
     *,
-    output_root: str | Path = "out",
+    output_root: str | Path = "output",
 ) -> Path:
     """Return the canonical CSV for an existing published version."""
     if re.fullmatch(r"ver\d+", version) is None:
@@ -165,7 +165,7 @@ def create_override_template(
     from_version: str,
     *,
     output_path: str | Path | None = None,
-    output_root: str | Path = "out",
+    output_root: str | Path = "output",
     config_dir: str | Path = "config",
     package: str | None = None,
 ) -> Path:
@@ -196,7 +196,7 @@ def install_version_override_template(
     term: str,
     version: str,
     *,
-    output_root: str | Path = "out",
+    output_root: str | Path = "output",
     config_dir: str | Path = "config",
     package: str | None = None,
 ) -> Path:
@@ -268,7 +268,7 @@ def publish_final(
     term: str,
     from_version: str,
     *,
-    output_root: str | Path = "out",
+    output_root: str | Path = "output",
     config_dir: str | Path = "config",
     package: str | None = None,
     attempts: int = 5,
@@ -565,7 +565,7 @@ def run_term(
     term: str,
     *,
     input_path: str | Path | None = None,
-    output_root: str | Path = "out",
+    output_root: str | Path = "output",
     config_dir: str | Path = "config",
     package: str | None = None,
     version: str | None = None,
