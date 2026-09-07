@@ -99,6 +99,26 @@ class PreferenceRuleMatchesTests(unittest.TestCase):
     def test_signed_weight_dislike_is_positive(self):
         self.assertEqual(PreferenceRule(direction="dislike", weight=100).signed_weight, 100)
 
+    def test_describe_with_no_selectors_says_every_meeting(self):
+        self.assertEqual(
+            PreferenceRule(direction="dislike", weight=30).describe(),
+            "dislike rule -- every meeting (weight 30)",
+        )
+
+    def test_describe_lists_each_configured_selector(self):
+        rule = PreferenceRule(
+            course="MATH 1113", section_prefix="TC", room=("Corley", "Hillside"),
+            time=TimeWindow(
+                days=frozenset("MWF"), start=datetime.time(8, 0), end=datetime.time(9, 0),
+            ),
+            direction="dislike", weight=30,
+        )
+        self.assertEqual(
+            rule.describe(),
+            "dislike rule -- course MATH 1113; section prefix TC; "
+            "room Corley/Hillside; time MWF 08:00-09:00 (weight 30)",
+        )
+
 
 class LoadPreferencesRulesTests(unittest.TestCase):
     def test_parses_flat_named_prefer_rule(self):
@@ -422,15 +442,15 @@ class TcWebRuleTests(unittest.TestCase):
     def test_negative_tc_rule_is_reported(self):
         section = make_section(instructor="Alice", section="TC1")
         schedule = Schedule([NormalClass((section,))])
-        preferences = {"Alice": PreferenceRecord(
-            name="Alice",
-            rules=(PreferenceRule(
-                section_prefix="TC", direction="dislike", weight=25,
-            ),),
-        )}
+        rule = PreferenceRule(section_prefix="TC", direction="dislike", weight=25)
+        preferences = {"Alice": PreferenceRecord(name="Alice", rules=(rule,))}
         total, findings = check_soft_preferences(schedule, preferences, {})
         self.assertEqual(total, 25.0)
         self.assertTrue(any(f.rule == "custom_rule" for f in findings))
+        # The finding's own `detail` -- what the web UI shows on hover -- is
+        # exactly the matched rule's own description, not re-derived.
+        custom = next(f for f in findings if f.rule == "custom_rule")
+        self.assertEqual(custom.detail, rule.describe())
 
     def test_positive_tc_rule_is_not_reported_as_a_violation(self):
         section = make_section(instructor="Alice", section="TC1")

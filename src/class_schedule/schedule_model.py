@@ -794,6 +794,27 @@ class PreferenceRule:
             return ()
         return (self.room,) if isinstance(self.room, str) else self.room
 
+    def describe(self) -> str:
+        """Render this rule's own selectors for a hover tooltip -- the
+        finding `message` only ever says *that* something matched, never
+        *what the rule actually says*."""
+        selectors = []
+        if self.course is not None:
+            selectors.append(f"course {self.course}")
+        if self.section is not None:
+            selectors.append(f"section {self.section}")
+        if self.section_prefix is not None:
+            selectors.append(f"section prefix {self.section_prefix}")
+        if self.room is not None:
+            selectors.append(f"room {'/'.join(self.rooms)}")
+        if self.time is not None:
+            days = "".join(d for d in _WEEKDAY_LETTERS if d in self.time.days)
+            selectors.append(
+                f"time {days} {self.time.start:%H:%M}-{self.time.end:%H:%M}"
+            )
+        where = "; ".join(selectors) if selectors else "every meeting"
+        return f"{self.direction} rule -- {where} (weight {self.weight:g})"
+
 
 @dataclass(frozen=True)
 class PreferenceRecord:
@@ -1008,6 +1029,11 @@ class SoftFinding:
     message: str
     penalty: float
     references: tuple[RecordReference, ...] = ()
+    # Populated only for findings whose `message` is too terse to act on --
+    # currently just "custom_rule" -- so a web client can show the matched
+    # rule's own selectors (course/room/time/...) on hover instead of making
+    # the user open preferences.toml to see what actually matched.
+    detail: str = ""
 
 
 def teaching_loads(schedule: "Schedule") -> dict[str, float]:
@@ -1467,6 +1493,7 @@ def check_soft_preferences(
                     f"(weight {rule.weight:g})",
                     rule.weight,
                     references=(ref,),
+                    detail=rule.describe(),
                 ))
         if preference is None:
             continue

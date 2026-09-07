@@ -41,21 +41,26 @@ editor; deleted content is moved to `work/config-trash/` rather than erased.
 Each package may also keep one optional schedule template under
 `config/<package>/template/`. Its CSV/XLSX filename is unrestricted. A template
 drop always replaces the template in the currently managed package; TOMLs in
-the same drop still route by their package comments. Updating a template or
-`courses.toml` atomically rebuilds `work/<package>/initial/`. Without
-`courses.toml`, the template itself produces the working views while the
-package remains Draft. Without a template, a complete configuration produces a
-deterministic default using configured course order, qualifications, load
-limits, dynamic-position eligibility, meeting patterns, and available rooms.
-When a template is uploaded, any configuration TOMLs already present are
-preserved and only missing files are filled from inference. The template
-panel's **从模板推断** action instead creates a new complete package named
-`推断(N)` and copies the template into it; all seven TOMLs in that new package
-come from inference. It infers
-catalog courses and offered sections, marked cross-listings, hybrid and
-four-credit relationships, rooms, meeting times, instructors, and the courses
-they have taught. It deliberately does not infer corequisites; inferred
-instructors allow overload and back-to-back teaching, and hard rules are empty.
+the same drop still route by their package comments. Updating a template,
+saving a TOML through **Validate & Save**, or uploading a new configuration
+folder all atomically rebuild `work/<package>/initial/` -- there is no manual
+rebuild step. Without `courses.toml`, the template itself produces the working
+views while the package remains Draft. Without a template, a complete
+configuration produces a deterministic default using configured course order,
+qualifications, load limits, dynamic-position eligibility, meeting patterns,
+and available rooms. When a template is uploaded, any configuration TOMLs
+already present are preserved and only missing files are filled from
+inference. The template panel's **从模板推断** action instead creates a new
+complete package named after the template's own filename (sanitized to a valid
+package id, with a `-2`, `-3`, ... suffix if that name is already taken) and
+copies the template into it; all seven TOMLs in that new package come from
+inference. It infers catalog courses and offered sections, marked
+cross-listings, hybrid and four-credit relationships, rooms, meeting times,
+instructors, and the courses they have taught. It deliberately does not infer
+corequisites; inferred instructors allow overload and back-to-back teaching,
+and hard rules are empty. There is no separate template download/delete
+control -- replacing the template covers updates, and deleting the whole
+package (**Delete Configuration**) covers removal.
 5. Review workloads and findings. Finding links open the relevant Instructor or Room view.
 6. Review any hard conflicts, then select **Save New Version** -- saving is never blocked by them, but resolving what you can first keeps the published report clean. The output namespace is locked to the selected package.
 

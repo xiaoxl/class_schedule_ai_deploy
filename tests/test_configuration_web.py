@@ -246,10 +246,12 @@ class ConfigurationFileManagementTests(unittest.TestCase):
             "catalogs.toml", "locations.toml",
         })
 
-    def test_full_template_inference_creates_next_independent_package(self):
-        (self.config_root / "推断(1)").mkdir()
+    def test_full_template_inference_names_package_after_template_filename(self):
         source = self._source_template()
-        package = webapp._next_inferred_package_name()
+        base = webapp._package_name_from_template_filename(source.name)
+        self.assertEqual(base, "Course_Schedule_Report_20260820_175924")
+        (self.config_root / base).mkdir()
+        package = webapp._next_available_package_name(base)
         inferred = webapp._infer_uploaded_template(
             source.name, source.read_bytes(), package=package,
         )
@@ -259,7 +261,7 @@ class ConfigurationFileManagementTests(unittest.TestCase):
             "rebuild": True,
         }})
 
-        self.assertEqual(package, "推断(2)")
+        self.assertEqual(package, f"{base}-2")
         self.assertEqual(
             SolverConfig.load(self.config_root, package=package).package_id,
             package,
@@ -272,6 +274,10 @@ class ConfigurationFileManagementTests(unittest.TestCase):
             self.config_root / package, webapp.WORK_ROOT,
         )
         self.assertEqual(summary["work_views"]["source"], "generated_default")
+
+    def test_template_filename_sanitizes_to_fallback_when_nothing_survives(self):
+        self.assertEqual(webapp._package_name_from_template_filename("推断.csv"), "template")
+        self.assertEqual(webapp._package_name_from_template_filename("---.csv"), "template")
 
     def test_generated_chinese_package_name_is_valid_upload_metadata(self):
         content = b"# Configuration package: \xe6\x8e\xa8\xe6\x96\xad(1)\n"

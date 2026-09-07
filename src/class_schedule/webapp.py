@@ -284,7 +284,9 @@ def create_app() -> FastAPI:
         if template is None:
             raise HTTPException(404, "Upload a schedule template before inferring configuration")
         try:
-            inferred_package = _next_inferred_package_name()
+            inferred_package = _next_available_package_name(
+                _package_name_from_template_filename(template.name),
+            )
             inferred = infer_configuration_from_template(
                 template, package=inferred_package,
             )
@@ -663,17 +665,29 @@ def _package_root(package: str) -> Path:
     return root
 
 
-def _next_inferred_package_name() -> str:
-    """Return the first unused system-generated ``推断(N)`` package name."""
-    used = {
-        int(match.group(1))
-        for path in CONFIG_DIR.iterdir()
-        if path.is_dir() and (match := re.fullmatch(r"推断\(([1-9]\d*)\)", path.name))
-    }
-    rank = 1
-    while rank in used:
+def _package_name_from_template_filename(filename: str) -> str:
+    """Derive a valid package id from a template's own filename.
+
+    "从模板推断" now names the package it creates after the template that
+    seeded it (e.g. ``27Sv2_ver1.csv`` -> ``27Sv2_ver1``) instead of a
+    generic counter, so the new configuration is recognizable at a glance.
+    Characters outside ``PACKAGE_ID``'s alphabet (spaces, unicode, dots from
+    a second extension, ...) collapse to a single underscore; a name that
+    sanitizes away to nothing (an all-unicode filename, say) falls back to
+    a fixed placeholder that collision-suffixing still makes unique.
+    """
+    base = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(filename).stem).strip("_-")
+    return base or "template"
+
+
+def _next_available_package_name(base: str) -> str:
+    """Return `base`, or `base` suffixed ``-2``, ``-3``, ... if it's taken."""
+    if not (CONFIG_DIR / base).exists():
+        return base
+    rank = 2
+    while (CONFIG_DIR / f"{base}-{rank}").exists():
         rank += 1
-    return f"推断({rank})"
+    return f"{base}-{rank}"
 
 
 def _infer_uploaded_template(
@@ -1293,6 +1307,7 @@ def _serialize_soft(finding: SoftFinding) -> dict:
         "rule": finding.rule,
         "subject": finding.instructor,
         "message": finding.message,
+        "detail": finding.detail,
         "penalty": finding.penalty,
         "severity": (
             "orange" if finding.penalty >= SOFT_SEVERITY_THRESHOLD else "yellow"
