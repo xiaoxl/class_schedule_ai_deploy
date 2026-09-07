@@ -55,6 +55,22 @@ CLASS_SCHEDULE_CONFIG_ROOT=/run/secrets/class-schedule-config
 CLASS_SCHEDULE_CONFIG_PACKAGE=27S
 ```
 
+`work/` (rebuilt working views, config-trash) and `output/` (published
+versions, logs) are real generated state too -- not safe to lose on a
+redeploy -- and move the same way:
+
+```text
+CLASS_SCHEDULE_WORK_ROOT=/var/data/work
+CLASS_SCHEDULE_OUTPUT_ROOT=/var/data/output
+```
+
+All three default to repo-relative paths (`config/`, `work/`, `output/`) when
+unset, which is fine for local development but not for a host with an
+ephemeral filesystem (see `render.yaml`, which points all three at one
+mounted Disk). `CONFIG_DIR` may not contain any complete package yet on a
+fresh mount -- the Web app boots regardless and the Configuration workspace's
+upload/infer-from-template flow creates the first one.
+
 ## File responsibilities
 
 - `basicinfo/catalogs.toml` defines subject, number, title, and credits.

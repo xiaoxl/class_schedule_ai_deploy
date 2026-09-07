@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pandas as pd
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from class_schedule import webapp
 from class_schedule.reconciliation import reconcile_records
@@ -567,6 +568,44 @@ class ConfigurationFileManagementTests(unittest.TestCase):
         self.assertIsNone(webapp.find_template(package))
         self.assertEqual(initial.read_bytes(), original_view)
 
+
+class EmptyConfigDirBootTests(unittest.TestCase):
+    """A freshly mounted, empty CONFIG_DIR (a new deployment's persistent
+    Disk before anyone has uploaded a package, say -- see docs/configuration.md)
+    must never crash the app; it's an ordinary empty state, discovered the
+    same way after boot as at boot.
+    """
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.missing_config_root = Path(self.temporary.name) / "config"
+        self.config_patch = patch.object(webapp, "CONFIG_DIR", self.missing_config_root)
+        self.config_patch.start()
+
+    def tearDown(self):
+        self.config_patch.stop()
+        self.temporary.cleanup()
+
+    def test_default_package_is_empty_string_not_an_exception(self):
+        self.assertEqual(webapp._default_package(), "")
+
+    def test_configurations_endpoint_returns_empty_list_for_missing_dir(self):
+        self.assertFalse(self.missing_config_root.exists())
+        client = TestClient(webapp.create_app())
+
+        response = client.get("/api/configurations")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"configurations": []})
+
+    def test_configurations_endpoint_returns_empty_list_for_empty_dir(self):
+        self.missing_config_root.mkdir(parents=True)
+        client = TestClient(webapp.create_app())
+
+        response = client.get("/api/configurations")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"configurations": []})
 
 
 if __name__ == "__main__":

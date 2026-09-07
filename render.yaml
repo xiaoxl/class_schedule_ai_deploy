@@ -2,7 +2,28 @@ services:
   - type: web
     name: class-schedule
     runtime: python
+    plan: starter
     buildCommand: uv sync --frozen --no-dev
     startCommand: uv run uvicorn class_schedule.webapp:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /
     autoDeployTrigger: commit
+    # config/, work/, and output/ hold real, durable state (uploaded
+    # configuration packages, rebuilt working views, published schedule
+    # versions) -- none of it lives in git (see .gitignore) since it
+    # carries real instructor names and schedules. A persistent Disk keeps
+    # it alive across deploys/restarts instead of the service's otherwise
+    # ephemeral filesystem; a fresh disk boots with zero packages, which
+    # the app now tolerates -- upload or infer the first package through
+    # the Configuration workspace once the service is live. Disks require
+    # at least the Starter plan.
+    disk:
+      name: class-schedule-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: CLASS_SCHEDULE_CONFIG_ROOT
+        value: /var/data/config
+      - key: CLASS_SCHEDULE_WORK_ROOT
+        value: /var/data/work
+      - key: CLASS_SCHEDULE_OUTPUT_ROOT
+        value: /var/data/output

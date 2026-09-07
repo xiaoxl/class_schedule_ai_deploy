@@ -61,9 +61,18 @@ CONFIG_DIR = Path(os.environ.get(
     "CLASS_SCHEDULE_CONFIG_ROOT",
     Path(__file__).resolve().parents[2] / "config",
 ))
+# `work/` (working views, config-trash) and `output/` (published versions,
+# logs) hold generated-but-precious state -- solved schedules and uploaded
+# configuration live nowhere else. Like CONFIG_DIR above, each defaults to a
+# repo-relative path for local dev but can be pointed at a mounted, durable
+# volume in deployment (see docs/configuration.md) so a redeploy on an
+# ephemeral filesystem (e.g. Render without a persistent Disk) doesn't wipe
+# them out from under a running service.
+WORK_ROOT = Path(os.environ.get("CLASS_SCHEDULE_WORK_ROOT", "work"))
+OUTPUT_ROOT = Path(os.environ.get("CLASS_SCHEDULE_OUTPUT_ROOT", "output"))
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
-LOG_PATH = Path("output/logs/webapp.log")
+LOG_PATH = OUTPUT_ROOT / "logs" / "webapp.log"
 CONFIG_FILES = {
     "catalogs.toml": Path("basicinfo/catalogs.toml"),
     "locations.toml": Path("basicinfo/locations.toml"),
@@ -81,8 +90,7 @@ PACKAGE_ID = re.compile(
     r"^(?:[A-Za-z0-9][A-Za-z0-9_-]*|推断\([1-9]\d*\))$"
 )
 _CONFIG_WRITE_LOCK = threading.Lock()
-CONFIG_TRASH = Path("work/config-trash")
-WORK_ROOT = Path("work")
+CONFIG_TRASH = WORK_ROOT / "config-trash"
 
 # A soft finding's penalty at or above this is rendered orange in the UI
 # (an under_load of at least one credit, a strict instructor's first credit
@@ -109,17 +117,21 @@ def _rss_mb() -> float:
     return _PROCESS.memory_info().rss / (1024 * 1024)
 
 
-# Configuration errors are deployment errors, not a reason to silently run
-# without qualifications/preferences. Fail startup with a precise schema error.
+# A freshly provisioned CONFIG_DIR (a new deployment's empty mounted volume,
+# say) legitimately has no complete package yet -- someone uploads or infers
+# the first one through the Web configuration workspace after boot. So this
+# returns "" rather than raising: every endpoint below that depends on a
+# default package already turns "unknown/incomplete package" into an
+# ordinary per-request 404/400 (see `_configuration_summary`,
+# `_load_web_config`), and the static Web app itself has no package
+# dependency at all -- there is no reason boot itself must fail just because
+# nothing has been configured yet.
 def _default_package() -> str:
     packages = solver_module.list_config_packages(CONFIG_DIR)
-    if not packages:
-        raise RuntimeError(f"No complete configuration packages found under {CONFIG_DIR}")
-    return packages[0].id
+    return packages[0].id if packages else ""
 
 
 DEFAULT_PACKAGE = os.environ.get("CLASS_SCHEDULE_CONFIG_PACKAGE") or _default_package()
-SOLVER_CONFIG = solver_module.SolverConfig.load(CONFIG_DIR, package=DEFAULT_PACKAGE)
 
 
 def _load_web_config(
@@ -158,6 +170,11 @@ def create_app() -> FastAPI:
 
     @app.get("/api/configurations")
     async def configuration_packages():
+        if not CONFIG_DIR.is_dir():
+            # A brand-new deployment's mounted volume may not exist yet --
+            # an empty list here, not a 500, is what tells the Web UI to
+            # invite a first upload instead of failing to load at all.
+            return {"configurations": []}
         return {
             "configurations": [
                 _configuration_summary(path.name)
@@ -568,7 +585,7 @@ def create_app() -> FastAPI:
         # Hard violations never block publication (see docs/codes.md) -- they
         # are recorded in the report/manifest and returned below instead, so
         # a version can always be saved and inspected, never refused.
-        output_root = Path("output")
+        output_root = OUTPUT_ROOT
         version = next_version(output_root / term)
         destination = output_root / term / version
         baseline_bytes = baseline.to_dataframe().to_csv(index=False).encode("utf-8")
