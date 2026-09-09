@@ -310,6 +310,12 @@ def add_load_terms(
 ) -> list:
     policy = workload_policy or WorkloadPolicySchema()
     scale = 10
+    assignments: dict[str, list] = {}
+    for section_index, options in enumerate(candidates):
+        for candidate_index, candidate in enumerate(options):
+            assignments.setdefault(candidate.instructor, []).append(
+                chosen[section_index][candidate_index]
+            )
     per_instructor: dict[str, list] = {}
     for class_index, item in enumerate(class_list):
         units = int(round(item.credit_hours * scale))
@@ -343,15 +349,21 @@ def add_load_terms(
             per_instructor.setdefault(instructor, []).append(units * taught)
 
     objective_terms = []
-    for instructor, terms in per_instructor.items():
+    for instructor, selected in assignments.items():
         person = persons.get(instructor)
         if person is None:
             continue
-        total = sum(terms)
+        total = sum(per_instructor.get(instructor, ()))
         target = int(round(person.max_load * scale))
+        active = 1
         if is_new_instructor(instructor) or is_new_professor(instructor):
-            model.add(total <= target)
-            continue
+            # Optional hires incur workload costs only once assigned a row,
+            # including a zero-credit row. Their workload rules are shared.
+            active = model.new_bool_var(f"load_active_{instructor}")
+            model.add_max_equality(active, selected)
+        under_floor = int(round(
+            (person.max_load - policy.underload_tolerance) * scale
+        ))
         limit = int(round((person.max_load + policy.overload_tolerance) * scale))
         hard_cap = int(round((person.max_load + policy.hard_load_cap_tolerance) * scale))
         model.add(total <= hard_cap)
@@ -381,9 +393,33 @@ def add_load_terms(
             model.add(total > far_limit).only_enforce_if(far_over)
             model.add(total <= far_limit).only_enforce_if(far_over.Not())
             objective_terms.append(policy.penalties.far_overload_extra * far_over)
-        deficit = model.new_int_var(0, target, f"under_load_{instructor}")
-        model.add(deficit >= target - total)
+        deficit = model.new_int_var(
+            0, max(under_floor, 0), f"under_load_{instructor}"
+        )
+        model.add(deficit >= under_floor * active - total)
         objective_terms.append(
             (policy.penalties.underload_per_credit / scale) * deficit
         )
+        flat = policy.penalties.near_target_flat
+        if flat:
+            # Charge ``flat`` once whenever the load lands inside the
+            # tolerance band [under_floor, limit] but not exactly on
+            # ``target`` -- the underload/overload ramps already cover
+            # everything outside that band.
+            ge_floor = model.new_bool_var(f"near_ge_{instructor}")
+            le_limit = model.new_bool_var(f"near_le_{instructor}")
+            model.add(total >= under_floor).only_enforce_if(ge_floor)
+            model.add(total <= under_floor - 1).only_enforce_if(ge_floor.Not())
+            model.add(total <= limit).only_enforce_if(le_limit)
+            model.add(total >= limit + 1).only_enforce_if(le_limit.Not())
+            at_target = model.new_bool_var(f"at_target_{instructor}")
+            below_target = model.new_bool_var(f"below_target_{instructor}")
+            above_target = model.new_bool_var(f"above_target_{instructor}")
+            model.add(total == target).only_enforce_if(at_target)
+            model.add(total <= target - 1).only_enforce_if(below_target)
+            model.add(total >= target + 1).only_enforce_if(above_target)
+            model.add(at_target + below_target + above_target == 1)
+            band_penalty = model.new_bool_var(f"near_target_{instructor}")
+            model.add(band_penalty >= ge_floor + le_limit - at_target + active - 2)
+            objective_terms.append(flat * band_penalty)
     return objective_terms

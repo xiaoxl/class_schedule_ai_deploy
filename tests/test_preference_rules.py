@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from class_schedule.class_model import NormalClass, Section
+from class_schedule.class_model import HybridClass, NormalClass, Section
 from class_schedule.schedule_model import (
     PreferenceRecord,
     PreferenceRule,
@@ -50,6 +50,7 @@ class PreferenceRuleMatchesTests(unittest.TestCase):
             course="MATH 1113", section="001", building="Corley", room="101",
             days="MWF", start=datetime.time(9, 0), end=datetime.time(9, 50),
         ))
+
 
     def test_course_must_match(self):
         rule = PreferenceRule(course="MATH 1113")
@@ -118,6 +119,53 @@ class PreferenceRuleMatchesTests(unittest.TestCase):
             "dislike rule -- course MATH 1113; section prefix TC; "
             "room Corley/Hillside; time MWF 08:00-09:00 (weight 30)",
         )
+
+
+class F01PreferenceTests(unittest.TestCase):
+    def _assert_cost(self, item, rule, expected, *, global_rule=False):
+        from class_schedule.solver import SolverConfig
+        from class_schedule.solver.candidates import section_candidates
+        preferences = {} if global_rule else {
+            "Alice": PreferenceRecord(name="Alice", rules=(rule,)),
+        }
+        global_rules = (rule,) if global_rule else ()
+        config = SolverConfig(persons={}, preferences=preferences,
+                              global_rules=global_rules, meeting_patterns=[],
+                              rooms=[], version="test")
+        cost = sum(next(
+            candidate.cost for candidate in section_candidates(
+                item, section, config, max_candidates=None,
+                locked_fields=frozenset({"instructor", "time", "room"}),
+            ) if candidate.instructor == "Alice"
+        ) for section in item.sections)
+        self.assertEqual(cost, expected)
+        penalty, findings = check_soft_preferences(
+            Schedule([item]), preferences, {}, global_rules,
+        )
+        self.assertEqual(penalty, expected if rule.direction == "dislike" else 0)
+        if rule.direction == "dislike":
+            self.assertEqual(len(findings), int(expected / rule.weight))
+
+    def test_general_preferences_score_f01_only_on_physical_row(self):
+        item = HybridClass((make_section(section="F01"),))
+        for direction, expected in (("prefer", -70), ("dislike", 70)):
+            for global_rule in (False, True):
+                with self.subTest(direction=direction, global_rule=global_rule):
+                    self._assert_cost(item, PreferenceRule(
+                        course="MATH 1113", direction=direction, weight=70,
+                    ), expected, global_rule=global_rule)
+
+    def test_explicit_f01_selectors_keep_their_matching_behavior(self):
+        item = HybridClass((make_section(section="F01"),))
+        for selector in ({"section": "F01"}, {"section_prefix": "F"}):
+            self._assert_cost(item, PreferenceRule(
+                course="MATH 1113", weight=20, **selector,
+            ), 40)
+
+    def test_regular_online_course_still_receives_general_preferences(self):
+        item = NormalClass((make_section(section="TC1", time_slot="ONLINE",
+                                         duration=None, room="", building=""),))
+        self._assert_cost(item, PreferenceRule(course="MATH 1113", weight=70), 70)
 
 
 class LoadPreferencesRulesTests(unittest.TestCase):

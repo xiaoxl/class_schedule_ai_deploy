@@ -195,10 +195,18 @@ class WorkloadPenaltiesSchema(StrictModel):
     permissive_overload_per_credit: float = Field(default=10, ge=0)
     strict_overload_per_credit: float = Field(default=100, ge=0)
     far_overload_extra: float = Field(default=50, ge=0)
+    # Flat cost charged once when a load lands inside the tolerance band
+    # (``max_load - underload_tolerance`` .. ``max_load + overload_tolerance``)
+    # but is not exactly ``max_load``. Default 0 keeps the band free.
+    near_target_flat: float = Field(default=0, ge=0)
 
 
 class WorkloadPolicySchema(StrictModel):
     overload_tolerance: float = Field(default=2, ge=0)
+    # Credit hours below max_load that are still inside the tolerance band
+    # rather than counted as underload. Default 0 -> underload starts the
+    # moment a load dips below max_load, as before.
+    underload_tolerance: float = Field(default=0, ge=0)
     hard_load_cap_tolerance: float = Field(default=6, ge=0)
     far_overload_threshold: float = Field(default=4, ge=0)
     penalties: WorkloadPenaltiesSchema = Field(default_factory=WorkloadPenaltiesSchema)

@@ -14,6 +14,7 @@ and CLI solves both use the shared version publisher.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 import os
@@ -29,9 +30,10 @@ from pathlib import Path
 
 import psutil
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 
-from .auto_schedule import run_auto_schedule
+from .auto_schedule import run_auto_schedule, run_best_schedule
 from . import record_utils
 from . import solver as solver_module
 from .class_model import Class
@@ -106,6 +108,12 @@ SOFT_SEVERITY_THRESHOLD = 20.0
 # This bounds CP-SAT search time per Web request; model construction happens
 # before the timed search.
 SOLVE_TIME_LIMIT_SECONDS = 60.0
+
+# "Best Solve": several independent fresh-seeded optimizes from the current
+# schedule, keeping the least-overloaded result (see auto_schedule.run_best_schedule).
+# Worst case runtime is roughly BEST_SOLVE_ATTEMPTS * BEST_SOLVE_TIME_LIMIT_SECONDS.
+BEST_SOLVE_ATTEMPTS = 6
+BEST_SOLVE_TIME_LIMIT_SECONDS = 45.0
 
 logger = logging.getLogger("class_schedule.webapp")
 
@@ -395,6 +403,98 @@ def create_app() -> FastAPI:
             "auto_schedule": {
                 "status": "changed", "attempt_id": run["attempt_id"],
                 "history_count": run["history_count"],
+            },
+            "solver": {
+                "status": solve_result.status.value,
+                "objective": solve_result.objective,
+                "best_bound": solve_result.best_bound,
+                "solve_seconds": solve_result.solve_seconds,
+                "candidate_count": solve_result.candidate_count,
+                "config_version": solve_result.config_version,
+            },
+        }
+
+    @app.get("/api/solve-best/progress/{progress_id}")
+    async def solve_schedule_best_progress(progress_id: str):
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", progress_id):
+            raise HTTPException(400, "Invalid progress id")
+        root = WORK_ROOT / "tmp" / "auto-schedule"
+        matches = sorted(root.glob(f"*/{progress_id}.json")) if root.is_dir() else []
+        if not matches:
+            return {"state": "pending", "tries": [], "attempts_planned": None}
+        try:
+            record = json.loads(matches[-1].read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"state": "pending", "tries": [], "attempts_planned": None}
+        status = record.get("status", "running")
+        return {
+            "state": "done" if status in ("changed", "error") else "running",
+            "status": status,
+            "attempts_planned": record.get("attempts_planned"),
+            "started_at": record.get("started_at"),
+            "tries": [
+                {
+                    "attempt": item.get("attempt"),
+                    "exhaustive": item.get("exhaustive", False),
+                    "solver_status": item.get("status"),
+                    "worst_overload": item.get("worst_overload"),
+                    "soft_penalty": item.get("soft_penalty"),
+                }
+                for item in record.get("tries", [])
+            ],
+        }
+
+    @app.post("/api/solve-best")
+    async def solve_schedule_best(payload: dict):
+        schedule, config = _schedule_from_payload(payload)
+        source = f"{config.package_id} current workspace"
+        progress_id = str(payload.get("progress_id") or "") or None
+        rss_before = _rss_mb()
+        try:
+            # Off the event loop: several 45s CP-SAT passes would otherwise
+            # freeze every other request for minutes.
+            run = await run_in_threadpool(
+                run_best_schedule,
+                schedule, config, root=WORK_ROOT / "tmp" / "auto-schedule",
+                attempts=BEST_SOLVE_ATTEMPTS,
+                seconds=BEST_SOLVE_TIME_LIMIT_SECONDS,
+                compare_template=lambda current: _template_changes_payload(current, config),
+                progress_id=progress_id,
+            )
+        except RuntimeError as error:
+            raise HTTPException(409, str(error)) from error
+        except (solver_module.SolveTimeout, solver_module.InfeasibleSchedule) as error:
+            raise HTTPException(422, f"No feasible schedule found: {error}") from error
+        solve_result = run["result"]
+        solved = solve_result.schedule
+        comparison = run.get("template_changes") or _template_changes_payload(solved, config)
+        changes = comparison.get("changes")
+        violations = _analysis_payload(solved, config)
+        tries = run["tries"]
+        best_overload = min((item["worst_overload"] for item in tries), default=0.0)
+        logger.info(
+            "Best-solved %r (%d classes, %d/%d attempts, worst overload %g, RSS %.1f -> %.1f MB)",
+            source, len(solved), len(tries), BEST_SOLVE_ATTEMPTS, best_overload,
+            rss_before, _rss_mb(),
+        )
+        return {
+            "count": len(solved),
+            "source_name": source,
+            "config_version": config.version,
+            "package_id": config.package_id,
+            "assignment_options": _assignment_options(config),
+            "classes": _serialize_schedule(solved),
+            "violations": violations,
+            "changes": changes,
+            "template_changes": comparison,
+            "auto_schedule": {
+                "status": "changed",
+                "attempt_id": run["attempt_id"],
+                "history_count": len(tries),
+                "message": (
+                    f"Best of {len(tries)} attempt(s); worst instructor "
+                    f"overload {best_overload:g} credit hour(s)."
+                ),
             },
             "solver": {
                 "status": solve_result.status.value,

@@ -153,6 +153,7 @@ The same file owns numeric scheduling policy:
 ```toml
 [workload]
 overload_tolerance = 2
+underload_tolerance = 0
 hard_load_cap_tolerance = 6
 far_overload_threshold = 4
 
@@ -161,6 +162,7 @@ underload_per_credit = 30
 permissive_overload_per_credit = 10
 strict_overload_per_credit = 100
 far_overload_extra = 50
+near_target_flat = 0
 
 [back_to_back]
 penalty = 10
@@ -178,6 +180,23 @@ min_course_number_inclusive = 1914
 allow_back_to_back = true
 ```
 
+`max_load` is a target. A load is scored by its distance from it: exactly on
+target costs nothing; anywhere in the tolerance band
+(`max_load - underload_tolerance` .. `max_load + overload_tolerance`) costs a
+single flat `near_target_flat`; below the band adds `underload_per_credit` per
+missing credit; above it adds the permissive or strict overload rate per
+credit, plus `far_overload_extra` once past `far_overload_threshold`
+(permissive only). `hard_load_cap_tolerance` is a hard ceiling.
+`underload_tolerance` and `near_target_flat` default to `0`, which keeps the
+band free and starts underload the moment a load dips below `max_load`.
+
+Activation is determined by course assignments in code, not by a configuration
+switch. New Instructor and New Professor identities use `contract_load` as the same
+workload target once assigned any course: underload, near-target, overload,
+and target-plus-tolerance hard caps all apply. Unused candidate identities
+have no workload cost. Identity-count and per-credit assignment costs remain
+separate from workload penalties.
+
 `catalogs.toml` is the package credit authority. A missing catalog course,
 invalid input credit, or input/catalog disagreement is an error. A catalog
 entry may omit `credits`, in which case the last course-number digit is its
@@ -188,3 +207,12 @@ All course selectors are cross-validated. Instructor qualifications must referen
 `courses.toml` is the sole desired-offering source. The starting file contributes reusable instructor, time, and room assignments only. `initial` generates `reconciliation.toml`; there is no hand-written cancellation/addition file.
 
 The package name is also the normal work/output namespace. CLI commands reject a different positional term, and the Web output field is read-only and follows the selected package.
+
+### F01 preference matching
+
+Unless a preference explicitly selects F01 through `section` or a matching
+`section_prefix`, score F01 only on its physical meeting. Its derived ONLINE
+companion does not repeat general course, instructor, or global preference
+rewards or penalties. Explicit section selectors retain their existing matching
+behavior. This is a code rule shared by the solver and evaluation, not a
+configuration switch; the stored hybrid rows and hard constraints are unchanged.

@@ -19,6 +19,7 @@ from .schedule_model import (
     evaluate_schedule,
     summarize_instructor_loads,
     teaching_loads,
+    workload_records,
 )
 from .schedule_io import read_schedule
 from .overrides import (
@@ -88,13 +89,17 @@ class RunBundle:
 
 def worst_overload(schedule: Schedule, config: SolverConfig) -> float:
     loads = teaching_loads(schedule)
+    persons, _ = workload_records(
+        loads, config.persons, config.preferences,
+        config.new_instructor_policy, config.new_professor_policy,
+    )
     return max(
         (max(
             0.0,
             loads.get(name, 0.0) - person.max_load
             - config.workload_policy.overload_tolerance,
         )
-         for name, person in config.persons.items()),
+         for name, person in persons.items()),
         default=0.0,
     )
 

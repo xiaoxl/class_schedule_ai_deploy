@@ -766,7 +766,15 @@ class PreferenceRule:
         days: str | None,
         start: datetime.time | None,
         end: datetime.time | None,
+        hybrid_companion: bool = False,
     ) -> bool:
+        # F01 is treated as its physical meeting for ordinary preferences.
+        # Only explicit section selectors can also target its derived row.
+        if (
+            hybrid_companion and section.upper() == "F01"
+            and self.section is None and self.section_prefix is None
+        ):
+            return False
         if self.course is not None and self.course != course:
             return False
         if self.section is not None and self.section != section:
@@ -1411,6 +1419,33 @@ def _class_references_by_instructor(
     return {name: tuple(refs) for name, refs in by_instructor.items()}
 
 
+def workload_records(
+    instructors: Iterable[str],
+    persons: Mapping[str, PersonRecord],
+    preferences: Mapping[str, PreferenceRecord],
+    new_instructor_policy: NewInstructorPolicySchema | None = None,
+    new_professor_policy: NewProfessorPolicySchema | None = None,
+) -> tuple[dict[str, PersonRecord], dict[str, PreferenceRecord]]:
+    """Give active hires contract targets and preferences like named staff."""
+    effective_persons = {
+        name: person for name, person in persons.items()
+        if not (is_new_instructor(name) or is_new_professor(name))
+    }
+    effective_preferences = dict(preferences)
+    for name in set(instructors):
+        if is_new_instructor(name):
+            policy = new_instructor_policy or NewInstructorPolicySchema()
+        elif is_new_professor(name):
+            policy = new_professor_policy or NewProfessorPolicySchema()
+        else:
+            continue
+        effective_persons[name] = PersonRecord(name=name, max_load=policy.contract_load)
+        effective_preferences[name] = PreferenceRecord(
+            name=name, allow_back_to_back=policy.allow_back_to_back,
+        )
+    return effective_persons, effective_preferences
+
+
 def check_soft_preferences(
     schedule: "Schedule",
     preferences: dict[str, PreferenceRecord],
@@ -1418,6 +1453,8 @@ def check_soft_preferences(
     global_rules: tuple[PreferenceRule, ...] = (),
     workload_policy: WorkloadPolicySchema | None = None,
     back_to_back_policy: BackToBackPolicySchema | None = None,
+    new_instructor_policy: NewInstructorPolicySchema | None = None,
+    new_professor_policy: NewProfessorPolicySchema | None = None,
 ) -> tuple[float, list[SoftFinding]]:
     """Score a schedule against preferences.toml.
 
@@ -1437,6 +1474,10 @@ def check_soft_preferences(
     """
     workload_policy = workload_policy or WorkloadPolicySchema()
     back_to_back_policy = back_to_back_policy or BackToBackPolicySchema()
+    persons, preferences = workload_records(
+        (section.instructor for item in schedule for section in item.sections),
+        persons, preferences, new_instructor_policy, new_professor_policy,
+    )
     class_refs = _class_references_by_instructor(schedule)
     findings: list[SoftFinding] = [
         SoftFinding(
@@ -1454,7 +1495,8 @@ def check_soft_preferences(
     loads = teaching_loads(schedule)
     for instructor, person in sorted(persons.items()):
         load = loads.get(instructor, 0.0)
-        deficit = person.max_load - load
+        under_floor = person.max_load - workload_policy.underload_tolerance
+        deficit = under_floor - load
         if deficit > 0:
             findings.append(SoftFinding(
                 "under_load", instructor,
@@ -1464,6 +1506,22 @@ def check_soft_preferences(
                 # Legitimately empty for an instructor currently teaching
                 # nothing (see docs/codes.md) -- the web UI still falls
                 # back to a plain instructor-tab link via `subject` then.
+                references=class_refs.get(instructor, ()),
+            ))
+        elif (
+            workload_policy.penalties.near_target_flat
+            and abs(load - person.max_load) > 1e-9
+            and load <= person.max_load + workload_policy.overload_tolerance
+        ):
+            # Inside the tolerance band [max_load - underload_tolerance,
+            # max_load + overload_tolerance] but not exactly on contract --
+            # a flat cost, mirroring add_load_terms' band penalty so the
+            # web UI's reported total matches what the solver optimized.
+            findings.append(SoftFinding(
+                "near_target", instructor,
+                f"{instructor}: {load:g} credit hours is off max_load "
+                f"{person.max_load:g} but within the tolerance band",
+                workload_policy.penalties.near_target_flat,
                 references=class_refs.get(instructor, ()),
             ))
 
@@ -1486,6 +1544,10 @@ def check_soft_preferences(
                 course=course, section=section.section,
                 building=section.building, room=section.room,
                 days=section.days, start=section.start, end=section.end,
+                hybrid_companion=(
+                    isinstance(schedule.classes[ref.class_index], HybridClass)
+                    and section.is_online
+                ),
             ):
                 findings.append(SoftFinding(
                     "custom_rule", section.instructor,
@@ -1533,14 +1595,7 @@ def check_workload_hard_caps(
     new_instructor_policy: NewInstructorPolicySchema | None = None,
     new_professor_policy: NewProfessorPolicySchema | None = None,
 ) -> list[HardViolation]:
-    """Report loads the solver would never actually produce: a hard cap
-    a configured instructor's ``hard_load_cap_tolerance`` allows no
-    further leeway past, or a New Instructor/New Professor identity's
-    contract load (which the solver enforces with *no* tolerance at all,
-    unlike a configured person -- see ``add_load_terms``). Distinct rules
-    (``hard_load_cap`` vs ``new_hire_contract_load``) since they're
-    different caps for different reasons, even though both come from the
-    same underlying per-instructor totals.
+    """Report loads above target + hard_load_cap_tolerance for all staff.
 
     Uses ``teaching_loads()``/``_class_references_by_instructor()`` --
     the same "every distinct instructor named anywhere in a class counts
@@ -1558,22 +1613,19 @@ def check_workload_hard_caps(
     new_instructor_policy = new_instructor_policy or NewInstructorPolicySchema()
     new_professor_policy = new_professor_policy or NewProfessorPolicySchema()
     totals = teaching_loads(schedule)
+    persons, _ = workload_records(
+        totals, persons, {}, new_instructor_policy, new_professor_policy,
+    )
     references = _class_references_by_instructor(schedule)
     violations: list[HardViolation] = []
     for instructor, load in sorted(totals.items()):
-        if is_new_instructor(instructor):
-            cap, rule = new_instructor_policy.contract_load, "new_hire_contract_load"
-        elif is_new_professor(instructor):
-            cap, rule = new_professor_policy.contract_load, "new_hire_contract_load"
-        else:
-            person = persons.get(instructor)
-            if person is None:
-                continue
-            cap = person.max_load + workload_policy.hard_load_cap_tolerance
-            rule = "hard_load_cap"
+        person = persons.get(instructor)
+        if person is None:
+            continue
+        cap = person.max_load + workload_policy.hard_load_cap_tolerance
         if load > cap:
             violations.append(HardViolation(
-                rule, instructor,
+                "hard_load_cap", instructor,
                 f"{instructor}: {load:g} credit hours exceeds the hard "
                 f"cap of {cap:g}",
                 references=references.get(instructor, ()),
@@ -1673,6 +1725,7 @@ def evaluate_schedule(
     soft_penalty, soft_findings = check_soft_preferences(
         schedule, preferences, persons, global_rules,
         workload_policy, back_to_back_policy,
+        new_instructor_policy, new_professor_policy,
     )
     return ScheduleEvaluation(
         atomic_classes=len(schedule),
@@ -1736,6 +1789,9 @@ def _weekly_workbook(
     hard_violations=(), soft_findings=(),
 ) -> Workbook:
     """``group`` is ``"instructor"`` or ``"room"``."""
+    # Near-target deviations affect optimization, but are not report warnings.
+    # Filter once so the Issues sheet, highlights and comments agree.
+    soft_findings = tuple(f for f in soft_findings if f.rule != "near_target")
     # Keep each section paired with the atomic class (``Class``) it came
     # from -- ``_build_weekly_sheet`` needs that to tell a real
     # double-booking from a HybridClass/CrossListingClass companion

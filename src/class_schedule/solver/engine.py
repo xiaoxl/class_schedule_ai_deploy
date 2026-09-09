@@ -9,7 +9,7 @@ from ortools.sat.python import cp_model
 from ..class_model import Section
 from ..overrides import LockMap, locks_for_section
 from ..schedule_model import Schedule
-from ..schedule_model import PersonRecord, PreferenceRecord
+from ..schedule_model import workload_records
 from ..initial_builder import is_placeholder_instructor, recolor_placeholder
 from ..instructor_identity import (
     is_new_professor, new_instructor_name, new_instructor_rank,
@@ -150,36 +150,14 @@ def solve_detailed(
         class_list, sections, sections_by_class, candidates, chosen, model
     )
     slots = build_slots(sections, owner, candidates)
-    effective_preferences = dict(config.preferences)
-    effective_preferences.update({
-        name: PreferenceRecord(
-            name=name,
-            allow_back_to_back=config.new_instructor_policy.allow_back_to_back,
-        ) for name in placeholder_instructors
-    })
-    effective_preferences.update({
-        name: PreferenceRecord(
-            name=name,
-            allow_back_to_back=config.new_professor_policy.allow_back_to_back,
-        ) for name in new_professors
-    })
+    effective_persons, effective_preferences = workload_records(
+        placeholder_instructors + new_professors, config.persons, config.preferences,
+        config.new_instructor_policy, config.new_professor_policy,
+    )
     back_to_back_terms = add_scheduling_constraints(
         slots, chosen, effective_preferences, model,
         back_to_back_penalty=config.back_to_back_policy.penalty,
     )
-    effective_persons = dict(config.persons)
-    effective_persons.update({
-        name: PersonRecord(
-            name=name, max_load=config.new_instructor_policy.contract_load
-        )
-        for name in placeholder_instructors
-    })
-    effective_persons.update({
-        name: PersonRecord(
-            name=name, max_load=config.new_professor_policy.contract_load
-        )
-        for name in new_professors
-    })
     load_terms = add_load_terms(
         class_list, sections_by_class, candidates, chosen,
         effective_persons, effective_preferences, model,

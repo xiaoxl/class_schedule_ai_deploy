@@ -10,6 +10,7 @@ from class_schedule.class_model import (
 )
 from class_schedule.config_schema import (
     CourseRelationshipSchema, NewInstructorPolicySchema, NewProfessorPolicySchema,
+    WorkloadPenaltiesSchema, WorkloadPolicySchema,
 )
 from class_schedule.instructor_identity import new_instructor_name, new_professor_name
 from class_schedule.schedule_model import (
@@ -20,6 +21,7 @@ from class_schedule.schedule_model import (
     PreferenceRecord,
     RecordReference,
     Schedule,
+    SoftFinding,
     TimeWindow,
     check_atomic_class_rules,
     check_conflicts,
@@ -734,6 +736,71 @@ class UnderloadPenaltyTests(unittest.TestCase):
         self.assertEqual(underload.references, ())
 
 
+class NearTargetBandTests(unittest.TestCase):
+    """near_target_flat: one flat charge for a load inside the tolerance
+    band [max_load - underload_tolerance, max_load + overload_tolerance]
+    that is not exactly max_load. underload_tolerance widens the band's
+    lower edge; below it the underload ramp takes over. Mirrors
+    solver/constraints.py's add_load_terms."""
+
+    policy = WorkloadPolicySchema(
+        overload_tolerance=2,
+        underload_tolerance=1,
+        penalties=WorkloadPenaltiesSchema(
+            underload_per_credit=20,
+            permissive_overload_per_credit=20,
+            near_target_flat=5,
+        ),
+    )
+
+    def _findings(self, hours):
+        schedule = _schedule_with_load(hours)
+        persons = {"Alice": PersonRecord(name="Alice", max_load=10)}
+        preferences = {"Alice": PreferenceRecord(name="Alice", allow_overload=True)}
+        _, findings = check_soft_preferences(
+            schedule, preferences, persons, workload_policy=self.policy,
+        )
+        return findings
+
+    def test_exactly_on_contract_is_free(self):
+        findings = self._findings([4, 3, 3])  # 10
+        self.assertFalse(any(
+            f.rule in {"near_target", "under_load", "overload"} for f in findings
+        ))
+
+    def test_one_credit_under_is_a_flat_band_charge_not_underload(self):
+        findings = self._findings([3, 3, 3])  # 9, one under
+        self.assertFalse(any(f.rule == "under_load" for f in findings))
+        band = next(f for f in findings if f.rule == "near_target")
+        self.assertEqual(band.penalty, 5)
+
+    def test_two_credits_over_is_a_flat_band_charge_not_overload(self):
+        findings = self._findings([4, 4, 4])  # 12, two over
+        self.assertFalse(any(f.rule == "overload" for f in findings))
+        band = next(f for f in findings if f.rule == "near_target")
+        self.assertEqual(band.penalty, 5)
+
+    def test_below_the_band_is_underload_measured_from_the_widened_floor(self):
+        findings = self._findings([3, 3])  # 6; floor is 9, so deficit 3
+        self.assertFalse(any(f.rule == "near_target" for f in findings))
+        underload = next(f for f in findings if f.rule == "under_load")
+        self.assertEqual(underload.penalty, 60)  # 3 * 20
+
+    def test_above_the_band_is_overload_past_plus_two(self):
+        findings = self._findings([4, 4, 5])  # 13, three over
+        self.assertFalse(any(f.rule == "near_target" for f in findings))
+        overload = next(f for f in findings if f.rule == "overload")
+        self.assertEqual(overload.penalty, 20)  # 1 * 20
+
+    def test_flat_band_is_off_by_default(self):
+        schedule = _schedule_with_load([3, 3, 3])  # 9, one under max_load 10
+        persons = {"Alice": PersonRecord(name="Alice", max_load=10)}
+        _, findings = check_soft_preferences(schedule, {}, persons)
+        self.assertFalse(any(f.rule == "near_target" for f in findings))
+        underload = next(f for f in findings if f.rule == "under_load")
+        self.assertEqual(underload.penalty, 30)  # default: no tolerance, 30/credit
+
+
 class CheckWorkloadHardCapsTests(unittest.TestCase):
     """Plan A (see docs/codes.md): mirrors solver/constraints.py's
     add_load_terms exactly -- each class's full credit_hours attributed
@@ -759,26 +826,18 @@ class CheckWorkloadHardCapsTests(unittest.TestCase):
             {(0, 0), (1, 0)},
         )
 
-    def test_new_instructor_contract_load_has_no_tolerance(self):
+    def test_new_instructor_uses_the_same_hard_cap_tolerance(self):
         name = new_instructor_name(1)
-        schedule = _schedule_with_load([9, 6], instructor=name)  # 15 total
         policy = NewInstructorPolicySchema(contract_load=15)
-        # Exactly at the cap is fine...
-        self.assertEqual(
-            [v for v in check_workload_hard_caps(
-                schedule, {}, new_instructor_policy=policy,
-            ) if v.rule == "new_hire_contract_load"],
-            [],
-        )
-        # ...one credit hour over is not, unlike a configured instructor
-        # (who'd still have hard_load_cap_tolerance=6 of room left).
-        over_schedule = _schedule_with_load([9, 7], instructor=name)  # 16 total
-        violations = check_workload_hard_caps(
-            over_schedule, {}, new_instructor_policy=policy,
-        )
-        capped = [v for v in violations if v.rule == "new_hire_contract_load"]
-        self.assertEqual(len(capped), 1)
-        self.assertEqual(capped[0].subject, name)
+        for hours, expected in (([9, 6], 0), ([9, 7], 0), ([9, 9, 3], 0), ([9, 9, 4], 1)):
+            violations = check_workload_hard_caps(
+                _schedule_with_load(hours, instructor=name), {},
+                new_instructor_policy=policy,
+            )
+            self.assertEqual(len(violations), expected)
+            if expected:
+                self.assertEqual(violations[0].rule, "hard_load_cap")
+                self.assertEqual(violations[0].subject, name)
 
     def test_diverging_cross_listing_load_is_charged_to_every_instructor(self):
         # solver/constraints.py's add_load_terms was fixed to count every
@@ -843,6 +902,31 @@ class CheckNewHireCountsTests(unittest.TestCase):
 
 
 class WorkbookIssueTests(unittest.TestCase):
+    def test_near_target_is_hidden_from_issue_rows_highlights_and_comments(self):
+        schedule = Schedule.from_records([make_record(Instructor="Alice")])
+        refs = (RecordReference(0, 0, "MATH 1113-001"),)
+        band = SoftFinding("near_target", "Alice", "Within band", 5, references=refs)
+        other = SoftFinding("custom_rule", "Alice", "Other preference", 10, references=refs)
+        with tempfile.TemporaryDirectory() as folder:
+            for export in (schedule.to_instructor_excel, schedule.to_room_excel):
+                for findings in ((band,), (band, other)):
+                    with self.subTest(export=export.__name__, mixed=len(findings) > 1):
+                        path = Path(folder) / "schedule.xlsx"
+                        export(path, soft_findings=findings)
+                        workbook = load_workbook(path)
+                        cells = [cell for ws in workbook for row in ws for cell in row]
+                        self.assertFalse(any("Within band" in str(c.value or "") for c in cells))
+                        self.assertFalse(any(c.comment and "Within band" in c.comment.text for c in cells))
+                        if len(findings) == 1:
+                            self.assertNotIn("Issues", workbook.sheetnames)
+                            self.assertFalse(any(c.comment for c in cells))
+                            self.assertFalse(any(c.fill.fgColor.rgb == "00FFD966" for c in cells))
+                        else:
+                            self.assertEqual(workbook["Issues"].max_row, 2)
+                            self.assertEqual(workbook["Issues"]["B2"].value, "custom_rule")
+                            self.assertTrue(any(c.comment and "Other preference" in c.comment.text for c in cells))
+                        workbook.close()
+
     def test_weekly_workbook_lists_and_highlights_structured_issues(self):
         schedule = Schedule.from_records([make_record(Instructor="Alice")])
         violation = HardViolation(

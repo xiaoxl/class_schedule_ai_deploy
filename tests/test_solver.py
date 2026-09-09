@@ -12,6 +12,8 @@ from class_schedule.class_model import (
 from class_schedule.config_schema import (
     NewInstructorPolicySchema,
     NewProfessorPolicySchema,
+    WorkloadPenaltiesSchema,
+    WorkloadPolicySchema,
 )
 from class_schedule.schedule_model import (
     ConstraintRule,
@@ -417,6 +419,7 @@ class SolveAdjustsPlaceholderCountTests(unittest.TestCase):
             preferences={
                 "Bob": PreferenceRecord(name="Bob", allow_overload=True),
             },
+            new_instructor_policy=NewInstructorPolicySchema(contract_load=3),
             staff_count_weight=10,
             staff_credit_weight=5,
         )
@@ -428,6 +431,48 @@ class SolveAdjustsPlaceholderCountTests(unittest.TestCase):
 
         self.assertEqual(
             solved.get("MATH 1113-002").sections[0].instructor, "new_instructor"
+        )
+
+    def test_flat_band_penalty_can_push_a_class_onto_new_instructor(self):
+        # Bob's contract is 4. Teaching both 3-credit classes puts him at 6 --
+        # inside the +2 tolerance band but off contract. With near_target_flat
+        # at 0 that lands free and Bob keeps both; a steep near_target_flat
+        # makes it worse than shedding one class to new_instructor (which
+        # leaves Bob one credit under, a cheaper charge).
+        a = NormalClass((make_section(
+            number="1113", section="001", instructor="Staff", credits=3,
+            time_slot="MWF 9:00am", room="101",
+        ),))
+        b = NormalClass((make_section(
+            number="1113", section="002", instructor="Staff", credits=3,
+            time_slot="MWF 10:00am", room="102",
+        ),))
+        base = dict(
+            persons={"Bob": PersonRecord(
+                name="Bob", max_load=4, courses=("MATH 1113",),
+            )},
+            preferences={"Bob": PreferenceRecord(name="Bob", allow_overload=True)},
+            new_instructor_policy=NewInstructorPolicySchema(contract_load=3),
+            staff_count_weight=1,
+            staff_credit_weight=1,
+        )
+
+        free_band = empty_config(**base, workload_policy=WorkloadPolicySchema(
+            penalties=WorkloadPenaltiesSchema(near_target_flat=0),
+        ))
+        kept = solve(Schedule([a, b]), free_band, time_limit_seconds=10.0)
+        self.assertEqual(
+            {s.instructor for item in kept.classes for s in item.sections},
+            {"Bob"},
+        )
+
+        steep_band = empty_config(**base, workload_policy=WorkloadPolicySchema(
+            penalties=WorkloadPenaltiesSchema(near_target_flat=200),
+        ))
+        shed = solve(Schedule([a, b]), steep_band, time_limit_seconds=10.0)
+        self.assertIn(
+            "new_instructor",
+            {s.instructor for item in shed.classes for s in item.sections},
         )
 
     def test_collapses_numbered_staff_when_times_do_not_conflict(self):
@@ -452,7 +497,7 @@ class SolveAdjustsPlaceholderCountTests(unittest.TestCase):
         b = NormalClass((make_section(
             number="2103", section="002", instructor="Staff", room="102",
         ),))
-        solved = solve(Schedule([a, b]), empty_config(), time_limit_seconds=10.0)
+        solved = solve(Schedule([a, b]), empty_config(new_professor_policy=NewProfessorPolicySchema(allowed_counts=[0])), time_limit_seconds=10.0)
         instructors = {
             s.instructor for item in solved.classes for s in item.sections
         }

@@ -6,7 +6,7 @@ import datetime
 from dataclasses import replace
 
 from .. import record_utils
-from ..class_model import Class, Section
+from ..class_model import Class, HybridClass, Section
 from ..new_instructors import can_new_instructor_teach, can_new_professor_teach
 from ..instructor_identity import is_new_instructor, is_new_professor
 from ..pattern_rules import pattern_applies, section_pattern_role
@@ -79,6 +79,7 @@ def preference_cost(
     section: str,
     preferences: dict[str, PreferenceRecord],
     global_rules: tuple[PreferenceRule, ...] = (),
+    *, hybrid_companion: bool = False,
 ) -> float:
     preference = preferences.get(instructor)
     cost = 0.0
@@ -89,6 +90,7 @@ def preference_cost(
         if rule.matches(
             course=course, section=section, building=building, room=room,
             days=days, start=start, end=end,
+            hybrid_companion=hybrid_companion,
         ):
             cost += rule.signed_weight
     return cost
@@ -104,6 +106,7 @@ def section_candidates(
     new_professors: tuple[str, ...] = (),
 ) -> list[SectionCandidate]:
     course = f"{section.subject} {section.number}"
+    hybrid_companion = isinstance(item, HybridClass) and section.is_online
     current = SectionCandidate(
         instructor=section.instructor,
         time_slot=section.time_slot,
@@ -117,6 +120,7 @@ def section_candidates(
             section.instructor, section.days, section.start, section.end,
             section.building, section.room, course, section.section,
             config.preferences, config.global_rules,
+            hybrid_companion=hybrid_companion,
         ),
     )
     constraints = config.constraints_for(course, section.section)
@@ -164,6 +168,7 @@ def section_candidates(
                 + preference_cost(
                     instructor, None, None, None, section.building, section.room,
                     course, section.section, config.preferences, config.global_rules,
+                    hybrid_companion=hybrid_companion,
                 ),
             )
             for instructor in instructors
