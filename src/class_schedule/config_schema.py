@@ -217,6 +217,12 @@ class WorkloadPolicySchema(StrictModel):
     light: list[int] = Field(default_factory=list)
     # A load above `max_load + hard_load_cap_tolerance` is hard-infeasible.
     hard_load_cap_tolerance: float = Field(default=6, ge=0)
+    # Every workload penalty (light + heavy, over + under) for a New
+    # Instructor / New Professor identity is multiplied by this. < 1 makes
+    # the solver prefer to put unavoidable under/overload on a new hire
+    # rather than a named instructor. 1.0 (default) treats them alike.
+    # Does not touch the hard cap or the identity-count policy.
+    new_hire_penalty_scale: float = Field(default=1.0, ge=0)
     penalties: WorkloadPenaltiesSchema = Field(default_factory=WorkloadPenaltiesSchema)
 
     @field_validator("ok", "light")

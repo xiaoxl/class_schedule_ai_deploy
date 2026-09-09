@@ -1753,6 +1753,15 @@ hard-infeasible) and must be `>= max(|k| for k in ok + light)`.
 helpers (`schedule_run.worst_overload`, `auto_schedule._rank_schedule`) --
 ranking only, never scoring.
 
+`WorkloadPolicySchema.new_hire_penalty_scale` (default `1.0`) multiplies
+every workload penalty (light + heavy, over + under) for a
+`is_new_instructor` / `is_new_professor` identity, in both mirrors. Below
+`1.0` it makes the solver shed unavoidable under/overload onto a new hire
+before a named instructor. Deliberately *not* applied to `worst_overload`
+/ `_rank_schedule` (those measure a schedule's worst overload regardless of
+who carries it) or to `add_placeholder_load_terms` (the separate
+identity-count/credit cost). 27Sv2 sets it to `0.5`.
+
 ## Web workload panel colours
 
 `summarize_instructor_loads` now takes the whole `policy` and keys `state`
@@ -1777,3 +1786,40 @@ to the new field names).
 New/rewritten tests: `WorkloadTierTests` + `WorkloadHeavyReferenceTests`
 (`tests/test_schedule_model.py`), `test_solver_load_cost_matches_the_tier_model`
 (`tests/test_solver.py`), and the `test_new_hire_workload` parity table.
+
+---
+
+# Save New Version also forks a configuration package
+
+*Added 2026-09-09.*
+
+`POST /api/save` (the browser "Save New Version") still publishes the
+immutable `output/<term>/verN/` bundle exactly as before. It now *also*,
+after that bundle is committed, copies the current package into a new one:
+
+- `_fork_configuration_from_schedule(source_package, schedule, base_name)`
+  in `webapp.py`. Under `_CONFIG_WRITE_LOCK`: stage-copy the seven
+  `CONFIG_FILES` from `config/<term>/` into `config/<new>/` (keeping the
+  `basicinfo/` layout), rewriting each file's `# Configuration package:`
+  line to the new name via `_retarget_package_comment` (adding one if the
+  file had none) so a later edit of the fork routes back to itself, not to
+  `<term>`; `staging.replace(new_root)`; then `install_template` with the
+  just-saved schedule CSV as the fork's schedule template and
+  `rebuild_work_views` so it is immediately `ready` + `working_view_ready`.
+- Name: `_next_available_package_name(f"{term}_{version}")` -> `27Sv2_ver9`,
+  `27Sv2_ver9-2`, ...
+- Best effort: the publication is already durable, so a fork failure is
+  caught, logged, and returned as `fork_error` (not raised). The response
+  gains `forked_package` / `fork_error`; the save-button handler in
+  `app.js`, on `forked_package`, calls `loadPackages()`, points
+  `#packageSelect` / `#termInput` at it, `setWorkspace("schedule")`, and
+  `loadSchedule()` -- so the view lands on the new package.
+
+Drive-by fix: `save_schedule_version` was calling a bare
+`evaluate_schedule(...)` that `webapp.py` never imported (left behind by
+the `EvaluationContext` refactor) -- every browser Save New Version 500'd
+with `NameError`. Now uses the existing `_evaluate_current_schedule`
+helper like the rest of the module.
+
+Tests: `ForkConfigurationTests` (`tests/test_configuration_web.py`, seeded
+from `config/27Sv2` so it runs locally).

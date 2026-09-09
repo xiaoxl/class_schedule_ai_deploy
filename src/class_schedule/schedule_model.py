@@ -1443,6 +1443,15 @@ def check_soft_preferences(
         load = loads.get(instructor, 0.0)
         d = load - person.max_load
         tier = workload_policy.tier(d)
+        # New Instructor / New Professor identities carry a discounted
+        # workload penalty (see WorkloadPolicySchema.new_hire_penalty_scale)
+        # so unavoidable under/overload lands on them, not a named
+        # instructor. Mirrors solver/constraints.py's add_load_terms.
+        scale = (
+            workload_policy.new_hire_penalty_scale
+            if is_new_instructor(instructor) or is_new_professor(instructor)
+            else 1.0
+        )
         # Legitimately empty for an instructor currently teaching nothing
         # (see docs/codes.md) -- the web UI still falls back to a plain
         # instructor-tab link via `subject` then.
@@ -1454,7 +1463,7 @@ def check_soft_preferences(
                 "near_target", instructor,
                 f"{instructor}: {load:g} credit hours is {d:+g} off max_load "
                 f"{person.max_load:g}",
-                workload_policy.penalties.light_penalty,
+                workload_policy.penalties.light_penalty * scale,
                 references=refs,
             ))
             continue
@@ -1470,7 +1479,7 @@ def check_soft_preferences(
                 "overload", instructor,
                 f"{instructor}: {load:g} credit hours exceeds max_load "
                 f"{person.max_load:g}",
-                unit * abs(d),
+                unit * abs(d) * scale,
                 references=refs,
             ))
         else:
@@ -1478,7 +1487,7 @@ def check_soft_preferences(
                 "under_load", instructor,
                 f"{instructor}: {load:g} credit hours is under max_load "
                 f"{person.max_load:g}",
-                workload_policy.penalties.heavy_unit_under * abs(d),
+                workload_policy.penalties.heavy_unit_under * abs(d) * scale,
                 references=refs,
             ))
 

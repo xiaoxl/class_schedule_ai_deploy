@@ -727,12 +727,7 @@ def create_app() -> FastAPI:
             )
         except (GroupingError, ValueError) as error:
             raise HTTPException(400, str(error)) from error
-        evaluation = evaluate_schedule(
-            schedule, config.preferences, config.persons, config.global_rules,
-            config.meeting_patterns, config.constraint_rules,
-            config.workload_policy, config.back_to_back_policy,
-            config.new_instructor_policy, config.new_professor_policy,
-        )
+        evaluation = _evaluate_current_schedule(schedule, config)
         # Hard violations never block publication (see docs/codes.md) -- they
         # are recorded in the report/manifest and returned below instead, so
         # a version can always be saved and inspected, never refused.
@@ -812,11 +807,30 @@ def create_app() -> FastAPI:
             "Published browser schedule as %s/%s (%d hard violation(s))",
             term, version, len(evaluation.hard_violations),
         )
+        # Additionally fork a new configuration package: copy this package's
+        # source TOMLs and seed it with the schedule just published as its
+        # template, so the saved version becomes an editable baseline. Best
+        # effort -- the publication above is already committed, so a fork
+        # failure is surfaced, not raised.
+        forked_package = None
+        fork_error = None
+        try:
+            forked_package = _fork_configuration_from_schedule(
+                source_package=package, schedule=schedule,
+                base_name=f"{term}_{version}",
+            )
+        except Exception as error:  # noqa: BLE001 -- must not fail the save
+            fork_error = str(error)
+            logger.warning(
+                "Configuration fork for %s/%s failed: %s", term, version, error,
+            )
         return {
             "term": term, "version": version,
             "output_dir": str(paths.output_dir),
             "schedule_path": str(paths.schedule_path),
             "hard_violations": [_serialize_hard(v) for v in evaluation.hard_violations],
+            "forked_package": forked_package,
+            "fork_error": fork_error,
         }
 
     app.mount("/", _NoCacheStaticFiles(directory=PACKAGE_WEB, html=True), name="web")
@@ -856,6 +870,63 @@ def _next_available_package_name(base: str) -> str:
     while (CONFIG_DIR / f"{base}-{rank}").exists():
         rank += 1
     return f"{base}-{rank}"
+
+
+def _retarget_package_comment(text: str, package: str) -> str:
+    """Point a copied TOML's ``# Configuration package: NAME`` line at
+    ``package`` (adding one if absent) so a later edit of the forked
+    package routes back to itself, not the package it was copied from."""
+    line = f"# Configuration package: {package}"
+    if PACKAGE_COMMENT.search(text):
+        return PACKAGE_COMMENT.sub(line, text, count=1)
+    return f"{line}\n{text}"
+
+
+def _fork_configuration_from_schedule(
+    *, source_package: str, schedule: Schedule, base_name: str,
+) -> str:
+    """Copy ``source_package``'s source TOMLs into a fresh package named
+    after ``base_name`` (collision-suffixed), seed it with ``schedule`` as
+    its schedule template, build its working views, and return its name."""
+    with _CONFIG_WRITE_LOCK:
+        source_root = _package_root(source_package)
+        clean = re.sub(r"[^A-Za-z0-9_-]+", "_", base_name).strip("_-")
+        new_name = _next_available_package_name(clean or source_package)
+        new_root = CONFIG_DIR / new_name
+        staging = CONFIG_DIR / f".{new_name}-forkstaging-{uuid.uuid4().hex}"
+        try:
+            copied = 0
+            for filename, relative in CONFIG_FILES.items():
+                source = source_root / relative
+                if not source.is_file():
+                    continue
+                target = staging / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(
+                    _retarget_package_comment(
+                        source.read_text(encoding="utf-8-sig"), new_name,
+                    ),
+                    encoding="utf-8",
+                )
+                copied += 1
+            if not copied:
+                raise RuntimeError(f"{source_package} has no configuration files to copy")
+            staging.replace(new_root)
+        except Exception:
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+            raise
+        try:
+            template_bytes = (
+                schedule.to_dataframe().to_csv(index=False).encode("utf-8")
+            )
+            install_template(new_root, f"{new_name}.csv", template_bytes)
+            rebuild_work_views(new_root, config_root=CONFIG_DIR, work_root=WORK_ROOT)
+        except Exception:
+            shutil.rmtree(new_root, ignore_errors=True)
+            raise
+        logger.info("Forked configuration %s -> %s", source_package, new_name)
+        return new_name
 
 
 def _infer_uploaded_template(

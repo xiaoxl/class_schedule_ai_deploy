@@ -776,5 +776,71 @@ class AutomaticWorkspaceRefreshTests(unittest.TestCase):
         self.assertTrue(differences["error"])
 
 
+class ForkConfigurationTests(unittest.TestCase):
+    """`_fork_configuration_from_schedule` copies a package's source TOMLs
+    into a new package, retargets the `# Configuration package:` comment,
+    installs the given schedule as its template, and builds work views."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.config_root = Path(self.temporary.name) / "config"
+        source = Path(__file__).parents[1] / "config" / "27Sv2"
+        if not source.is_dir():
+            self.skipTest("config/27Sv2 not present")
+        shutil.copytree(source, self.config_root / "27Sv2")
+        self.patches = [
+            patch.object(webapp, "CONFIG_DIR", self.config_root),
+            patch.object(webapp, "WORK_ROOT", Path(self.temporary.name) / "work"),
+        ]
+        for patcher in self.patches:
+            patcher.start()
+
+    def tearDown(self):
+        for patcher in self.patches:
+            patcher.stop()
+        self.temporary.cleanup()
+
+    def _schedule(self):
+        from class_schedule.schedule_io import read_schedule
+
+        config = SolverConfig.load(self.config_root, package="27Sv2")
+        template = next((self.config_root / "27Sv2" / "template").glob("*.csv"))
+        return read_schedule(
+            template, persons=config.persons,
+            relationships=tuple(config.courses.active_relationships) if config.courses else (),
+            catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
+        )
+
+    def test_fork_copies_retargets_seeds_and_is_loadable(self):
+        schedule = self._schedule()
+        name = webapp._fork_configuration_from_schedule(
+            source_package="27Sv2", schedule=schedule, base_name="27Sv2_ver9",
+        )
+        self.assertEqual(name, "27Sv2_ver9")
+        root = self.config_root / "27Sv2_ver9"
+        for relative in webapp.CONFIG_FILES.values():
+            self.assertTrue((root / relative).is_file(), relative)
+        constraints = (root / "constraints.toml").read_text(encoding="utf-8")
+        self.assertIn("# Configuration package: 27Sv2_ver9", constraints)
+        self.assertNotIn("# Configuration package: 27Sv2\n", constraints)
+        self.assertTrue((root / "template" / "27Sv2_ver9.csv").is_file())
+        forked = SolverConfig.load(self.config_root, package="27Sv2_ver9")
+        self.assertTrue(forked.version)
+        self.assertEqual(
+            webapp._configuration_summary("27Sv2_ver9")["status"], "ready",
+        )
+
+    def test_fork_name_collision_gets_a_suffix(self):
+        schedule = self._schedule()
+        first = webapp._fork_configuration_from_schedule(
+            source_package="27Sv2", schedule=schedule, base_name="27Sv2_ver9",
+        )
+        second = webapp._fork_configuration_from_schedule(
+            source_package="27Sv2", schedule=schedule, base_name="27Sv2_ver9",
+        )
+        self.assertEqual(first, "27Sv2_ver9")
+        self.assertEqual(second, "27Sv2_ver9-2")
+
+
 if __name__ == "__main__":
     unittest.main()

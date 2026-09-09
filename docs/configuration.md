@@ -184,6 +184,7 @@ The same file owns numeric scheduling policy:
 ok = [0, 1]
 light = [2]
 hard_load_cap_tolerance = 6
+new_hire_penalty_scale = 0.5
 
 [workload.penalties]
 light_penalty = 5
@@ -221,6 +222,12 @@ A load above `max_load + hard_load_cap_tolerance` is hard-infeasible;
 `hard_load_cap_tolerance` must be at least the largest `|d|` listed in
 `ok`/`light`. `ok`/`light` default to `[0]`/`[]` and every penalty defaults
 low, so an unset policy prices any deviation as a mild heavy overload/underload.
+
+`new_hire_penalty_scale` (default `1.0`) multiplies every workload penalty
+above — light and heavy, over and under — for a New Instructor / New
+Professor identity. Set it below `1.0` to make the solver put unavoidable
+under/overload on a new hire before a named instructor. It does not affect
+the hard cap or the identity-count policy.
 
 Activation is determined by course assignments in code, not by a configuration
 switch. New Instructor and New Professor identities use `contract_load` as the

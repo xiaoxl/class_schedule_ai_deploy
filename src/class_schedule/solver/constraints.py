@@ -408,9 +408,17 @@ def add_load_terms(
             if preference.allow_overload
             else policy.penalties.heavy_unit_over_strict
         )
-        objective_terms.append((over_unit / scale) * over_heavy)
-        objective_terms.append(
-            (policy.penalties.heavy_unit_under / scale) * under_heavy
+        # New hires carry a discounted workload penalty so the solver
+        # sheds unavoidable under/overload onto them, not a named
+        # instructor (see WorkloadPolicySchema.new_hire_penalty_scale).
+        nh = (
+            policy.new_hire_penalty_scale
+            if is_new_instructor(instructor) or is_new_professor(instructor)
+            else 1.0
         )
-        objective_terms.append(policy.penalties.light_penalty * in_light)
+        objective_terms.append((over_unit * nh / scale) * over_heavy)
+        objective_terms.append(
+            (policy.penalties.heavy_unit_under * nh / scale) * under_heavy
+        )
+        objective_terms.append(policy.penalties.light_penalty * nh * in_light)
     return objective_terms
