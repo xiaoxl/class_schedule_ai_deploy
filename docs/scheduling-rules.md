@@ -1,5 +1,29 @@
 # Scheduling Rules
 
+## Repeated browser Auto Schedule requests
+
+Each browser Auto Schedule request excludes the submitted schedule and all
+previous input/output snapshots for the same package, configuration version,
+and course inventory. History is stored as atomic JSON records under
+`work/tmp/auto-schedule/<history-key>/`; each attempt records its input,
+timestamps, outcome, and successful output. These are temporary search records,
+not published versions. Configuration or course-inventory changes start a new
+history. Deleting temporary history allows old results to be generated again.
+
+Every temporary version displays cumulative changes from the original package
+template, never from the preceding attempt. The same template comparison is
+stored in its history record and returned in the solve response. Previous
+attempts are used only to exclude repeats. If no template is available, the
+comparison is marked unavailable rather than falling back to the last attempt.
+
+Every successful response must differ in at least one instructor, time,
+duration, or room assignment. If the usual pruned candidate pool is infeasible,
+the request retries with the full configured candidate pool before declaring
+that no unseen feasible schedule remains. A search timeout is reported separately
+and leaves the current browser schedule intact. Distinctness does not promise
+a better objective value. The CLI retains its existing behavior unless callers
+explicitly supply excluded schedules to `solve_detailed`.
+
 ## Recognition and inference
 
 Ordinary schedule loading is deterministic. `courses.toml` is authoritative

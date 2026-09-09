@@ -48,6 +48,8 @@ def solve_detailed(
     *,
     time_limit_seconds: float = 30.0,
     previous: Schedule | None = None,
+    excluded_schedules: tuple[Schedule, ...] = (),
+    exhaustive_candidates: bool = False,
     locks: LockMap | None = None,
     random_seed: int | None = None,
     search_workers: int = DEFAULT_SEARCH_WORKERS,
@@ -116,8 +118,10 @@ def solve_detailed(
             item,
             section,
             config,
-            MAX_CANDIDATES_SINGLE_SECTION
-            if len(item.sections) == 1 else MAX_CANDIDATES_PAIRED_SECTION,
+            None if exhaustive_candidates else (
+                MAX_CANDIDATES_SINGLE_SECTION
+                if len(item.sections) == 1 else MAX_CANDIDATES_PAIRED_SECTION
+            ),
             locks_for_section(locks, item.course_ids, record),
             placeholder_instructors,
             new_professors,
@@ -220,22 +224,38 @@ def solve_detailed(
                 and candidate.building == section.building
             ))
 
-    if previous is not None:
-        previous_sections = [
-            section for item in previous.classes for section in item.sections
-        ]
+    for excluded in excluded_schedules + ((previous,) if previous is not None else ()):
+        # Match by course and meeting occurrence, independent of class ordering.
+        previous_rows: dict[str, list[Section]] = {}
+        for item in excluded.classes:
+            for section in item.sections:
+                previous_rows.setdefault(section.course_id, []).append(section)
+        counts: dict[str, int] = {}
+        previous_sections = []
+        for section in sections:
+            occurrence = counts.get(section.course_id, 0)
+            counts[section.course_id] = occurrence + 1
+            rows = previous_rows.get(section.course_id, [])
+            previous_sections.append(rows[occurrence] if occurrence < len(rows) else None)
+        if counts != {key: len(rows) for key, rows in previous_rows.items()}:
+            continue  # Different course inventory is already a different schedule.
         matched = []
         for section_index, previous_section in enumerate(previous_sections):
+            if previous_section is None:
+                break
             for candidate_index, candidate in enumerate(candidates[section_index]):
                 if (
                     candidate.instructor == previous_section.instructor
                     and candidate.time_slot == previous_section.time_slot
                     and candidate.room == previous_section.room
                     and candidate.building == previous_section.building
+                    and candidate.duration == previous_section.duration
                 ):
                     matched.append(chosen[section_index][candidate_index])
                     break
-        if matched:
+        # If any old assignment is not a candidate, exact repetition is impossible.
+        # Forbidding the remaining subset would incorrectly remove other solutions.
+        if len(matched) == len(sections) and matched:
             model.add(sum(matched) <= len(matched) - 1)
 
     cp_solver = cp_model.CpSolver()

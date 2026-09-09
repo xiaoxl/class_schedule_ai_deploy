@@ -98,7 +98,7 @@ def section_candidates(
     item: Class,
     section: Section,
     config: SolverConfig,
-    max_candidates: int,
+    max_candidates: int | None,
     locked_fields: frozenset[str] = frozenset(),
     placeholder_instructors: tuple[str, ...] = (),
     new_professors: tuple[str, ...] = (),

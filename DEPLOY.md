@@ -46,3 +46,13 @@ Each directory under `config/` is an independent seven-file configuration
 package. The included production package is `config/27S/`. Copy the complete
 directory to create another package, and set `CLASS_SCHEDULE_CONFIG_PACKAGE`
 to choose the package loaded when the Web application starts.
+
+
+## Shutdown
+
+# 查出占用 8000 端口的进程
+Get-NetTCPConnection -LocalPort 8000 -State Listen | Select-Object -ExpandProperty OwningProcess
+
+# 直接一行杀掉
+Get-NetTCPConnection -LocalPort 8000 -State Listen |
+  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }

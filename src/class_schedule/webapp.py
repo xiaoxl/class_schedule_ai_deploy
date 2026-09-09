@@ -31,6 +31,7 @@ import psutil
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.staticfiles import StaticFiles
 
+from .auto_schedule import run_auto_schedule
 from . import record_utils
 from . import solver as solver_module
 from .class_model import Class
@@ -351,41 +352,35 @@ def create_app() -> FastAPI:
     async def solve_schedule(payload: dict):
         schedule, config = _schedule_from_payload(payload)
         source = f"{config.package_id} current workspace"
-        regenerate = bool(payload.get("regenerate", False))
         rss_before = _rss_mb()
         try:
-            solve_result = solver_module.solve_detailed(
-                schedule, config, time_limit_seconds=SOLVE_TIME_LIMIT_SECONDS,
-                # On a "regenerate" re-solve, `schedule` is already the
-                # caller's own previous solve output (see app.js's
-                # currentFile) -- forbidding it as `previous` guarantees a
-                # genuinely different result instead of just a possibly
-                # different one.
-                previous=schedule if regenerate else None,
+            run = run_auto_schedule(
+                schedule, config, root=WORK_ROOT / "tmp" / "auto-schedule",
+                seconds=SOLVE_TIME_LIMIT_SECONDS,
+                compare_template=lambda current: _template_changes_payload(current, config),
             )
-            solved = solve_result.schedule
-        except solver_module.SolveTimeout as error:
-            logger.warning(
-                "Solve timed out for %r: %s (RSS %.1f -> %.1f MB)",
-                source, error, rss_before, _rss_mb(),
-            )
-            raise HTTPException(504, str(error)) from error
-        except solver_module.NoFeasibleSchedule as error:
-            # 422, not 400: the request itself was well-formed -- there's
-            # just no conflict-free assignment to offer for this input
-            # (see InfeasibleSchedule). app.js keys off this
-            # status to keep "Solve Schedule" disabled until a new file
-            # is chosen, instead of inviting a retry that can't succeed.
-            logger.warning(
-                "Could not solve %r: %s (RSS %.1f -> %.1f MB)",
-                source, error, rss_before, _rss_mb(),
-            )
-            raise HTTPException(422, str(error)) from error
-        changes = solver_module.diff_schedules(schedule, solved)
+        except RuntimeError as error:
+            raise HTTPException(409, str(error)) from error
+        if run["status"] != "changed":
+            return {
+                "auto_schedule": {
+                    "status": run["status"], "attempt_id": run["attempt_id"],
+                    "history_count": run["history_count"],
+                    "message": (
+                        "No further distinct feasible schedule exists under the current configuration."
+                        if run["status"] == "exhausted" else
+                        "Search timed out before finding a different schedule. You can try again."
+                    ),
+                },
+            }
+        solve_result = run["result"]
+        solved = solve_result.schedule
+        comparison = run.get("template_changes") or _template_changes_payload(solved, config)
+        changes = comparison.get("changes")
         violations = _analysis_payload(solved, config)
         logger.info(
-            "Solved %r cleanly (%d classes, %d field change(s), RSS %.1f -> %.1f MB)",
-            source, len(solved), len(changes), rss_before, _rss_mb(),
+            "Solved %r cleanly (%d classes, %s template field changes, RSS %.1f -> %.1f MB)",
+            source, len(solved), len(changes) if changes is not None else "unavailable", rss_before, _rss_mb(),
         )
         return {
             "count": len(solved),
@@ -395,7 +390,12 @@ def create_app() -> FastAPI:
             "assignment_options": _assignment_options(config),
             "classes": _serialize_schedule(solved),
             "violations": violations,
-            "changes": [_serialize_change(c) for c in changes],
+            "changes": changes,
+            "template_changes": comparison,
+            "auto_schedule": {
+                "status": "changed", "attempt_id": run["attempt_id"],
+                "history_count": run["history_count"],
+            },
             "solver": {
                 "status": solve_result.status.value,
                 "objective": solve_result.objective,
@@ -516,6 +516,7 @@ def create_app() -> FastAPI:
         return {
             "classes": _serialize_schedule(schedule),
             "violations": _analysis_payload(schedule, config),
+            "template_changes": _template_changes_payload(schedule, config),
         }
 
     @app.post("/api/export/{view}")
@@ -1144,6 +1145,27 @@ def _load_workspace_schedule(
     return initial.name, schedule
 
 
+def _template_changes_payload(
+    schedule: Schedule, config: solver_module.SolverConfig,
+) -> dict:
+    """Compare every current edit to the package template, not the last solve."""
+    try:
+        template = find_template(CONFIG_DIR / config.package_id)
+        if template is None:
+            return {"available": False, "message": "No schedule template to compare against."}
+        # Do not reconcile against courses.toml: additions and removals are changes.
+        baseline = read_schedule(template, persons=config.persons)
+        changes = list(dict.fromkeys(solver_module.diff_schedules(baseline, schedule)))
+    except (OSError, ValueError, GroupingError) as error:
+        return {"available": False, "message": f"Template comparison unavailable: {error}"}
+    return {
+        "available": True,
+        "source": template.name,
+        "course_count": len({change.course_id for change in changes}),
+        "changes": [_serialize_change(change) for change in changes],
+    }
+
+
 def _schedule_payload(
     schedule: Schedule,
     config: solver_module.SolverConfig,
@@ -1158,6 +1180,7 @@ def _schedule_payload(
         "assignment_options": _assignment_options(config),
         "classes": _serialize_schedule(schedule),
         "violations": _analysis_payload(schedule, config),
+        "template_changes": _template_changes_payload(schedule, config),
     }
 
 
