@@ -6,3 +6,5 @@
 .solve-progress-bar{height:6px;border-radius:3px;background:#e6ebed;overflow:hidden}
 .solve-progress-fill{height:100%;width:2%;background:var(--blue);transition:width .45s ease}
 .solve-progress-label{display:block;margin-top:5px;font-size:12px;color:var(--muted)}
+
+.app-version{display:inline-block;vertical-align:middle;font-size:10px;font-weight:600;letter-spacing:0;color:var(--blue);background:var(--blue2);border-radius:4px;padding:2px 5px;white-space:nowrap}

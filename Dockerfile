@@ -5,7 +5,7 @@ COPY --from=uv /uv /uvx /bin/
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock README.md .python-version ./
+COPY pyproject.toml uv.lock README.md .python-version VERSION ./
 COPY config ./config
 COPY src ./src
 

@@ -25,6 +25,7 @@ import threading
 import tomllib
 import uuid
 from datetime import UTC, datetime
+from html import escape
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -34,6 +35,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 
 from .auto_schedule import run_auto_schedule, run_best_schedule
+from .app_version import get_app_version
 from . import record_utils
 from . import solver as solver_module
 from .class_model import Class
@@ -175,7 +177,20 @@ _configure_logging()
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Class Schedule Viewer", version="0.3.0")
+    app = FastAPI(
+        title="Class Schedule Viewer",
+        version=get_app_version(),
+    )
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/index.html", include_in_schema=False)
+    def index():
+        version = get_app_version()
+        page = (PACKAGE_WEB / "index.html").read_text(encoding="utf-8")
+        return Response(
+            page.replace("{{APP_VERSION}}", escape(version)),
+            media_type="text/html", headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/api/configurations")
     async def configuration_packages():

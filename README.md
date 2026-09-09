@@ -15,6 +15,16 @@ The Configuration selector discovers complete packages directly under `config/`.
 
 See [the documentation home](docs/index.md) for the complete UI workflow.
 
+## Update the application version
+
+Edit the root [`VERSION`](VERSION) file to set the whole application's release
+version (currently `0.3.1`). The Web UI, API metadata, and
+`class-schedule --version` read this shared source.
+Keep one version number on the first line, for example `0.3.2` after the next
+update. Refresh the page to see the changed version; deployed sites need the
+updated file deployed with the application. This is the application version,
+separate from schedule versions such as `ver7` and configuration hashes.
+
 ## Command-line workflow
 
 ```powershell

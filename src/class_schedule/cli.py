@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from .data_cleaning import clean_dataframe
+from .app_version import get_app_version
 from .schedule_io import read_schedule, read_table
 from .schedule_model import evaluate_schedule
 from .schedule_run import create_override_template, publish_final, run_term
@@ -162,6 +163,7 @@ def _diff(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="class-schedule")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {get_app_version()}")
     commands = parser.add_subparsers(dest="command", required=True)
 
     import_template = commands.add_parser(
