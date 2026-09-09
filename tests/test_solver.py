@@ -433,46 +433,61 @@ class SolveAdjustsPlaceholderCountTests(unittest.TestCase):
             solved.get("MATH 1113-002").sections[0].instructor, "new_instructor"
         )
 
-    def test_flat_band_penalty_can_push_a_class_onto_new_instructor(self):
-        # Bob's contract is 4. Teaching both 3-credit classes puts him at 6 --
-        # inside the +2 tolerance band but off contract. With near_target_flat
-        # at 0 that lands free and Bob keeps both; a steep near_target_flat
-        # makes it worse than shedding one class to new_instructor (which
-        # leaves Bob one credit under, a cheaper charge).
-        a = NormalClass((make_section(
-            number="1113", section="001", instructor="Staff", credits=3,
-            time_slot="MWF 9:00am", room="101",
-        ),))
-        b = NormalClass((make_section(
-            number="1113", section="002", instructor="Staff", credits=3,
-            time_slot="MWF 10:00am", room="102",
-        ),))
-        base = dict(
-            persons={"Bob": PersonRecord(
-                name="Bob", max_load=4, courses=("MATH 1113",),
-            )},
-            preferences={"Bob": PreferenceRecord(name="Bob", allow_overload=True)},
-            new_instructor_policy=NewInstructorPolicySchema(contract_load=3),
-            staff_count_weight=1,
-            staff_credit_weight=1,
-        )
+    def _load_objective(self, credits_each, max_load, policy, allow_overload=True):
+        """Minimum of add_load_terms for one instructor teaching every
+        listed class (all assigned), i.e. the load cost the solver sees."""
+        from types import SimpleNamespace
 
-        free_band = empty_config(**base, workload_policy=WorkloadPolicySchema(
-            penalties=WorkloadPenaltiesSchema(near_target_flat=0),
-        ))
-        kept = solve(Schedule([a, b]), free_band, time_limit_seconds=10.0)
+        from ortools.sat.python import cp_model
+
+        from class_schedule.solver.constraints import add_load_terms
+
+        items = [
+            NormalClass((make_section(
+                number="1113", section=f"{i:03d}", instructor="Bob",
+                credits=c, time_slot="MWF 9:00am", room="101",
+            ),))
+            for i, c in enumerate(credits_each)
+        ]
+        persons = {"Bob": PersonRecord(name="Bob", max_load=max_load)}
+        preferences = {
+            "Bob": PreferenceRecord(name="Bob", allow_overload=allow_overload)
+        }
+        model = cp_model.CpModel()
+        chosen = [model.new_bool_var(f"c{i}") for i in range(len(items))]
+        for var in chosen:
+            model.add(var == 1)
+        terms = add_load_terms(
+            items,
+            {i: [i] for i in range(len(items))},
+            [[SimpleNamespace(instructor="Bob")] for _ in items],
+            [[var] for var in chosen],
+            persons, preferences, model, workload_policy=policy,
+        )
+        model.minimize(sum(terms))
+        solver = cp_model.CpSolver()
+        self.assertEqual(solver.solve(model), cp_model.OPTIMAL)
+        return solver.objective_value
+
+    def test_solver_load_cost_matches_the_tier_model(self):
+        policy = WorkloadPolicySchema(
+            ok=[-1, 0, 1], light=[-2, 2],
+            penalties=WorkloadPenaltiesSchema(
+                light_penalty=5, heavy_unit_over=20,
+                heavy_unit_over_strict=100, heavy_unit_under=20,
+            ),
+        )
+        # max_load 4: d = 0 / +1 / -1 are ok (free), +2 / -2 pay the flat,
+        # +3 is heavy over (20 * 3), strict +3 is 100 * 3, -3 is 20 * 3.
+        self.assertEqual(self._load_objective([4], 4, policy), 0)
+        self.assertEqual(self._load_objective([3, 2], 4, policy), 0)      # +1
+        self.assertEqual(self._load_objective([2, 1], 4, policy), 0)      # -1
+        self.assertEqual(self._load_objective([3, 3], 4, policy), 5)      # +2
+        self.assertEqual(self._load_objective([2], 4, policy), 5)         # -2
+        self.assertEqual(self._load_objective([3, 3, 1], 4, policy), 60)  # +3
+        self.assertEqual(self._load_objective([1], 4, policy), 60)        # -3
         self.assertEqual(
-            {s.instructor for item in kept.classes for s in item.sections},
-            {"Bob"},
-        )
-
-        steep_band = empty_config(**base, workload_policy=WorkloadPolicySchema(
-            penalties=WorkloadPenaltiesSchema(near_target_flat=200),
-        ))
-        shed = solve(Schedule([a, b]), steep_band, time_limit_seconds=10.0)
-        self.assertIn(
-            "new_instructor",
-            {s.instructor for item in shed.classes for s in item.sections},
+            self._load_objective([3, 3, 1], 4, policy, allow_overload=False), 300
         )
 
     def test_collapses_numbered_staff_when_times_do_not_conflict(self):

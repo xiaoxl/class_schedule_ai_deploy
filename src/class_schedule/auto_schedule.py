@@ -111,10 +111,10 @@ def _rank_schedule(schedule, config, objective: float):
         loads, config.persons, config.preferences,
         config.new_instructor_policy, config.new_professor_policy,
     )
-    tolerance = config.workload_policy.overload_tolerance
+    free = config.workload_policy.over_free_credits
     worst_overload = max(
         (
-            loads.get(name, 0.0) - person.max_load - tolerance
+            loads.get(name, 0.0) - person.max_load - free
             for name, person in persons.items()
         ),
         default=0.0,

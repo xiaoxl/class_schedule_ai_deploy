@@ -1704,3 +1704,76 @@ a soft preference weight, not produce an incorrect hard result, so it stays
 a smaller, separate follow-up rather than being bundled into a pass whose
 other three items were either an active data regression or a silent
 data-integrity gap.
+
+---
+
+# Workload cost: a three-tier list model (`ok` / `light` / heavy)
+
+*Added 2026-09-09. Supersedes the earlier `overload_tolerance` /
+`underload_tolerance` / `far_overload_threshold` / `near_target_flat` /
+`near_target_deadzone` scheme, which is gone.*
+
+The old model priced a load by a stack of thresholds and ramps that were
+hard to reason about at the edges ("is `+2` the last fine value or the
+first charged one?"). The new `WorkloadPolicySchema` is explicit instead
+of parametric. Let `d = teaching_load - max_load` in whole credit hours:
+
+- `d in policy.ok` (list, must contain `0`) -- no cost, no finding.
+- `d in policy.light` (list, disjoint from `ok`) -- one flat
+  `penalties.light_penalty`, emitted as a `near_target` finding, which the
+  review list still filters out (so "not reported").
+- otherwise *heavy* -- an `overload` finding costing
+  `penalties.heavy_unit_over * |d|` (`heavy_unit_over_strict` when the
+  instructor's preference does not `allow_overload`, `0` when there is no
+  preference record at all), or an `under_load` finding costing
+  `penalties.heavy_unit_under * |d|`.
+
+`hard_load_cap_tolerance` is unchanged (load above `max_load + it` is
+hard-infeasible) and must be `>= max(|k| for k in ok + light)`.
+
+## Where it lives -- still exactly two mirrored implementations
+
+- `schedule_model.check_soft_preferences` -- `_overload_statuses` and the
+  separate underload/near-target loop collapsed into **one** pass over
+  `sorted(persons.items())` that calls `workload_policy.tier(d)` and emits
+  the matching `SoftFinding`.
+- `solver/constraints.py` `add_load_terms` -- per instructor: reified
+  `d_expr == k*scale` bools for each `k` in `ok`/`light` give `in_ok` /
+  `in_light` (`add_max_equality` = OR); `heavy = 1 - in_ok - in_light`;
+  `over` / `under` are `add_max_equality(v, [±d_expr, 0])`; `over_heavy` /
+  `under_heavy` gate those by `heavy` via `only_enforce_if`. `d_expr` is
+  `total - target * active`, so an unassigned optional hire has `d = 0`
+  (hence "0 must be in `ok`" -- it keeps inactive hires free without a
+  special case). `WorkloadPolicySchema.tier()` is the shared oracle the
+  parity test (`test_new_hire_workload`) checks the solver objective
+  against, credit by credit.
+
+`WorkloadPolicySchema.over_free_credits` (largest positive `k` in
+`ok`/`light`) replaces the old `overload_tolerance` in the two ranking
+helpers (`schedule_run.worst_overload`, `auto_schedule._rank_schedule`) --
+ranking only, never scoring.
+
+## Web workload panel colours
+
+`summarize_instructor_loads` now takes the whole `policy` and keys `state`
+off the same tiers: `ok` -> `exact` (green), `light` -> `slight` (pale
+yellow), heavy `d > 0` -> `danger` (red), heavy `d < 0` -> `under`
+(orange). `workload-status.css` gained `.load-slight` and repointed
+`.load-under` at orange.
+
+## `config/27Sv2`
+
+`ok = [0, 1]`, `light = [2]`, `light_penalty = 5`,
+`heavy_unit_over = 20`, `heavy_unit_over_strict = 100`,
+`heavy_unit_under = 20`, `hard_load_cap_tolerance = 6`. So `d` in
+`{0, 1}` is free, `+2` pays a silent flat 5, `d <= -1` is a reported
+`20*|d|` underload, `d >= 3` a reported `20*|d|` overload (`100*|d|`
+strict), `d > 6` infeasible. The `config/27S`
+copy used by tests and render is maintained separately and must be synced
+to the same shape (see
+`test_pipeline.test_production_policy_is_loaded_from_constraints`, updated
+to the new field names).
+
+New/rewritten tests: `WorkloadTierTests` + `WorkloadHeavyReferenceTests`
+(`tests/test_schedule_model.py`), `test_solver_load_cost_matches_the_tier_model`
+(`tests/test_solver.py`), and the `test_new_hire_workload` parity table.

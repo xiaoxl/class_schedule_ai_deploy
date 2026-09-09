@@ -613,79 +613,94 @@ def _schedule_with_load(credit_hours_list, instructor="Alice") -> Schedule:
     return Schedule(classes)
 
 
-class OverloadPenaltyTests(unittest.TestCase):
-    """max_load=10 throughout; OVERLOAD_TOLERANCE=2 (2 is fine, 3+
-    triggers), OVERLOAD_FAR_THRESHOLD=4 (4 is fine, 5+ triggers -- same
-    "last safe value" convention as OVERLOAD_TOLERANCE). Overload is priced
-    per credit past tolerance; permissive far overload adds 50."""
+_TIER_POLICY = WorkloadPolicySchema(
+    ok=[-1, 0, 1],
+    light=[-2, 2],
+    penalties=WorkloadPenaltiesSchema(
+        light_penalty=5,
+        heavy_unit_over=20,
+        heavy_unit_over_strict=100,
+        heavy_unit_under=20,
+    ),
+)
 
-    def test_within_tolerance_is_no_overload_finding(self):
-        schedule = _schedule_with_load([9, 3])  # 12 total, 2 credit hours over
+
+class WorkloadTierTests(unittest.TestCase):
+    """max_load=10. d = load - max_load falls in ok / light / heavy:
+    ok=[-1,0,1] -> nothing; light=[-2,2] -> flat 5, rule "near_target"
+    (never surfaced as a review finding); heavy -> reported "overload"
+    (d>0) or "under_load" (d<0), priced at heavy_unit * |d|. Mirrors
+    solver/constraints.py's add_load_terms."""
+
+    def _findings(self, hours, allow_overload=True):
+        schedule = _schedule_with_load(hours)
         persons = {"Alice": PersonRecord(name="Alice", max_load=10)}
-        preferences = {"Alice": PreferenceRecord(name="Alice", allow_overload=True)}
-        _, findings = check_soft_preferences(schedule, preferences, persons)
+        preferences = {
+            "Alice": PreferenceRecord(name="Alice", allow_overload=allow_overload)
+        }
+        _, findings = check_soft_preferences(
+            schedule, preferences, persons, workload_policy=_TIER_POLICY,
+        )
+        return findings
+
+    def test_ok_tier_is_free(self):
+        for hours in ([4, 3, 3], [4, 4, 3], [3, 3, 3]):  # d = 0, +1, -1
+            findings = self._findings(hours)
+            self.assertFalse(
+                any(f.rule in {"near_target", "overload", "under_load"}
+                    for f in findings),
+                hours,
+            )
+
+    def test_light_tier_over_is_a_flat_charge_not_overload(self):
+        findings = self._findings([4, 4, 4])  # 12, d = +2
         self.assertFalse(any(f.rule == "overload" for f in findings))
+        band = next(f for f in findings if f.rule == "near_target")
+        self.assertEqual(band.penalty, 5)
 
-    def test_permissive_base_penalty_only(self):
-        schedule = _schedule_with_load([9, 4])  # 13 total, 3 credit hours over
-        persons = {"Alice": PersonRecord(name="Alice", max_load=10)}
-        preferences = {"Alice": PreferenceRecord(name="Alice", allow_overload=True)}
-        _, findings = check_soft_preferences(schedule, preferences, persons)
+    def test_light_tier_under_is_a_flat_charge_not_underload(self):
+        findings = self._findings([4, 4])  # 8, d = -2
+        self.assertFalse(any(f.rule == "under_load" for f in findings))
+        band = next(f for f in findings if f.rule == "near_target")
+        self.assertEqual(band.penalty, 5)
+
+    def test_heavy_over_is_unit_times_whole_distance(self):
+        findings = self._findings([4, 4, 5])  # 13, d = +3
+        self.assertFalse(any(f.rule == "near_target" for f in findings))
         overload = next(f for f in findings if f.rule == "overload")
-        self.assertEqual(overload.penalty, 10.0)
+        self.assertEqual(overload.penalty, 60)  # 20 * 3
 
-    def test_permissive_at_exactly_the_far_threshold_does_not_trigger_the_extra(self):
-        # OVERLOAD_FAR_THRESHOLD=4 is the last *fine* value, same
-        # convention as OVERLOAD_TOLERANCE -- only 5+ triggers it.
-        schedule = _schedule_with_load([9, 5])  # 14 total, exactly 4 credit hours over
-        persons = {"Alice": PersonRecord(name="Alice", max_load=10)}
-        preferences = {"Alice": PreferenceRecord(name="Alice", allow_overload=True)}
-        _, findings = check_soft_preferences(schedule, preferences, persons)
+    def test_heavy_over_strict_uses_the_strict_unit(self):
+        findings = self._findings([4, 4, 5], allow_overload=False)  # d = +3
         overload = next(f for f in findings if f.rule == "overload")
-        self.assertEqual(overload.penalty, 20.0)  # two credits past tolerance
+        self.assertEqual(overload.penalty, 300)  # 100 * 3
 
-    def test_permissive_one_past_the_far_threshold_triggers(self):
-        schedule = _schedule_with_load([9, 6])  # 15 total, exactly 5 credit hours over
+    def test_heavy_over_with_no_preference_costs_nothing_but_is_reported(self):
+        schedule = _schedule_with_load([4, 4, 5])  # d = +3
         persons = {"Alice": PersonRecord(name="Alice", max_load=10)}
-        preferences = {"Alice": PreferenceRecord(name="Alice", allow_overload=True)}
-        _, findings = check_soft_preferences(schedule, preferences, persons)
+        _, findings = check_soft_preferences(
+            schedule, {}, persons, workload_policy=_TIER_POLICY,
+        )
         overload = next(f for f in findings if f.rule == "overload")
-        self.assertEqual(overload.penalty, 80.0)  # 3 * 10 + far 50
+        self.assertEqual(overload.penalty, 0.0)
 
-    def test_permissive_past_the_far_threshold_adds_the_extra_penalty(self):
-        schedule = _schedule_with_load([9, 8])  # 17 total, 7 credit hours over
+    def test_heavy_under_is_unit_times_whole_distance(self):
+        findings = self._findings([4, 3])  # 7, d = -3
+        self.assertFalse(any(f.rule == "near_target" for f in findings))
+        underload = next(f for f in findings if f.rule == "under_load")
+        self.assertEqual(underload.penalty, 60)  # 20 * 3
+
+    def test_default_policy_penalises_any_deviation_as_heavy(self):
+        # Default ok=[0], light=[] -> one credit under max_load 10 is heavy.
+        schedule = _schedule_with_load([3, 3, 3])  # 9
         persons = {"Alice": PersonRecord(name="Alice", max_load=10)}
-        preferences = {"Alice": PreferenceRecord(name="Alice", allow_overload=True)}
-        _, findings = check_soft_preferences(schedule, preferences, persons)
-        overload = next(f for f in findings if f.rule == "overload")
-        self.assertEqual(overload.penalty, 100.0)  # 5 * 10 + far 50
+        _, findings = check_soft_preferences(schedule, {}, persons)
+        self.assertFalse(any(f.rule == "near_target" for f in findings))
+        underload = next(f for f in findings if f.rule == "under_load")
+        self.assertEqual(underload.penalty, 30)  # default heavy_unit_under 30 * 1
 
-    def test_permissive_penalty_keeps_scaling_far_over(self):
-        schedule = _schedule_with_load([9, 9, 9])  # 27 total, 17 credit hours over
-        persons = {"Alice": PersonRecord(name="Alice", max_load=10)}
-        preferences = {"Alice": PreferenceRecord(name="Alice", allow_overload=True)}
-        _, findings = check_soft_preferences(schedule, preferences, persons)
-        overload = next(f for f in findings if f.rule == "overload")
-        self.assertEqual(overload.penalty, 200.0)  # 15 * 10 + far 50
 
-    def test_strict_instructor_costs_100_per_credit_past_tolerance(self):
-        schedule = _schedule_with_load([9, 4])  # 13 total, 3 credit hours over
-        persons = {"Alice": PersonRecord(name="Alice", max_load=10)}
-        preferences = {"Alice": PreferenceRecord(name="Alice", allow_overload=False)}
-        _, findings = check_soft_preferences(schedule, preferences, persons)
-        overload = next(f for f in findings if f.rule == "overload")
-        self.assertEqual(overload.penalty, 100.0)
-
-    def test_strict_instructor_keeps_scaling_far_over(self):
-        # The far-threshold extra penalty never applies to a strict instructor;
-        # its 100-per-credit base continues to scale on its own.
-        schedule = _schedule_with_load([9, 9, 9, 3])  # 30 total, 20 credit hours over
-        persons = {"Alice": PersonRecord(name="Alice", max_load=10)}
-        preferences = {"Alice": PreferenceRecord(name="Alice", allow_overload=False)}
-        _, findings = check_soft_preferences(schedule, preferences, persons)
-        overload = next(f for f in findings if f.rule == "overload")
-        self.assertEqual(overload.penalty, 1800.0)
-
+class WorkloadHeavyReferenceTests(unittest.TestCase):
     def test_overload_references_cover_every_record_of_a_multi_row_atomic_class(self):
         # teaching_loads() credits a whole atomic class to an instructor
         # the moment any row names them -- overload/under_load references
@@ -708,16 +723,14 @@ class OverloadPenaltyTests(unittest.TestCase):
             {(0, 0), (0, 1), (1, 0)},
         )
 
-
-class UnderloadPenaltyTests(unittest.TestCase):
-    def test_penalty_scales_with_missing_credit_hours(self):
+    def test_underload_penalty_scales_with_missing_credit_hours(self):
         schedule = _schedule_with_load([3])
         persons = {"Alice": PersonRecord(name="Alice", max_load=12)}
 
         _, findings = check_soft_preferences(schedule, {}, persons)
 
         underload = next(f for f in findings if f.rule == "under_load")
-        self.assertEqual(underload.penalty, 270.0)
+        self.assertEqual(underload.penalty, 270.0)  # default heavy_unit_under 30 * 9
         self.assertEqual(
             {(r.class_index, r.record_index) for r in underload.references},
             {(0, 0)},
@@ -725,8 +738,7 @@ class UnderloadPenaltyTests(unittest.TestCase):
 
     def test_underload_references_are_empty_for_an_instructor_teaching_nothing(self):
         # Legitimate, not a bug (see docs/codes.md) -- the web UI falls
-        # back to a plain instructor-tab link off `subject` for this case
-        # instead of a course link.
+        # back to a plain instructor-tab link off `subject` for this case.
         schedule = Schedule([])
         persons = {"Alice": PersonRecord(name="Alice", max_load=12)}
 
@@ -734,71 +746,6 @@ class UnderloadPenaltyTests(unittest.TestCase):
 
         underload = next(f for f in findings if f.rule == "under_load")
         self.assertEqual(underload.references, ())
-
-
-class NearTargetBandTests(unittest.TestCase):
-    """near_target_flat: one flat charge for a load inside the tolerance
-    band [max_load - underload_tolerance, max_load + overload_tolerance]
-    that is not exactly max_load. underload_tolerance widens the band's
-    lower edge; below it the underload ramp takes over. Mirrors
-    solver/constraints.py's add_load_terms."""
-
-    policy = WorkloadPolicySchema(
-        overload_tolerance=2,
-        underload_tolerance=1,
-        penalties=WorkloadPenaltiesSchema(
-            underload_per_credit=20,
-            permissive_overload_per_credit=20,
-            near_target_flat=5,
-        ),
-    )
-
-    def _findings(self, hours):
-        schedule = _schedule_with_load(hours)
-        persons = {"Alice": PersonRecord(name="Alice", max_load=10)}
-        preferences = {"Alice": PreferenceRecord(name="Alice", allow_overload=True)}
-        _, findings = check_soft_preferences(
-            schedule, preferences, persons, workload_policy=self.policy,
-        )
-        return findings
-
-    def test_exactly_on_contract_is_free(self):
-        findings = self._findings([4, 3, 3])  # 10
-        self.assertFalse(any(
-            f.rule in {"near_target", "under_load", "overload"} for f in findings
-        ))
-
-    def test_one_credit_under_is_a_flat_band_charge_not_underload(self):
-        findings = self._findings([3, 3, 3])  # 9, one under
-        self.assertFalse(any(f.rule == "under_load" for f in findings))
-        band = next(f for f in findings if f.rule == "near_target")
-        self.assertEqual(band.penalty, 5)
-
-    def test_two_credits_over_is_a_flat_band_charge_not_overload(self):
-        findings = self._findings([4, 4, 4])  # 12, two over
-        self.assertFalse(any(f.rule == "overload" for f in findings))
-        band = next(f for f in findings if f.rule == "near_target")
-        self.assertEqual(band.penalty, 5)
-
-    def test_below_the_band_is_underload_measured_from_the_widened_floor(self):
-        findings = self._findings([3, 3])  # 6; floor is 9, so deficit 3
-        self.assertFalse(any(f.rule == "near_target" for f in findings))
-        underload = next(f for f in findings if f.rule == "under_load")
-        self.assertEqual(underload.penalty, 60)  # 3 * 20
-
-    def test_above_the_band_is_overload_past_plus_two(self):
-        findings = self._findings([4, 4, 5])  # 13, three over
-        self.assertFalse(any(f.rule == "near_target" for f in findings))
-        overload = next(f for f in findings if f.rule == "overload")
-        self.assertEqual(overload.penalty, 20)  # 1 * 20
-
-    def test_flat_band_is_off_by_default(self):
-        schedule = _schedule_with_load([3, 3, 3])  # 9, one under max_load 10
-        persons = {"Alice": PersonRecord(name="Alice", max_load=10)}
-        _, findings = check_soft_preferences(schedule, {}, persons)
-        self.assertFalse(any(f.rule == "near_target" for f in findings))
-        underload = next(f for f in findings if f.rule == "under_load")
-        self.assertEqual(underload.penalty, 30)  # default: no tolerance, 30/credit
 
 
 class CheckWorkloadHardCapsTests(unittest.TestCase):

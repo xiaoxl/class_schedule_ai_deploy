@@ -93,11 +93,11 @@ def worst_overload(schedule: Schedule, config: SolverConfig) -> float:
         loads, config.persons, config.preferences,
         config.new_instructor_policy, config.new_professor_policy,
     )
+    free = config.workload_policy.over_free_credits
     return max(
         (max(
             0.0,
-            loads.get(name, 0.0) - person.max_load
-            - config.workload_policy.overload_tolerance,
+            loads.get(name, 0.0) - person.max_load - free,
         )
          for name, person in persons.items()),
         default=0.0,
@@ -446,7 +446,7 @@ def _report(
         after_loads, config.persons,
         new_instructor_target=config.new_instructor_policy.contract_load,
         new_professor_target=config.new_professor_policy.contract_load,
-        overload_tolerance=config.workload_policy.overload_tolerance,
+        policy=config.workload_policy,
     )
     targets = {row.name: row.target for row in load_rows}
     changes = simplified_changes(baseline, after)

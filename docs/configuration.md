@@ -181,17 +181,15 @@ The same file owns numeric scheduling policy:
 
 ```toml
 [workload]
-overload_tolerance = 2
-underload_tolerance = 0
+ok = [0, 1]
+light = [2]
 hard_load_cap_tolerance = 6
-far_overload_threshold = 4
 
 [workload.penalties]
-underload_per_credit = 30
-permissive_overload_per_credit = 10
-strict_overload_per_credit = 100
-far_overload_extra = 50
-near_target_flat = 0
+light_penalty = 5
+heavy_unit_over = 20
+heavy_unit_over_strict = 100
+heavy_unit_under = 20
 
 [back_to_back]
 penalty = 10
@@ -209,22 +207,27 @@ min_course_number_inclusive = 1914
 allow_back_to_back = true
 ```
 
-`max_load` is a target. A load is scored by its distance from it: exactly on
-target costs nothing; anywhere in the tolerance band
-(`max_load - underload_tolerance` .. `max_load + overload_tolerance`) costs a
-single flat `near_target_flat`; below the band adds `underload_per_credit` per
-missing credit; above it adds the permissive or strict overload rate per
-credit, plus `far_overload_extra` once past `far_overload_threshold`
-(permissive only). `hard_load_cap_tolerance` is a hard ceiling.
-`underload_tolerance` and `near_target_flat` default to `0`, which keeps the
-band free and starts underload the moment a load dips below `max_load`.
+`max_load` is a target. Let `d = teaching_load - max_load` in whole credit
+hours. Every integer `d` falls in exactly one tier:
+
+- `d` in `ok` — no cost, not reported. `ok` must contain `0`.
+- `d` in `light` — a single flat `light_penalty`, charged once, never
+  surfaced as a review finding.
+- anything else — *heavy*: reported, and costs `heavy_unit_over * |d|` when
+  over contract (`heavy_unit_over_strict` for an instructor whose preference
+  does not `allow_overload`), or `heavy_unit_under * |d|` when under it.
+
+A load above `max_load + hard_load_cap_tolerance` is hard-infeasible;
+`hard_load_cap_tolerance` must be at least the largest `|d|` listed in
+`ok`/`light`. `ok`/`light` default to `[0]`/`[]` and every penalty defaults
+low, so an unset policy prices any deviation as a mild heavy overload/underload.
 
 Activation is determined by course assignments in code, not by a configuration
-switch. New Instructor and New Professor identities use `contract_load` as the same
-workload target once assigned any course: underload, near-target, overload,
-and target-plus-tolerance hard caps all apply. Unused candidate identities
-have no workload cost. Identity-count and per-credit assignment costs remain
-separate from workload penalties.
+switch. New Instructor and New Professor identities use `contract_load` as the
+same workload target once assigned any course: the ok/light/heavy tiers and
+the hard cap all apply. Unused candidate identities have no workload cost.
+Identity-count and per-credit assignment costs remain separate from workload
+penalties.
 
 `catalogs.toml` is the package credit authority. A missing catalog course,
 invalid input credit, or input/catalog disagreement is an error. A catalog

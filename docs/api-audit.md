@@ -194,7 +194,7 @@ caller audit rather than assumption.
 | `location_matches` | 很重要 | Small shared helper (`"Corley"` or `"Corley 101"` both match) used by constraint/preference rule matching. |
 | `is_back_to_back` | 可合并 | Module-level, general-purpose version; `_capped_back_to_back_findings` builds its own per-day-chain walk instead of reusing this directly (different granularity -- "any shared weekday" vs. "same-day ordered chain"). Documented distinction, not accidental duplication. |
 | `_capped_back_to_back_findings` | 很重要 | The `max_back_to_back` soft-finding generator; uses the course-id-based dedup key flagged as fragile in an earlier review round (still open, low priority). |
-| `_overload_statuses` | 很重要 | Shared overload/under-load classification `check_soft_preferences` reports from. |
+| `WorkloadPolicySchema.tier` | 很重要 | The ok/light/heavy oracle both `check_soft_preferences` and `solver.add_load_terms` classify a load against (replaced the old `_overload_statuses`). |
 | `overlaps_in_time` | 可合并 | One-line wrapper over `weekday_time_overlap`; kept as a `Section`-shaped convenience over the primitive's raw-field signature. |
 | `check_conflicts` | 很重要 | Structural double-booking (room/instructor overlap) across *different* classes -- deliberately skips a class's own multi-row pairs. |
 | `check_atomic_class_rules` | 很重要 | Generic `item.validation_report()` sweep -- no per-kind branch (this is what the earlier `schedule_issues` -> `validation_report` unification bought). |

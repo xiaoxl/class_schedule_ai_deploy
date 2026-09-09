@@ -18,13 +18,14 @@ from class_schedule.schedule_run import (
     version_schedule_path,
     worst_overload,
 )
+from class_schedule.config_schema import WorkloadPolicySchema
 from class_schedule.schedule_io import read_schedule
 from class_schedule.schedule_model import PersonRecord, Schedule
 from class_schedule.solver import SolverConfig
 
 
 class VersionTests(unittest.TestCase):
-    def test_worst_overload_excludes_the_configured_tolerance(self):
+    def test_worst_overload_excludes_the_free_over_credits(self):
         schedule = Schedule.from_records([{
             "Subject": "MATH", "Number": "1113", "Section": "001",
             "Instructor": "Alice", "Time Slot": "MWF 9:00am",
@@ -34,6 +35,8 @@ class VersionTests(unittest.TestCase):
         config = SolverConfig(
             persons={"Alice": PersonRecord(name="Alice", max_load=12)},
             preferences={}, meeting_patterns=[], rooms=[],
+            # +1 credit over is still an "ok" tier, so worst_overload is 0.
+            workload_policy=WorkloadPolicySchema(ok=[-1, 0, 1], light=[-2, 2]),
         )
 
         self.assertEqual(worst_overload(schedule, config), 0)

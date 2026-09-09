@@ -1077,7 +1077,7 @@ def summarize_instructor_loads(
     *,
     new_instructor_target: float,
     new_professor_target: float,
-    overload_tolerance: float,
+    policy: WorkloadPolicySchema,
 ) -> tuple[InstructorLoadSummary, ...]:
     """Attach configured targets and status to shared teaching-load totals."""
     rows = []
@@ -1091,12 +1091,21 @@ def summarize_instructor_loads(
             position = "instructor"
         hours = loads.get(name, 0.0)
         delta = hours - target if target is not None else None
-        state = (
-            "unknown" if target is None else
-            "exact" if abs(delta) < 1e-9 else
-            "under" if delta < 0 else
-            "over" if delta <= overload_tolerance else "danger"
-        )
+        # Colour tiers for the web workload panel (see workload-status.css),
+        # keyed off the same ok/light/heavy tiers the penalty model uses:
+        #   heavy & delta < 0   "under"   orange
+        #   ok tier             "exact"   green
+        #   light tier          "slight"  pale yellow
+        #   heavy & delta > 0   "danger"  red
+        if target is None:
+            state = "unknown"
+        else:
+            tier = policy.tier(delta)
+            state = (
+                "exact" if tier == "ok" else
+                "slight" if tier == "light" else
+                "under" if delta < 0 else "danger"
+            )
         rows.append(InstructorLoadSummary(
             name=name, hours=hours, target=target, delta=delta,
             state=state, position=position,
@@ -1192,64 +1201,8 @@ def _capped_back_to_back_findings(
     return findings
 
 
-@dataclass(frozen=True)
-class _OverloadStatus:
-    instructor: str
-    load: float
-    max_load: float
-    penalty: float
 
 
-def _overload_statuses(
-    schedule: "Schedule",
-    persons: dict[str, PersonRecord],
-    preferences: dict[str, PreferenceRecord],
-    policy: WorkloadPolicySchema | None = None,
-) -> list[_OverloadStatus]:
-    policy = policy or WorkloadPolicySchema()
-    """The single source of truth for "is this instructor overloaded".
-
-    Anything within the configured overload tolerance of max_load isn't
-    included at all -- it doesn't count as overload, so it's never
-    reported by ``check_soft_preferences``. Everything this returns *is*
-    overload, always soft -- ``penalty`` is ``preference.overload_penalty``
-    per credit past the tolerance (``0.0`` when there is no preference
-    preference record), plus ``OVERLOAD_FAR_PENALTY`` on top when they're also more than
-    ``OVERLOAD_FAR_THRESHOLD`` credit hours over their own max_load *and*
-    ``allow_overload`` -- see the module comment above
-    the configured tolerance. Mirrors ``solver/constraints.py``'s load model
-    exactly so the web UI's reported penalty matches what the solver
-    actually optimized for.
-    """
-    statuses: list[_OverloadStatus] = []
-    for instructor, load in sorted(teaching_loads(schedule).items()):
-        person = persons.get(instructor)
-        if person is None:
-            continue
-        excess = load - person.max_load
-        if excess <= policy.overload_tolerance:
-            continue
-        preference = preferences.get(instructor)
-        penalty = (
-            (
-                policy.penalties.permissive_overload_per_credit
-                if preference.allow_overload
-                else policy.penalties.strict_overload_per_credit
-            ) * (excess - policy.overload_tolerance)
-            if preference else 0.0
-        )
-        if (
-            preference is not None and preference.allow_overload
-            and excess > policy.far_overload_threshold
-        ):
-            penalty += policy.penalties.far_overload_extra
-        statuses.append(_OverloadStatus(
-            instructor=instructor,
-            load=load,
-            max_load=person.max_load,
-            penalty=penalty,
-        ))
-    return statuses
 
 
 def overlaps_in_time(left: Section, right: Section) -> bool:
@@ -1479,50 +1432,54 @@ def check_soft_preferences(
         persons, preferences, new_instructor_policy, new_professor_policy,
     )
     class_refs = _class_references_by_instructor(schedule)
-    findings: list[SoftFinding] = [
-        SoftFinding(
-            "overload", status.instructor,
-            f"{status.instructor}: {status.load:g} credit hours exceeds "
-            f"max_load {status.max_load:g}",
-            status.penalty,
-            references=class_refs.get(status.instructor, ()),
-        )
-        for status in _overload_statuses(
-            schedule, persons, preferences, workload_policy,
-        )
-    ]
+    findings: list[SoftFinding] = []
 
+    # One pass over every configured/seen instructor. `d` is the signed
+    # credit distance from contract; `workload_policy.tier` places it in
+    # ok / light / heavy (see WorkloadPolicySchema). Mirrors
+    # solver/constraints.py's add_load_terms exactly.
     loads = teaching_loads(schedule)
     for instructor, person in sorted(persons.items()):
         load = loads.get(instructor, 0.0)
-        under_floor = person.max_load - workload_policy.underload_tolerance
-        deficit = under_floor - load
-        if deficit > 0:
+        d = load - person.max_load
+        tier = workload_policy.tier(d)
+        # Legitimately empty for an instructor currently teaching nothing
+        # (see docs/codes.md) -- the web UI still falls back to a plain
+        # instructor-tab link via `subject` then.
+        refs = class_refs.get(instructor, ())
+        if tier == "ok":
+            continue
+        if tier == "light":
+            findings.append(SoftFinding(
+                "near_target", instructor,
+                f"{instructor}: {load:g} credit hours is {d:+g} off max_load "
+                f"{person.max_load:g}",
+                workload_policy.penalties.light_penalty,
+                references=refs,
+            ))
+            continue
+        if d > 0:
+            preference = preferences.get(instructor)
+            unit = (
+                0.0 if preference is None
+                else workload_policy.penalties.heavy_unit_over
+                if preference.allow_overload
+                else workload_policy.penalties.heavy_unit_over_strict
+            )
+            findings.append(SoftFinding(
+                "overload", instructor,
+                f"{instructor}: {load:g} credit hours exceeds max_load "
+                f"{person.max_load:g}",
+                unit * abs(d),
+                references=refs,
+            ))
+        else:
             findings.append(SoftFinding(
                 "under_load", instructor,
                 f"{instructor}: {load:g} credit hours is under max_load "
                 f"{person.max_load:g}",
-                deficit * workload_policy.penalties.underload_per_credit,
-                # Legitimately empty for an instructor currently teaching
-                # nothing (see docs/codes.md) -- the web UI still falls
-                # back to a plain instructor-tab link via `subject` then.
-                references=class_refs.get(instructor, ()),
-            ))
-        elif (
-            workload_policy.penalties.near_target_flat
-            and abs(load - person.max_load) > 1e-9
-            and load <= person.max_load + workload_policy.overload_tolerance
-        ):
-            # Inside the tolerance band [max_load - underload_tolerance,
-            # max_load + overload_tolerance] but not exactly on contract --
-            # a flat cost, mirroring add_load_terms' band penalty so the
-            # web UI's reported total matches what the solver optimized.
-            findings.append(SoftFinding(
-                "near_target", instructor,
-                f"{instructor}: {load:g} credit hours is off max_load "
-                f"{person.max_load:g} but within the tolerance band",
-                workload_policy.penalties.near_target_flat,
-                references=class_refs.get(instructor, ()),
+                workload_policy.penalties.heavy_unit_under * abs(d),
+                references=refs,
             ))
 
     sections = [

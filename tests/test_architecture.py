@@ -246,8 +246,7 @@ class SolverArchitectureTests(unittest.TestCase):
             rooms=[RoomRecord("Corley", "101")],
             version="test-config",
             workload_policy=WorkloadPolicySchema(
-                overload_tolerance=0, far_overload_threshold=0,
-                hard_load_cap_tolerance=0,
+                ok=[0], light=[], hard_load_cap_tolerance=0,
             ),
             new_instructor_policy=NewInstructorPolicySchema(allowed_counts=[0]),
             new_professor_policy=NewProfessorPolicySchema(allowed_counts=[0]),

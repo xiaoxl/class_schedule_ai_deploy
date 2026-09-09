@@ -191,33 +191,71 @@ class ConstraintRuleSchema(RuleSelectorSchema):
 
 
 class WorkloadPenaltiesSchema(StrictModel):
-    underload_per_credit: float = Field(default=30, ge=0)
-    permissive_overload_per_credit: float = Field(default=10, ge=0)
-    strict_overload_per_credit: float = Field(default=100, ge=0)
-    far_overload_extra: float = Field(default=50, ge=0)
-    # Flat cost charged once when a load lands inside the tolerance band
-    # (``max_load - underload_tolerance`` .. ``max_load + overload_tolerance``)
-    # but is not exactly ``max_load``. Default 0 keeps the band free.
-    near_target_flat: float = Field(default=0, ge=0)
+    # Flat cost for a load whose distance from contract lands in
+    # ``WorkloadPolicySchema.light`` -- charged once, never reported as a
+    # finding. Default 0 keeps the light tier free.
+    light_penalty: float = Field(default=0, ge=0)
+    # Heavy tier: cost is one of these per-credit rates times the whole
+    # distance |load - max_load| (credit hours), reported as a finding.
+    #   over  = load above contract, instructor allows overload (permissive)
+    #   over_strict = load above contract, instructor does not
+    #   under = load below contract
+    heavy_unit_over: float = Field(default=10, ge=0)
+    heavy_unit_over_strict: float = Field(default=100, ge=0)
+    heavy_unit_under: float = Field(default=30, ge=0)
 
 
 class WorkloadPolicySchema(StrictModel):
-    overload_tolerance: float = Field(default=2, ge=0)
-    # Credit hours below max_load that are still inside the tolerance band
-    # rather than counted as underload. Default 0 -> underload starts the
-    # moment a load dips below max_load, as before.
-    underload_tolerance: float = Field(default=0, ge=0)
+    # d = teaching_load - max_load, whole credit hours (may be negative).
+    # Every integer d falls in exactly one tier:
+    #   d in `ok`     -> no cost, no finding
+    #   d in `light`  -> flat `light_penalty`, no finding
+    #   otherwise     -> heavy: reported, and costs
+    #                    heavy_unit_over[_strict] * |d|   when d > 0
+    #                    heavy_unit_under          * |d|   when d < 0
+    ok: list[int] = Field(default_factory=lambda: [0])
+    light: list[int] = Field(default_factory=list)
+    # A load above `max_load + hard_load_cap_tolerance` is hard-infeasible.
     hard_load_cap_tolerance: float = Field(default=6, ge=0)
-    far_overload_threshold: float = Field(default=4, ge=0)
     penalties: WorkloadPenaltiesSchema = Field(default_factory=WorkloadPenaltiesSchema)
 
+    @field_validator("ok", "light")
+    @classmethod
+    def _sorted_unique(cls, values: list[int]) -> list[int]:
+        if values != sorted(set(values)):
+            raise ValueError("must be sorted with no duplicates")
+        return values
+
     @model_validator(mode="after")
-    def validate_thresholds(self):
-        if self.far_overload_threshold < self.overload_tolerance:
-            raise ValueError("far_overload_threshold must be at least overload_tolerance")
-        if self.hard_load_cap_tolerance < self.far_overload_threshold:
-            raise ValueError("hard_load_cap_tolerance must be at least far_overload_threshold")
+    def validate_tiers(self):
+        if 0 not in self.ok:
+            raise ValueError(
+                "workload.ok must contain 0 -- being exactly on contract is never penalised"
+            )
+        overlap = sorted(set(self.ok) & set(self.light))
+        if overlap:
+            raise ValueError(f"workload.ok and workload.light overlap: {overlap}")
+        span = max((abs(k) for k in (*self.ok, *self.light)), default=0)
+        if self.hard_load_cap_tolerance < span:
+            raise ValueError(
+                "hard_load_cap_tolerance must be at least the largest |d| listed in ok/light"
+            )
         return self
+
+    @property
+    def over_free_credits(self) -> int:
+        """Largest positive d that is still ok/light rather than a heavy
+        overload. Used only to rank near-equal schedules, not to score."""
+        return max((k for k in (*self.ok, *self.light) if k > 0), default=0)
+
+    def tier(self, d: float) -> str:
+        """"ok", "light", or "heavy" for a signed credit distance ``d``."""
+        rounded = round(d)
+        if abs(d - rounded) < 1e-9 and rounded in self.ok:
+            return "ok"
+        if abs(d - rounded) < 1e-9 and rounded in self.light:
+            return "light"
+        return "heavy"
 
 
 class BackToBackPolicySchema(StrictModel):

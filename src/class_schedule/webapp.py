@@ -1368,7 +1368,8 @@ def _assignment_options(config: solver_module.SolverConfig) -> dict:
         "new_instructor_contract_load": config.new_instructor_policy.contract_load,
         "new_professor_contract_load": config.new_professor_policy.contract_load,
         "workload_policy": {
-            "overload_tolerance": config.workload_policy.overload_tolerance,
+            "ok": config.workload_policy.ok,
+            "light": config.workload_policy.light,
             "hard_load_cap_tolerance": config.workload_policy.hard_load_cap_tolerance,
         },
         "rooms": [
@@ -1463,7 +1464,7 @@ def _analysis_payload(
             evaluation.loads, config.persons,
             new_instructor_target=config.new_instructor_policy.contract_load,
             new_professor_target=config.new_professor_policy.contract_load,
-            overload_tolerance=config.workload_policy.overload_tolerance,
+            policy=config.workload_policy,
         )
     ]
     records = schedule.to_records()

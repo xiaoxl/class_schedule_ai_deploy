@@ -361,65 +361,56 @@ def add_load_terms(
             # including a zero-credit row. Their workload rules are shared.
             active = model.new_bool_var(f"load_active_{instructor}")
             model.add_max_equality(active, selected)
-        under_floor = int(round(
-            (person.max_load - policy.underload_tolerance) * scale
-        ))
-        limit = int(round((person.max_load + policy.overload_tolerance) * scale))
         hard_cap = int(round((person.max_load + policy.hard_load_cap_tolerance) * scale))
         model.add(total <= hard_cap)
         preference = preferences.get(instructor)
-        penalty = (
-            policy.penalties.permissive_overload_per_credit
-            if preference is not None and preference.allow_overload
-            else policy.penalties.strict_overload_per_credit
-            if preference is not None else 0.0
+
+        # d = load - contract, scaled. `target * active` is 0 for an
+        # unassigned optional hire, so its d is 0 -> the "ok" tier (0 is
+        # always in `ok`). Mirrors schedule_model.check_soft_preferences.
+        d_expr = total - target * active
+        neg_d_expr = target * active - total
+        max_over = max(hard_cap - target, 0)
+        max_under = max(target, 0)
+
+        def _at(value: int, tag: str):
+            hit = model.new_bool_var(f"load_{tag}_{instructor}")
+            model.add(d_expr == value).only_enforce_if(hit)
+            model.add(d_expr != value).only_enforce_if(hit.Not())
+            return hit
+
+        ok_hits = [_at(k * scale, f"ok{i}") for i, k in enumerate(policy.ok)]
+        light_hits = [_at(k * scale, f"light{i}") for i, k in enumerate(policy.light)]
+        in_ok = model.new_bool_var(f"load_in_ok_{instructor}")
+        model.add_max_equality(in_ok, ok_hits)
+        in_light = model.new_bool_var(f"load_in_light_{instructor}")
+        if light_hits:
+            model.add_max_equality(in_light, light_hits)
+        else:
+            model.add(in_light == 0)
+        heavy = model.new_bool_var(f"load_heavy_{instructor}")
+        model.add(in_ok + in_light + heavy == 1)
+
+        over = model.new_int_var(0, max_over, f"load_over_{instructor}")
+        under = model.new_int_var(0, max_under, f"load_under_{instructor}")
+        model.add_max_equality(over, [d_expr, 0])
+        model.add_max_equality(under, [neg_d_expr, 0])
+        over_heavy = model.new_int_var(0, max_over, f"load_over_heavy_{instructor}")
+        under_heavy = model.new_int_var(0, max_under, f"load_under_heavy_{instructor}")
+        model.add(over_heavy == over).only_enforce_if(heavy)
+        model.add(over_heavy == 0).only_enforce_if(heavy.Not())
+        model.add(under_heavy == under).only_enforce_if(heavy)
+        model.add(under_heavy == 0).only_enforce_if(heavy.Not())
+
+        over_unit = (
+            0.0 if preference is None
+            else policy.penalties.heavy_unit_over
+            if preference.allow_overload
+            else policy.penalties.heavy_unit_over_strict
         )
-        if penalty:
-            excess = model.new_int_var(
-                0, hard_cap - limit, f"overload_{instructor}"
-            )
-            model.add(excess >= total - limit)
-            objective_terms.append((penalty / scale) * excess)
-        if preference is not None and preference.allow_overload:
-            # Independent of the per-credit ``penalty`` above (which may be
-            # configured to 0) -- otherwise a zero permissive_overload_per_credit
-            # would silently drop the far-overload term from the solver's
-            # objective while schedule_model._overload_statuses still reports
-            # it, breaking the documented solver/evaluation parity.
-            far_limit = int(round(
-                (person.max_load + policy.far_overload_threshold) * scale
-            ))
-            far_over = model.new_bool_var(f"overload_far_{instructor}")
-            model.add(total > far_limit).only_enforce_if(far_over)
-            model.add(total <= far_limit).only_enforce_if(far_over.Not())
-            objective_terms.append(policy.penalties.far_overload_extra * far_over)
-        deficit = model.new_int_var(
-            0, max(under_floor, 0), f"under_load_{instructor}"
-        )
-        model.add(deficit >= under_floor * active - total)
+        objective_terms.append((over_unit / scale) * over_heavy)
         objective_terms.append(
-            (policy.penalties.underload_per_credit / scale) * deficit
+            (policy.penalties.heavy_unit_under / scale) * under_heavy
         )
-        flat = policy.penalties.near_target_flat
-        if flat:
-            # Charge ``flat`` once whenever the load lands inside the
-            # tolerance band [under_floor, limit] but not exactly on
-            # ``target`` -- the underload/overload ramps already cover
-            # everything outside that band.
-            ge_floor = model.new_bool_var(f"near_ge_{instructor}")
-            le_limit = model.new_bool_var(f"near_le_{instructor}")
-            model.add(total >= under_floor).only_enforce_if(ge_floor)
-            model.add(total <= under_floor - 1).only_enforce_if(ge_floor.Not())
-            model.add(total <= limit).only_enforce_if(le_limit)
-            model.add(total >= limit + 1).only_enforce_if(le_limit.Not())
-            at_target = model.new_bool_var(f"at_target_{instructor}")
-            below_target = model.new_bool_var(f"below_target_{instructor}")
-            above_target = model.new_bool_var(f"above_target_{instructor}")
-            model.add(total == target).only_enforce_if(at_target)
-            model.add(total <= target - 1).only_enforce_if(below_target)
-            model.add(total >= target + 1).only_enforce_if(above_target)
-            model.add(at_target + below_target + above_target == 1)
-            band_penalty = model.new_bool_var(f"near_target_{instructor}")
-            model.add(band_penalty >= ge_floor + le_limit - at_target + active - 2)
-            objective_terms.append(flat * band_penalty)
+        objective_terms.append(policy.penalties.light_penalty * in_light)
     return objective_terms
