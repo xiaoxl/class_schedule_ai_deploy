@@ -22,7 +22,7 @@ CONFIG_ROOT = Path("config")
 def _read_schedule(path: str | Path, config: SolverConfig):
     return read_schedule(
         path, persons=config.persons,
-        relationships=tuple(config.courses.relationships) if config.courses else (),
+        relationships=tuple(config.courses.active_relationships) if config.courses else (),
         catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
     )
 

@@ -147,7 +147,7 @@ def reconcile_records(
     present: set[str] = set()
     relationship_by_member = {
         member: relationship
-        for relationship in config.courses.relationships
+        for relationship in config.courses.active_relationships
         for member in relationship.members
     }
     for raw in records:
@@ -209,7 +209,7 @@ def reconcile_records(
 
     schedule = Schedule.from_records(
         kept, persons=config.persons,
-        relationships=tuple(config.courses.relationships),
+        relationships=tuple(config.courses.active_relationships),
         catalogs=tuple(config.catalogs.courses),
         infer_legacy_relationships=infer_legacy_relationships,
     )

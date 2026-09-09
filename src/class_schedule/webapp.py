@@ -24,6 +24,7 @@ import tempfile
 import threading
 import tomllib
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from html import escape
 from logging.handlers import RotatingFileHandler
@@ -176,10 +177,44 @@ def _configure_logging() -> None:
 _configure_logging()
 
 
+def _refresh_configuration_workspaces() -> None:
+    """Reconcile disk edits even when no browser request is being made."""
+    if not CONFIG_DIR.is_dir():
+        return
+    for path in sorted(CONFIG_DIR.iterdir()):
+        if path.is_dir() and PACKAGE_ID.fullmatch(path.name):
+            try:
+                _configuration_summary(path.name)
+            except (OSError, ValueError, HTTPException) as error:
+                logger.warning("Could not refresh configuration %s: %s", path.name, error)
+
+
+@asynccontextmanager
+async def _workspace_lifespan(app: FastAPI):
+    stop = threading.Event()
+
+    def watch():
+        while not stop.is_set():
+            try:
+                _refresh_configuration_workspaces()
+            except OSError as error:
+                logger.warning("Could not scan configuration directory: %s", error)
+            stop.wait(2)
+
+    worker = threading.Thread(target=watch, name="configuration-refresh", daemon=True)
+    worker.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        await run_in_threadpool(worker.join)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Class Schedule Viewer",
         version=get_app_version(),
+        lifespan=_workspace_lifespan,
     )
 
     @app.get("/", include_in_schema=False)
@@ -680,7 +715,7 @@ def create_app() -> FastAPI:
             )
         config = _load_web_config(package)
         try:
-            relationships = tuple(config.courses.relationships) if config.courses else ()
+            relationships = tuple(config.courses.active_relationships) if config.courses else ()
             catalogs = tuple(config.catalogs.courses) if config.catalogs else ()
             schedule = Schedule.from_records(
                 records, persons=config.persons, relationships=relationships,
@@ -867,6 +902,12 @@ def _configuration_target(package: str, filename: str) -> tuple[Path, Path]:
 
 def _configuration_file_payload(package: str) -> dict:
     summary = _configuration_summary(package)
+    template = template_summary(_package_root(package), WORK_ROOT)
+    template["differences"] = {"available": False}
+    if summary["working_view_ready"]:
+        template["differences"] = template["work_views"]["differences"]
+    elif summary["errors"]:
+        template["differences"]["error"] = "; ".join(summary["errors"])
     files = []
     for filename, relative in CONFIG_FILES.items():
         target, _ = _configuration_target(package, filename)
@@ -883,17 +924,31 @@ def _configuration_file_payload(package: str) -> dict:
         })
     return {
         **summary, "package_id": package, "files": files,
-        "template": template_summary(_package_root(package), WORK_ROOT),
+        "template": template,
     }
 
 
-def _working_view_ready(package: str) -> bool:
-    """Return whether a package owns a complete, provenance-verified work view."""
-    try:
-        _verified_initial(WORK_ROOT / package / "initial" / "initial.csv")
-    except (FileNotFoundError, OSError, ValueError):
-        return False
-    return True
+def _ensure_current_work_views(package: str) -> tuple[solver_module.SolverConfig, dict]:
+    """Serialize source validation, reconciliation and atomic working-view refresh."""
+    with _CONFIG_WRITE_LOCK:
+        config = solver_module.SolverConfig.load(CONFIG_DIR, package=package)
+        initial = WORK_ROOT / package / "initial" / "initial.csv"
+        try:
+            _, manifest = _verified_initial(initial)
+        except (OSError, ValueError):
+            manifest = {}
+        template = find_template(CONFIG_DIR / package)
+        template_hash = hashlib.sha256(template.read_bytes()).hexdigest() if template else None
+        recorded_template = manifest.get("template") or {}
+        if (
+            manifest.get("configuration_version") != config.version
+            or recorded_template.get("sha256") != template_hash
+            or recorded_template.get("filename") != (template.name if template else None)
+            or not manifest.get("differences", {}).get("available")
+        ):
+            rebuild_work_views(CONFIG_DIR / package, config_root=CONFIG_DIR, work_root=WORK_ROOT)
+            _, manifest = _verified_initial(initial)
+        return config, manifest
 
 
 def _configuration_summary(package: str) -> dict:
@@ -914,10 +969,12 @@ def _configuration_summary(package: str) -> dict:
         except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
             errors.append(f"{filename}: {error}")
     version = ""
+    manifest = {}
     if not missing and not errors:
         try:
-            version = solver_module.SolverConfig.load(CONFIG_DIR, package=package).version
-        except (FileNotFoundError, ValueError) as error:
+            config, manifest = _ensure_current_work_views(package)
+            version = config.version
+        except (OSError, ValueError) as error:
             errors.append(str(error))
     status = "invalid" if errors else "draft" if missing else "ready"
     return {
@@ -927,7 +984,8 @@ def _configuration_summary(package: str) -> dict:
         "missing": missing,
         "errors": errors,
         "config_version": version,
-        "working_view_ready": status == "ready" and _working_view_ready(package),
+        "working_view_ready": status == "ready" and bool(manifest),
+        "workspace_revision": manifest.get("generated_at"),
     }
 
 
@@ -992,7 +1050,7 @@ def _apply_configuration_transaction(changes: dict[str, dict]) -> None:
                 )
                 if complete:
                     solver_module.SolverConfig.load(staged_config, package=package)
-                if change.get("rebuild"):
+                if complete or template is not None:
                     rebuild_work_views(
                         staged_package,
                         config_root=staged_config,
@@ -1230,7 +1288,7 @@ def _schedule_from_payload(
         schedule = Schedule.from_records(
             records,
             persons=config.persons,
-            relationships=tuple(config.courses.relationships) if config.courses else (),
+            relationships=tuple(config.courses.active_relationships) if config.courses else (),
             catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
         )
     except (GroupingError, ValueError) as error:
@@ -1241,14 +1299,14 @@ def _schedule_from_payload(
 def _load_workspace_schedule(
     package: str, config: solver_module.SolverConfig,
 ) -> tuple[str, Schedule]:
-    """Load the verified initial working view owned by a Ready package."""
+    """Load a verified working view, refreshing it when its sources changed."""
     initial = WORK_ROOT / package / "initial" / "initial.csv"
     try:
-        _verified_initial(initial)
+        config, _ = _ensure_current_work_views(package)
         schedule = read_schedule(
             initial,
             persons=config.persons,
-            relationships=tuple(config.courses.relationships) if config.courses else (),
+            relationships=tuple(config.courses.active_relationships) if config.courses else (),
             catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
         )
     except (FileNotFoundError, GroupingError, ValueError) as error:
@@ -1290,6 +1348,7 @@ def _schedule_payload(
     return {
         "count": len(schedule),
         "source_name": source,
+        "workspace_revision": (template_summary(CONFIG_DIR / config.package_id, WORK_ROOT).get("work_views") or {}).get("generated_at"),
         "config_version": config.version,
         "package_id": config.package_id,
         "assignment_options": _assignment_options(config),

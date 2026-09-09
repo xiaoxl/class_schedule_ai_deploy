@@ -477,23 +477,21 @@ class ConfigurationFileManagementTests(unittest.TestCase):
         self.assertEqual(source, "initial.csv")
         self.assertGreater(len(schedule), 0)
 
-    def test_configuration_summary_only_opens_verified_working_view_tab(self):
-        self.assertFalse(webapp._configuration_summary("27S")["working_view_ready"])
+    def test_configuration_summary_builds_and_repairs_working_view_tab(self):
+        self.assertTrue(webapp._configuration_summary("27S")["working_view_ready"])
 
         webapp._rebuild_package_work_views("27S")
         self.assertTrue(webapp._configuration_summary("27S")["working_view_ready"])
 
         initial = webapp.WORK_ROOT / "27S" / "initial" / "initial.csv"
         initial.write_bytes(initial.read_bytes() + b"\n")
-        self.assertFalse(webapp._configuration_summary("27S")["working_view_ready"])
+        self.assertTrue(webapp._configuration_summary("27S")["working_view_ready"])
 
-    def test_schedule_workspace_rejects_missing_working_view(self):
+    def test_schedule_workspace_builds_missing_working_view(self):
         config = SolverConfig.load(self.config_root, package="27S")
-
-        with self.assertRaises(HTTPException) as context:
-            webapp._load_workspace_schedule("27S", config)
-
-        self.assertEqual(context.exception.status_code, 409)
+        source, schedule = webapp._load_workspace_schedule("27S", config)
+        self.assertEqual(source, "initial.csv")
+        self.assertGreater(len(schedule), 0)
 
     def test_schedule_api_and_ui_no_longer_accept_a_schedule_upload(self):
         routes = {
@@ -606,6 +604,176 @@ class EmptyConfigDirBootTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"configurations": []})
+
+
+
+
+class AutomaticWorkspaceRefreshTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.template_dir = self.root / "TEST" / "template"
+        self.template_dir.mkdir(parents=True)
+        self.record = {
+            "Subject": "MATH", "Number": "1003", "Section": "001",
+            "Credits": "3", "Time Slot": "MWF 8:00am", "Duration": "50",
+            "Building": "Corley", "Room": "101", "Instructor": "Alice",
+        }
+        config_patch = patch.object(webapp, "CONFIG_DIR", self.root)
+        config_patch.start()
+        self.addCleanup(config_patch.stop)
+
+    def write_template(self, records):
+        from class_schedule.schedule_model import Schedule
+        Schedule.from_records(records).to_dataframe().to_csv(
+            self.template_dir / "source.csv", index=False,
+        )
+
+    def prepare_configuration(self):
+        from class_schedule.config_inference import infer_configuration_from_template
+        self.write_template([self.record])
+        inferred = infer_configuration_from_template(self.template_dir / "source.csv", package="TEST")
+        for name, content in inferred.files.items():
+            target = self.root / "TEST" / webapp.CONFIG_FILES[name]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+
+    def test_configuration_changes_rebuild_differences_and_manifest_together(self):
+        import json
+        self.prepare_configuration()
+        work = self.root / "work"
+        manifest = work / "TEST" / "initial" / "manifest.json"
+        manifest.parent.mkdir(parents=True)
+        original = json.dumps({"differences": {"available": True, "removed": [], "added": []}})
+        manifest.write_text(original, encoding="utf-8")
+        with patch.object(webapp, "WORK_ROOT", work):
+            initial = webapp._configuration_file_payload("TEST")["template"]["differences"]
+            self.assertEqual(initial["removed"], [])
+            courses = self.root / "TEST" / "courses.toml"
+            courses.write_text(courses.read_text(encoding="utf-8").replace('"001"', '"002"'), encoding="utf-8")
+            current = webapp._configuration_file_payload("TEST")["template"]["differences"]
+            self.assertTrue(current["available"])
+            self.assertEqual(current["removed"], ["MATH 1003 001"])
+            self.assertEqual(current["added"], ["MATH 1003 002"])
+            self.assertNotEqual(manifest.read_text(encoding="utf-8"), original)
+            self.assertEqual(json.loads(manifest.read_text(encoding="utf-8"))["differences"], current)
+            manifest.unlink()
+            without_manifest = webapp._configuration_file_payload("TEST")["template"]["differences"]
+            self.assertEqual(without_manifest, current)
+
+    def test_workspace_load_refreshes_stale_configuration_and_template(self):
+        from class_schedule.solver import SolverConfig
+        from class_schedule.schedule_run import _verified_initial
+        self.prepare_configuration()
+        with patch.object(webapp, "WORK_ROOT", self.root / "work"):
+            webapp._rebuild_package_work_views("TEST")
+            courses = self.root / "TEST" / "courses.toml"
+            courses.write_text(courses.read_text(encoding="utf-8").replace('"001"', '"002"'), encoding="utf-8")
+            config = SolverConfig.load(self.root, package="TEST")
+            _, schedule = webapp._load_workspace_schedule("TEST", config)
+            self.assertEqual([s.section for c in schedule.classes for s in c.sections], ["002"])
+            initial = webapp.WORK_ROOT / "TEST" / "initial" / "initial.csv"
+            _, manifest = _verified_initial(initial)
+            self.assertEqual(manifest["configuration_version"], config.version)
+            self.assertEqual(manifest["differences"]["removed"], ["MATH 1003 001"])
+            self.write_template([dict(self.record, Section="002", Room="202")])
+            _, schedule = webapp._load_workspace_schedule("TEST", config)
+            self.assertEqual(schedule.classes[0].sections[0].room, "202")
+            saved = initial.parent.joinpath("manifest.json").read_bytes()
+            webapp._load_workspace_schedule("TEST", config)
+            self.assertEqual(initial.parent.joinpath("manifest.json").read_bytes(), saved)
+
+    def test_background_scan_rebuilds_every_config_file_and_template_deletion(self):
+        import json
+        self.prepare_configuration()
+        with patch.object(webapp, "WORK_ROOT", self.root / "work"):
+            webapp._refresh_configuration_workspaces()
+            manifest = webapp.WORK_ROOT / "TEST" / "initial" / "manifest.json"
+            for name, relative in webapp.CONFIG_FILES.items():
+                with self.subTest(file=name):
+                    before = manifest.read_bytes()
+                    target = self.root / "TEST" / relative
+                    target.write_bytes(target.read_bytes() + b"\n# edited on disk\n")
+                    webapp._refresh_configuration_workspaces()
+                    self.assertNotEqual(manifest.read_bytes(), before)
+                    current = manifest.read_bytes()
+                    webapp._refresh_configuration_workspaces()
+                    self.assertEqual(manifest.read_bytes(), current)
+            (self.template_dir / "source.csv").unlink()
+            webapp._refresh_configuration_workspaces()
+            updated = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(updated["source"], "generated_default")
+            self.assertEqual(updated["differences"]["added"], ["MATH 1003 001"])
+
+    def test_server_watcher_rebuilds_disk_edits_without_browser_requests(self):
+        import threading
+        self.prepare_configuration()
+        scanned = threading.Event()
+        refresh = webapp._refresh_configuration_workspaces
+
+        def scan():
+            refresh()
+            scanned.set()
+
+        with patch.object(webapp, "WORK_ROOT", self.root / "work"), patch.object(
+            webapp, "_refresh_configuration_workspaces", side_effect=scan,
+        ):
+            with TestClient(webapp.create_app()):
+                self.assertTrue(scanned.wait(5), "startup scan did not complete")
+                manifest = webapp.WORK_ROOT / "TEST" / "initial" / "manifest.json"
+                before = manifest.read_bytes()
+                preferences = self.root / "TEST" / "preferences.toml"
+                preferences.write_bytes(preferences.read_bytes() + b"\n# background change\n")
+                scanned.clear()
+                self.assertTrue(scanned.wait(5), "disk edit was not detected")
+                self.assertNotEqual(manifest.read_bytes(), before)
+
+    def test_configuration_transaction_always_rebuilds_complete_package(self):
+        import json
+        self.prepare_configuration()
+        with patch.object(webapp, "WORK_ROOT", self.root / "work"):
+            webapp._refresh_configuration_workspaces()
+            manifest = webapp.WORK_ROOT / "TEST" / "initial" / "manifest.json"
+            before = manifest.read_bytes()
+            preferences = self.root / "TEST" / "preferences.toml"
+            webapp._apply_configuration_transaction({"TEST": {
+                "replacements": {"preferences.toml": preferences.read_bytes() + b"\n# uploaded\n"},
+                "rebuild": False,
+            }})
+            self.assertNotEqual(manifest.read_bytes(), before)
+            snapshot = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertTrue(snapshot["differences"]["available"])
+            before = manifest.read_bytes()
+            webapp._configuration_file_payload("TEST")
+            self.assertEqual(manifest.read_bytes(), before)
+
+    def test_invalid_disk_config_preserves_last_view_and_recovers(self):
+        self.prepare_configuration()
+        with patch.object(webapp, "WORK_ROOT", self.root / "work"):
+            webapp._refresh_configuration_workspaces()
+            manifest = webapp.WORK_ROOT / "TEST" / "initial" / "manifest.json"
+            before = manifest.read_bytes()
+            courses = self.root / "TEST" / "courses.toml"
+            valid = courses.read_bytes()
+            courses.write_bytes(b"invalid = [")
+            webapp._refresh_configuration_workspaces()
+            payload = webapp._configuration_file_payload("TEST")
+            self.assertEqual(payload["status"], "invalid")
+            self.assertFalse(payload["working_view_ready"])
+            self.assertEqual(manifest.read_bytes(), before)
+            courses.write_bytes(valid + b"\n# repaired\n")
+            webapp._refresh_configuration_workspaces()
+            self.assertTrue(webapp._configuration_summary("TEST")["working_view_ready"])
+            self.assertNotEqual(manifest.read_bytes(), before)
+
+    def test_configuration_comparison_exposes_template_errors(self):
+        self.prepare_configuration()
+        (self.template_dir / "source.csv").write_text('Subject,Number,Section\n"MATH,1003,001\n', encoding="utf-8")
+        with patch.object(webapp, "WORK_ROOT", self.root / "work"):
+            differences = webapp._configuration_file_payload("TEST")["template"]["differences"]
+        self.assertFalse(differences["available"])
+        self.assertTrue(differences["error"])
 
 
 if __name__ == "__main__":

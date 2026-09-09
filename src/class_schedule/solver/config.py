@@ -253,11 +253,6 @@ class SolverConfig:
         if missing_catalog:
             raise ValueError(f"Offered courses are missing from catalogs.toml: {missing_catalog}")
         catalog_names = {f"{subject} {number}" for subject, number in catalog_ids}
-        offered_names = {f"{subject} {number}" for subject, number in offered_ids}
-        offered_sections = {
-            (f"{item.subject} {item.number}", section)
-            for item in self.courses.courses for section in item.sections
-        }
         invalid_qualifications = sorted({
             course for person in self.persons.values() for course in person.courses
             if course not in catalog_names
@@ -301,12 +296,10 @@ class SolverConfig:
             for rule in preference.rules
         ) + self.global_rules
         self._validate_rule_course_references(
-            preference_rules, catalog_names, offered_names,
-            offered_sections, "preferences.toml"
+            preference_rules, catalog_names, "preferences.toml"
         )
         self._validate_rule_course_references(
-            self.constraint_rules, catalog_names, offered_names,
-            offered_sections, "constraints.toml"
+            self.constraint_rules, catalog_names, "constraints.toml"
         )
         invalid_pattern_courses = sorted({
             course for pattern in self.meeting_patterns
@@ -317,15 +310,6 @@ class SolverConfig:
             raise ValueError(
                 "timeslot.toml references unknown catalog courses: "
                 f"{invalid_pattern_courses}"
-            )
-        unused_pattern_courses = sorted({
-            course for pattern in self.meeting_patterns for course in pattern.courses
-            if course not in offered_names
-        })
-        if unused_pattern_courses:
-            raise ValueError(
-                "timeslot.toml course selectors match no offered course: "
-                f"{unused_pattern_courses}"
             )
         self._validate_pattern_coverage()
         for rule in self.constraint_rules:
@@ -372,36 +356,13 @@ class SolverConfig:
 
     @staticmethod
     def _validate_rule_course_references(
-        rules, catalog_names: set[str], offered_names: set[str],
-        offered_sections: set[tuple[str, str]],
+        rules, catalog_names: set[str],
         filename: str,
     ) -> None:
         for rule in rules:
             if rule.course is not None and rule.course not in catalog_names:
                 raise ValueError(
                     f"{filename} references unknown catalog course: {rule.course}"
-                )
-            if rule.course is not None and rule.course not in offered_names:
-                raise ValueError(
-                    f"{filename} references an unoffered course: {rule.course}"
-                )
-            if (
-                rule.course is not None and rule.section is not None
-                and (rule.course, rule.section) not in offered_sections
-            ):
-                raise ValueError(
-                    f"{filename} references an unoffered section: "
-                    f"{rule.course} {rule.section}"
-                )
-            if rule.section_prefix is not None and not any(
-                (rule.course is None or course == rule.course)
-                and
-                section.upper().startswith(rule.section_prefix.upper())
-                for course, section in offered_sections
-            ):
-                raise ValueError(
-                    f"{filename} section_prefix matches no offered section: "
-                    f"{rule.section_prefix}"
                 )
 
     def _validate_pattern_coverage(self) -> None:
@@ -410,7 +371,7 @@ class SolverConfig:
             f"{item.subject} {item.number}": item.resolved_credits
             for item in self.catalogs.courses
         }
-        relationships = self.courses.relationships
+        relationships = self.courses.active_relationships
         related = {member for relation in relationships for member in relation.members}
         requirements: list[tuple[str, str, frozenset[str]]] = []
         for relation in relationships:

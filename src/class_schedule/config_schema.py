@@ -478,8 +478,10 @@ class CourseRelationshipSchema(StrictModel):
             raise ValueError("relationship members must not be empty")
         if len(set(normalized)) != len(normalized):
             raise ValueError("relationship members must be different")
-        if any(not re.fullmatch(r"[A-Z]+\s+\d+[A-Z]?\s+\S+", value) for value in normalized):
-            raise ValueError("relationship members must use 'SUBJECT NUMBER SECTION'")
+        if any(not re.fullmatch(r"[A-Z]+\s+\d+[A-Z]?(?:\s+\S+)?", value) for value in normalized):
+            raise ValueError("relationship members must use 'SUBJECT NUMBER' or 'SUBJECT NUMBER SECTION'")
+        if len({len(value.split()) for value in normalized}) != 1:
+            raise ValueError("relationship members must all use the same course or section level")
         return normalized
 
     @field_validator("synced_fields")
@@ -515,6 +517,10 @@ class CourseRelationshipSchema(StrictModel):
         return self
 
     @property
+    def is_course_level(self) -> bool:
+        return len(self.members[0].split()) == 2
+
+    @property
     def key(self) -> str:
         canonical = "\0".join((self.kind, *sorted(self.members)))
         return f"relationship-{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:20]}"
@@ -539,25 +545,47 @@ class CoursesFileSchema(StrictModel):
     courses: list[OfferedCourseSchema] = Field(default_factory=list)
     relationships: list[CourseRelationshipSchema] = Field(default_factory=list)
 
+    @property
+    def active_relationships(self) -> tuple[CourseRelationshipSchema, ...]:
+        """Expand defaults by matching section code; incomplete groups are inactive."""
+        sections_by_course = {
+            f"{item.subject} {item.number}": set(item.sections)
+            for item in self.courses
+        }
+        offered = {
+            f"{course} {section}"
+            for course, sections in sections_by_course.items() for section in sections
+        }
+        explicit = [
+            relation for relation in self.relationships
+            if not relation.is_course_level and set(relation.members) <= offered
+        ]
+        reserved = {member for relation in explicit for member in relation.members}
+        active = list(explicit)
+        for relation in self.relationships:
+            if not relation.is_course_level:
+                continue
+            matching = set.intersection(*(
+                sections_by_course.get(course, set()) for course in relation.members
+            ))
+            for section in sorted(matching):
+                members = [f"{course} {section}" for course in relation.members]
+                # A specific active section declaration overrides a course default.
+                if reserved.intersection(members):
+                    continue
+                active.append(relation.model_copy(update={"members": members}))
+        return tuple(active)
+
     @model_validator(mode="after")
     def validate_references(self):
         course_keys = [(item.subject, item.number) for item in self.courses]
         if len(course_keys) != len(set(course_keys)):
             raise ValueError("offered course identities must be unique")
-        offered = {
-            f"{item.subject} {item.number} {section}"
-            for item in self.courses for section in item.sections
-        }
         keys = [item.key for item in self.relationships]
         if len(keys) != len(set(keys)):
             raise ValueError("relationship identities must be unique")
         used: set[str] = set()
         for relationship in self.relationships:
-            unknown = sorted(set(relationship.members) - offered)
-            if unknown:
-                raise ValueError(
-                    f"relationship {relationship.display_name!r} references unknown sections: {unknown}"
-                )
             repeated = sorted(set(relationship.members) & used)
             if repeated:
                 raise ValueError(

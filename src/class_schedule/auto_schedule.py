@@ -35,7 +35,7 @@ def run_auto_schedule(schedule, config, *, root: Path, seconds: float, compare_t
                 if name in saved:
                     history.append(Schedule.from_records(
                         saved[name], persons=config.persons,
-                        relationships=tuple(config.courses.relationships) if config.courses else (),
+                        relationships=tuple(config.courses.active_relationships) if config.courses else (),
                         catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
                     ))
         attempt_id = uuid.uuid4().hex

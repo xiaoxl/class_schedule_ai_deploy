@@ -119,7 +119,36 @@ Relationship IDs are derived internally from `kind` plus sorted canonical
 members and are not authored. `coreq` has exactly two members;
 `cross_listing` has two or more. `four_credit` and `hybrid` describe multiple
 meeting rows within one section and therefore have one member. A section may
-belong to only one declared relationship.
+belong to only one declared relationship. Declarations may reference sections
+that are not offered this term. Only relationships whose members are all
+offered participate in scheduling; an inactive relationship never adds its
+missing members to the offering list.
+
+Course-level declarations omit the section code and expand against the actual
+`courses` offerings:
+
+```toml
+[[relationships]]
+kind = "four_credit"
+members = ["MATH 2924"]
+
+[[relationships]]
+kind = "cross_listing"
+members = ["MATH 5173", "STAT 4173"]
+unsynced = []
+
+[[relationships]]
+kind = "coreq"
+members = ["MATH 0803", "MATH 1003"]
+```
+
+Single-course declarations expand once per offered section. Multi-course
+relationships expand only for section codes present in **every** member course.
+Missing partners are silently skipped, never reported as an error or added to
+the offerings. The same all-members-present rule applies to explicit section
+relationships. Members within one declaration must all use the same level.
+An active explicit section declaration takes precedence over a course-level
+default involving that section. Expanded relationships preserve `unsynced`.
 
 Coreq and CrossListing are never guessed during ordinary loading; their
 default/legacy recognition exists only in template inference. Four-credit and
@@ -202,9 +231,9 @@ invalid input credit, or input/catalog disagreement is an error. A catalog
 entry may omit `credits`, in which case the last course-number digit is its
 resolved credit value everywhere, including the solver and reports.
 
-All course selectors are cross-validated. Instructor qualifications must reference catalog courses; preference and constraint sections must be offered; timeslot selectors must reference real courses. Package loading also verifies that every declared relationship has applicable meeting-pattern roles before the solver runs.
+All course selectors are cross-validated. Instructor qualifications must reference catalog courses; preference, constraint, and timeslot selectors may target courses or sections not offered this term, but their course references must exist in the catalog. Package loading also verifies that every active relationship has applicable meeting-pattern roles before the solver runs.
 
-`courses.toml` is the sole desired-offering source. The starting file contributes reusable instructor, time, and room assignments only. `initial` generates `reconciliation.toml`; there is no hand-written cancellation/addition file.
+`courses.toml` is the sole desired-offering source. The starting file contributes reusable instructor, time, and room assignments only. `initial` generates `reconciliation.toml`; there is no hand-written cancellation/addition file. Any change to the seven configuration files or the schedule template triggers reconciliation and an atomic rebuild of the CSV, instructor view, room view, and difference audit. Web saves and uploads rebuild immediately. While the server runs, a background scan detects disk edits every two seconds; loading a workspace also checks freshness. Unchanged sources do not cause repeated rebuilds. The difference panel and working schedule use the same rebuilt snapshot. Open browser workspaces refresh automatically when there are no unsaved edits. Invalid or incomplete configuration is reported and leaves the last successful files intact, but those files are not exposed as a current Ready view.
 
 The package name is also the normal work/output namespace. CLI commands reject a different positional term, and the Web output field is read-only and follows the selected package.
 

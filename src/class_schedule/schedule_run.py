@@ -180,7 +180,7 @@ def create_override_template(
     config = SolverConfig.load(config_dir, package=package or "27S")
     schedule = read_schedule(
         source_path, persons=config.persons,
-        relationships=tuple(config.courses.relationships) if config.courses else (),
+        relationships=tuple(config.courses.active_relationships) if config.courses else (),
         catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
     )
     destination = Path(
@@ -222,7 +222,7 @@ def install_version_override_template(
     config = SolverConfig.load(config_dir, package=package or "27S")
     schedule = read_schedule(
         source_path, persons=config.persons,
-        relationships=tuple(config.courses.relationships) if config.courses else (),
+        relationships=tuple(config.courses.active_relationships) if config.courses else (),
         catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
     )
     workspace.write_text(
@@ -247,7 +247,7 @@ def install_version_override_template(
                 )
             read_schedule(
                 recorded_baseline, persons=config.persons,
-                relationships=tuple(config.courses.relationships) if config.courses else (),
+                relationships=tuple(config.courses.active_relationships) if config.courses else (),
                 catalogs=tuple(config.catalogs.courses) if config.catalogs else (),
             ).to_dataframe().to_csv(baseline_snapshot, index=False)
             baseline_info["snapshot"] = baseline_snapshot.name
@@ -665,7 +665,7 @@ def run_term(
         raise ValueError("Automatic ver input and baseline must both be initial.csv")
 
     config = SolverConfig.load(config_dir, package=package or "27S")
-    relationships = tuple(config.courses.relationships) if config.courses else ()
+    relationships = tuple(config.courses.active_relationships) if config.courses else ()
     catalogs = tuple(config.catalogs.courses) if config.catalogs else ()
     source_schedule = read_schedule(
         input_path, persons=config.persons, relationships=relationships,

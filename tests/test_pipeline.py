@@ -325,17 +325,116 @@ class ConfigLayoutTests(unittest.TestCase):
         self.assertEqual(catalogs.courses[0].number, "1113")
         self.assertEqual(courses.courses[0].sections, ["001"])
 
-    def test_relationship_rejects_an_unknown_section(self):
-        with self.assertRaisesRegex(ValueError, "unknown sections"):
-            CoursesFileSchema.model_validate({
-                "courses": [{
-                    "subject": "MATH", "number": "1113", "sections": ["001"],
-                }],
-                "relationships": [{
-                    "id": "missing", "kind": "coreq",
-                    "members": ["MATH 1113 001", "MATH 1110 001"],
-                }],
-            })
+    def test_relationship_allows_unoffered_members(self):
+        courses = CoursesFileSchema.model_validate({
+            "courses": [{
+                "subject": "MATH", "number": "1113", "sections": ["007"],
+            }],
+            "relationships": [{
+                "kind": "hybrid", "members": ["MATH 1113 F01"],
+            }],
+        })
+        self.assertEqual(len(courses.relationships), 1)
+        self.assertEqual(courses.active_relationships, ())
+
+    def test_inactive_relationships_do_not_create_cancelled_sections(self):
+        for kind, members in (
+            ("hybrid", ["MATH 1113 F01"]),
+            ("four_credit", ["MATH 2914 001"]),
+            ("coreq", ["MATH 1113 007", "MATH 1110 001"]),
+            ("cross_listing", ["MATH 1113 007", "MATH 1113H 001"]),
+            ("coreq", ["MATH 1113", "MATH 1110"]),
+            ("cross_listing", ["MATH 1113", "MATH 1113H"]),
+        ):
+            with self.subTest(kind=kind):
+                config = SolverConfig(
+                    persons={}, preferences={}, rooms=[RoomRecord("Corley", "101")],
+                    meeting_patterns=[MeetingPattern(
+                        "MWF", 50, (datetime.time(9),), roles=frozenset({"normal"}),
+                    )],
+                    catalogs=CatalogsFileSchema.model_validate({"courses": [{
+                        "subject": "MATH", "number": "1113", "title": "Algebra",
+                    }]}),
+                    courses=CoursesFileSchema.model_validate({
+                        "courses": [{"subject": "MATH", "number": "1113", "sections": ["007"]}],
+                        "relationships": [{"kind": kind, "members": members}],
+                    }),
+                    constraint_rules=(ConstraintRule(
+                        direction="+", course="MATH 1113", section="F01", room="Corley 101",
+                    ),),
+                )
+                config.validate_references()
+                old = [{"Subject": "MATH", "Number": "1113", "Section": "F01"}]
+                schedule, report = reconcile_records(old, config)
+                self.assertEqual(report.removed, ("MATH 1113 F01",))
+                self.assertEqual(report.added, ("MATH 1113 007",))
+                self.assertEqual(len(schedule.classes), 1)
+                self.assertIsInstance(schedule.classes[0], NormalClass)
+                self.assertEqual(schedule.classes[0].sections[0].section, "007")
+                rebuilt, second_report = reconcile_records(schedule.to_dataframe().to_dict("records"), config)
+                self.assertEqual(len(rebuilt.classes), 1)
+                self.assertEqual(second_report.added, ())
+
+    def test_course_level_four_credit_expands_only_offered_sections(self):
+        courses = CoursesFileSchema.model_validate({
+            "courses": [{"subject": "MATH", "number": "2924", "sections": ["003", "001"]}],
+            "relationships": [{"kind": "four_credit", "members": ["MATH 2924"]}],
+        })
+        self.assertEqual([r.members for r in courses.active_relationships],
+                         [["MATH 2924 001"], ["MATH 2924 003"]])
+        self.assertEqual(courses.relationships[0].members, ["MATH 2924"])
+        self.assertEqual(len({r.key for r in courses.active_relationships}), 2)
+
+    def test_course_level_multiclass_requires_every_member_at_same_section(self):
+        for kind, numbers in (("coreq", ["0803", "1003"]),
+                              ("cross_listing", ["5173", "4173", "3173"])):
+            with self.subTest(kind=kind):
+                declarations = {"kind": kind, "members": [f"MATH {n}" for n in numbers]}
+                if kind == "cross_listing":
+                    declarations["unsynced"] = ["time"]
+                courses = CoursesFileSchema.model_validate({
+                    "courses": [
+                        {"subject": "MATH", "number": n,
+                         "sections": ["002", f"00{i + 3}"]}
+                        for i, n in enumerate(numbers)
+                    ],
+                    "relationships": [declarations],
+                })
+                self.assertEqual([r.members for r in courses.active_relationships],
+                                 [[f"MATH {n} 002" for n in numbers]])
+                if kind == "cross_listing":
+                    self.assertEqual(courses.active_relationships[0].locked_fields,
+                                     frozenset({"instructor", "room"}))
+                courses.courses.pop()
+                self.assertEqual(courses.active_relationships, ())
+
+    def test_section_override_takes_precedence_over_course_default(self):
+        courses = CoursesFileSchema.model_validate({
+            "courses": [{"subject": "MATH", "number": n, "sections": ["001", "002"]}
+                        for n in ("5173", "4173")],
+            "relationships": [
+                {"kind": "cross_listing", "members": ["MATH 5173", "MATH 4173"], "unsynced": []},
+                {"kind": "cross_listing", "members": ["MATH 5173 002", "MATH 4173 002"], "unsynced": ["room"]},
+            ],
+        })
+        active = {r.members[0]: r for r in courses.active_relationships}
+        self.assertEqual(len(active), 2)
+        self.assertEqual(active["MATH 5173 001"].unsynced, [])
+        self.assertEqual(active["MATH 5173 002"].unsynced, ["room"])
+
+    def test_relationship_rejects_mixed_course_and_section_members(self):
+        with self.assertRaisesRegex(ValueError, "same course or section level"):
+            CourseRelationshipSchema(kind="coreq", members=["MATH 0803", "MATH 1003 002"])
+
+    def test_relationship_activates_when_all_members_are_offered(self):
+        courses = CoursesFileSchema.model_validate({
+            "courses": [
+                {"subject": "MATH", "number": "0803", "sections": ["004"]},
+                {"subject": "MATH", "number": "1003", "sections": ["004"]},
+            ],
+            "relationships": [{"kind": "coreq", "members": ["MATH 0803 004", "MATH 1003 004"]}],
+        })
+        self.assertEqual(courses.active_relationships, tuple(courses.relationships))
 
     def test_configured_coreq_uses_existing_atomic_class_behavior(self):
         relationships = CoursesFileSchema.model_validate({
