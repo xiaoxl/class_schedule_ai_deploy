@@ -377,10 +377,15 @@ class SolverConfig:
         for relation in relationships:
             atomic = frozenset(" ".join(member.split()[:2]) for member in relation.members)
             if relation.kind == "lecture_lab":
-                course = " ".join(relation.members[0].split()[:2])
-                requirements.append((course, "lecture_lab_lecture", atomic))
+                lecture_course = " ".join(relation.members[0].split()[:2])
+                lab_course = " ".join(relation.members[-1].split()[:2])
+                if len(relation.members) == 1:
+                    # Shared course number: the lecture keeps a constrained domain.
+                    requirements.append((lecture_course, "lecture_lab_lecture", atomic))
+                # A catalog-sibling lecture follows the general calendar (see
+                # pattern_rules.section_pattern_role), so it needs no role here.
                 if relation.lab_time_editable:
-                    requirements.append((course, "lecture_lab_lab", atomic))
+                    requirements.append((lab_course, "lecture_lab_lab", atomic))
             elif relation.kind == "four_credit":
                 course = " ".join(relation.members[0].split()[:2])
                 requirements.extend((course, role, atomic) for role in (

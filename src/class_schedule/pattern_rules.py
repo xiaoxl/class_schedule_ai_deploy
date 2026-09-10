@@ -11,6 +11,7 @@ from .class_model import (
     CrossListingClass,
     FourCreditClass,
     HybridClass,
+    LabClass,
     LectureLabClass,
     NormalClass,
     Section,
@@ -28,8 +29,19 @@ class MeetingPatternLike(Protocol):
 
 def section_pattern_role(item: Class, section: Section) -> str:
     """Return one structural role without consulting any course number."""
+    if isinstance(item, LabClass):
+        return "lecture_lab_lab"
     if isinstance(item, LectureLabClass):
-        return "lecture_lab_lecture" if item.role(section) == "lecture" else "lecture_lab_lab"
+        if item.role(section) != "lecture":
+            return "lecture_lab_lab"
+        # A same-course-number lecture keeps its own configured domain; a
+        # catalog-sibling lecture (e.g. CHEM 3264 linked to CHEM 3260) is
+        # an ordinary standalone lecture and follows the general calendar.
+        return (
+            "lecture_lab_lecture"
+            if item.lecture.number == item.lab_long.number
+            else "normal"
+        )
     if isinstance(item, FourCreditClass):
         return (
             "four_credit_primary" if section.days == "MWF"
@@ -70,7 +82,7 @@ def matches_configured_pattern(
     patterns: Iterable[MeetingPatternLike],
 ) -> bool:
     """Whether a physical section exactly matches a legal configured slot."""
-    if isinstance(item, LectureLabClass) and item.role(section) != "lecture":
+    if isinstance(item, (LectureLabClass, LabClass)) and item.role(section) != "lecture":
         if not item.lab_time_editable:
             return section.time_slot == item.fixed_lab_slot
         # The short room reservation follows the 170-minute lab decision.

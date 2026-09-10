@@ -6,7 +6,7 @@ import datetime
 from dataclasses import replace
 
 from .. import record_utils
-from ..class_model import Class, HybridClass, LectureLabClass, Section
+from ..class_model import Class, HybridClass, LabClass, LectureLabClass, Section
 from ..new_instructors import can_new_instructor_teach, can_new_professor_teach
 from ..instructor_identity import is_new_instructor, is_new_professor
 from ..pattern_rules import pattern_applies, section_pattern_role
@@ -108,11 +108,11 @@ def section_candidates(
     new_professors: tuple[str, ...] = (),
 ) -> list[SectionCandidate]:
     course = f"{section.subject} {section.number}"
-    lecture_lab = isinstance(item, LectureLabClass)
+    lecture_lab = isinstance(item, (LectureLabClass, LabClass))
     if lecture_lab:
-        locked_fields = locked_fields | {"room", "building"}
-        if item.role(section) == "lab_long" and not item.lab_time_editable:
-            locked_fields = locked_fields | {"time"}
+        # The lecture is free; lab rooms are fixed and lab time is fixed
+        # unless lab_time_editable (see class_model._LectureLabMixin).
+        locked_fields = locked_fields | item.solver_locked_fields(section)
     hybrid_companion = isinstance(item, HybridClass) and section.is_online
     current = SectionCandidate(
         instructor=section.instructor,
@@ -240,7 +240,7 @@ def section_candidates(
     rooms = config.rooms or [
         RoomRecord(building=section.building, room=section.room)
     ]
-    if lecture_lab:
+    if {"room", "building"} & locked_fields:
         rooms = [RoomRecord(building=section.building, room=section.room)]
     by_instructor: dict[str, dict[tuple[str, str, str], SectionCandidate]] = {
         instructor: {} for instructor in instructors

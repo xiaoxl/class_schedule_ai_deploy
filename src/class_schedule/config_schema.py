@@ -547,8 +547,11 @@ class CourseRelationshipSchema(StrictModel):
 
     @model_validator(mode="after")
     def validate_member_count(self):
-        if self.kind == "lecture_lab" and len(self.members) != 1:
-            raise ValueError("lecture_lab relationships require 1 member")
+        if self.kind == "lecture_lab" and len(self.members) not in (1, 2):
+            raise ValueError(
+                "lecture_lab relationships require 1 member (shared course "
+                "number) or 2 (lecture course then lab course)"
+            )
         if self.lab_time_editable and self.kind != "lecture_lab":
             raise ValueError("lab_time_editable is only meaningful for lecture_lab relationships")
         if self.kind == "four_credit" and len(self.members) != 1:

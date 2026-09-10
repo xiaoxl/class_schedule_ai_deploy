@@ -1082,84 +1082,394 @@ class CoreqClass(SpecialClass):
         return super(CoreqClass, self).change_time(time_slot, record=record)
 
 
-@dataclass(slots=True)
-class LectureLabClass(NormalClass):
-    """Three source rows, two decisions, and a fixed auxiliary lab room."""
+# ---------------------------------------------------------------------------
+# Lecture/lab modelling
+#
+# A "lab" here is one student lab meeting that books two rooms: the long
+# room for the whole 170 minutes and the short room only for the first 50.
+# That is a single scheduling decision (the 170-minute lab); the short room
+# rides on the same selection variable through ``resource_usage`` and adds
+# no independent instructor decision or teaching load.
+#
+# ``LabClass``        -- that lab on its own (no lecture), e.g. CHEM 3260.
+# ``LectureLabClass`` -- a lecture row linked to its lab. The lab half may
+#                        be a split-room pair or a single ordinary LAB row.
+#                        The lecture and the lab may share a course number
+#                        (CHEM 3245) or be catalog siblings whose numbers
+#                        differ only in the last digit (CHEM 3264 / 3260).
+#
+# Both share ``_LectureLabMixin`` so the split-room booking, the fixed-room
+# and fixed-time locks, and the persisted ``Lecture Lab Baseline`` column
+# are implemented exactly once.
+# ---------------------------------------------------------------------------
 
-    lab_time_editable: bool = False
-    fixed_locations: tuple[tuple[str, str], ...] = ()
-    fixed_lab_slot: str = ""
-    fixed_lecture_duration: int | None = None
-    schedule_issue_rule: ClassVar[str] = "lecture_lab_invalid"
+_LECTURE_TYPES = frozenset({"clas", "lecture", "lec"})
 
-    @staticmethod
-    def role(section: Section) -> str:
-        kind = section.type.strip().casefold()
-        if kind in {"clas", "lecture", "lec"}:
+
+def _meeting_kind(section: Section) -> str:
+    """``"lecture"``, ``"lab"``, or ``""`` from a row's ``Type``.
+
+    ``Meeting Type`` and ``Schedule Type`` are accepted as aliases of
+    ``Type`` upstream (see ``record_utils.COLUMN_ALIASES``).
+    """
+    kind = section.type.strip().casefold()
+    if kind in _LECTURE_TYPES:
+        return "lecture"
+    if kind == "lab":
+        return "lab"
+    return ""
+
+
+def _number_core(number: str) -> str:
+    """Leading digit run of a course number (``"1013L"`` -> ``"1013"``)."""
+    match = re.match(r"\d+", number or "")
+    return match.group(0) if match else ""
+
+
+def lecture_lab_number_siblings(lecture_number: str, lab_number: str) -> bool:
+    """Whether two course numbers are catalog siblings: same stem, last
+    digit differs -- e.g. ``3264``/``3260`` or ``1113``/``1111``.
+
+    Used only by the *structural* recognition fallback (see
+    ``schedule_model``). An explicit ``[[relationships]]`` entry can link a
+    lecture and lab whose numbers do not fit this shape.
+    """
+    a, b = _number_core(lecture_number), _number_core(lab_number)
+    return bool(a) and len(a) == len(b) and a != b and a[:-1] == b[:-1]
+
+
+def _lab_baseline(section: Section) -> dict:
+    """The row's persisted ``Lecture Lab Baseline`` JSON, or one derived
+    from its current values when the column is blank (a fresh template).
+    """
+    if section.lecture_lab_baseline:
+        try:
+            baseline = json.loads(section.lecture_lab_baseline)
+        except (TypeError, ValueError) as error:
+            raise ValueError("Malformed lecture/lab baseline") from error
+    else:
+        baseline = {
+            "building": section.building, "room": section.room,
+            "time_slot": section.time_slot, "duration": section.duration,
+        }
+    if not isinstance(baseline, dict) or any(
+        not isinstance(baseline.get(key), str)
+        for key in ("building", "room", "time_slot")
+    ) or type(baseline.get("duration")) is not int:
+        raise ValueError("Malformed lecture/lab baseline")
+    return baseline
+
+
+class _LectureLabMixin:
+    """Split-room lab machinery shared by ``LabClass`` and ``LectureLabClass``.
+
+    The concrete classes are ``@dataclass(slots=True)`` and supply the
+    fields declared here; this mixin only adds behaviour.
+    """
+
+    # Declared by the concrete dataclasses.
+    lab_time_editable: bool
+    fixed_lab_locations: tuple[tuple[str, str], ...]
+    fixed_lab_slot: str
+
+    # ---- role classification ----
+
+    def _lab_sections(self) -> tuple[Section, ...]:
+        return tuple(s for s in self.sections if _meeting_kind(s) == "lab")
+
+    def role(self, section: Section) -> str:
+        kind = _meeting_kind(section)
+        if kind == "lecture":
             return "lecture"
-        if kind == "lab" and section.duration in {50, 170}:
-            return "lab_short" if section.duration == 50 else "lab_long"
+        if kind != "lab":
+            return ""
+        if len(self._lab_sections()) == 1:
+            return "lab_single"
+        if section.duration == 50:
+            return "lab_short"
+        if section.duration == 170:
+            return "lab_long"
         return ""
 
-    def __post_init__(self) -> None:
-        if len(self.sections) != 3 or sorted(map(self.role, self.sections)) != [
-            "lab_long", "lab_short", "lecture",
-        ]:
-            raise ValueError("LectureLabClass requires one lecture and two labs of 50/170 minutes")
-        baselines = []
-        for section in self.sections:
-            try:
-                baseline = json.loads(section.lecture_lab_baseline) if section.lecture_lab_baseline else {
-                    "building": section.building, "room": section.room,
-                    "time_slot": section.time_slot, "duration": section.duration,
-                }
-                if not isinstance(baseline, dict) or any(
-                    not isinstance(baseline.get(key), str) for key in ("building", "room", "time_slot")
-                ) or type(baseline.get("duration")) is not int:
-                    raise ValueError("Malformed lecture/lab baseline")
-                baselines.append(baseline)
-            except (TypeError, ValueError) as error:
-                raise ValueError("Malformed lecture/lab baseline") from error
-        if not self.fixed_locations:
-            self.fixed_locations = tuple((b["building"], b["room"]) for b in baselines)
+    @property
+    def _split_room(self) -> bool:
+        return len(self._lab_sections()) == 2
+
+    @property
+    def lab_long(self) -> Section:
+        labs = self._lab_sections()
+        if len(labs) == 1:
+            return labs[0]
+        # Fall back to the longer row when neither is exactly 170 so
+        # ``_lab_structure_issues`` can report the bad durations cleanly
+        # instead of this property raising ``StopIteration``.
+        return next(
+            (s for s in labs if s.duration == 170),
+            max(labs, key=lambda s: s.duration or 0),
+        )
+
+    @property
+    def lab_short(self) -> Section | None:
+        if not self._split_room:
+            return None
+        labs = self._lab_sections()
+        return next(
+            (s for s in labs if s.duration == 50),
+            min(labs, key=lambda s: s.duration or 0),
+        )
+
+    # ---- structural validation for the lab half ----
+
+    def _lab_structure_issues(self) -> tuple[str, ...]:
+        labs = self._lab_sections()
+        if len(labs) not in (1, 2):
+            return ("A lecture/lab needs one or two LAB rows",)
+        if any(not s.has_meeting_time for s in labs):
+            return ("Lab rows require a physical meeting time",)
+        if self._split_room:
+            short, long = self.lab_short, self.lab_long
+            if {short.duration, long.duration} != {50, 170}:
+                return ("Split-room labs must be 50 and 170 minutes",)
+            if not short.room or not long.room:
+                return ("Split-room lab rows require rooms",)
+            if (short.days, short.start) != (long.days, long.start):
+                return ("Both lab rooms must share weekdays and start time",)
+            if (short.building, short.room) == (long.building, long.room):
+                return ("The two lab rooms must be different",)
+        actual = tuple((s.building, s.room) for s in labs)
+        if self.fixed_lab_locations and actual != self.fixed_lab_locations:
+            return ("Lab rooms and buildings are fixed",)
+        if (
+            not self.lab_time_editable
+            and self.fixed_lab_slot
+            and self.lab_long.time_slot != self.fixed_lab_slot
+        ):
+            return ("Lab time is fixed",)
+        return ()
+
+    def _init_lab_baselines(self) -> None:
+        labs = self._lab_sections()
+        baselines = [_lab_baseline(s) for s in labs]
+        if not self.fixed_lab_locations:
+            self.fixed_lab_locations = tuple(
+                (b["building"], b["room"]) for b in baselines
+            )
         if not self.fixed_lab_slot:
-            self.fixed_lab_slot = baselines[self.sections.index(self.lab_long)]["time_slot"]
-        if self.fixed_lecture_duration is None:
-            self.fixed_lecture_duration = baselines[self.sections.index(self.lecture)]["duration"]
+            self.fixed_lab_slot = (
+                baselines[labs.index(self.lab_long)]["time_slot"]
+                or self.lab_long.time_slot
+            )
+
+    # ---- solver integration (lab half) ----
+
+    def resource_usage(
+        self, source: Section, assigned: Section,
+    ) -> tuple[Section, ...]:
+        """The short room's occupancy, controlled by the long lab decision."""
+        if not self._split_room or self.role(source) != "lab_long":
+            return ()
+        return (replace(
+            self.lab_short, time_slot=assigned.time_slot, instructor="",
+        ),)
+
+    def solver_locked_fields(self, section: Section) -> frozenset[str]:
+        """Fields the solver must not vary for this row.
+
+        The lecture is free (room and time both editable -- see
+        ``docs/lecture-lab.md``). Lab rooms are always fixed; lab time is
+        fixed unless ``lab_time_editable``.
+        """
+        if self.role(section) == "lecture":
+            return frozenset()
+        locked = {"room", "building"}
+        if not self.lab_time_editable:
+            locked.add("time")
+        return frozenset(locked)
+
+    # ---- shared edit plumbing ----
+
+    def _lab_baseline_record(
+        self, section: Section, building: str, room: str,
+    ) -> str:
+        return json.dumps({
+            "building": building, "room": room,
+            "time_slot": self.fixed_lab_slot,
+            "duration": section.duration,
+        }, sort_keys=True)
+
+    def to_records(self) -> list[dict[str, object]]:
+        labs = self._lab_sections()
+        records = []
+        for section in self.sections:
+            row = section.to_record()
+            if _meeting_kind(section) == "lab":
+                building, room = self.fixed_lab_locations[labs.index(section)]
+                row["Lecture Lab Baseline"] = self._lab_baseline_record(
+                    section, building, room,
+                )
+            else:
+                row["Lecture Lab Baseline"] = ""
+            records.append(row)
+        return records
+
+    def apply_edit(
+        self, field: str, record_index: int, **changes: object,
+    ):
+        if not 0 <= record_index < len(self.sections):
+            raise IndexError(f"CSV record index out of range: {record_index}")
+        targets = self.edit_targets(field, record_index)
+        if field == "time":
+            # One shared start; each room keeps its own occupancy duration.
+            changes.pop("duration", None)
+        return replace(self, sections=tuple(
+            replace(s, **changes) if i in targets else s
+            for i, s in enumerate(self.sections)
+        ))
+
+    def _default_change_record(self) -> int:
+        return 0
+
+    def _change(self, record: int | None, **changes: object):
+        field_name = "time" if "time_slot" in changes else next(iter(changes))
+        if record is None:
+            if field_name == "time":
+                raise ValueError(
+                    "Specify which record when changing a lecture/lab time"
+                )
+            record = self._default_change_record()
+        return self.apply_edit(field_name, record, **changes)
+
+
+@dataclass(slots=True)
+class LabClass(_LectureLabMixin, SpecialClass):
+    """One split-room lab meeting on its own: two LAB rows (50 + 170
+    minutes) under one identity, one shared instructor, one start time,
+    two different rooms. One scheduling decision, rooms and time locked.
+    """
+
+    lab_time_editable: bool = False
+    fixed_lab_locations: tuple[tuple[str, str], ...] = ()
+    fixed_lab_slot: str = ""
+    schedule_issue_rule: ClassVar[str] = "lab_invalid"
+
+    def __post_init__(self) -> None:
+        if len(self.sections) != 2 or sorted(map(self.role, self.sections)) != [
+            "lab_long", "lab_short",
+        ]:
+            raise ValueError(
+                "LabClass requires two LAB rows of 50 and 170 minutes"
+            )
+        self._init_lab_baselines()
+        issues = self.structure_issues()
+        if issues:
+            raise ValueError(issues[0])
+
+    def structure_issues(self) -> tuple[str, ...]:
+        if len({s.identity for s in self.sections}) != 1:
+            return ("Lab rows must share Subject, Number and Section",)
+        if not self.sections[0].instructor or len(
+            {s.instructor for s in self.sections}
+        ) != 1:
+            return ("Lab rows must share one nonblank instructor",)
+        return self._lab_structure_issues()
+
+    def validation_report(self) -> tuple[str, ...]:
+        return self._exact_row_count_report(2) or self.structure_issues()
+
+    @property
+    def credit_hours(self) -> float:
+        """No lecture to borrow catalog credits from, so estimate from the
+        long lab's length at roughly one credit per 60 minutes.
+        """
+        return max(1, round((self.lab_long.duration or 0) / 60))
+
+    def scheduling_entries(self) -> tuple[Section, ...]:
+        return (self.lab_long,)
+
+    def scheduling_record_indexes(self, entry_index: int) -> tuple[int, ...]:
+        # Short and long lab locks both constrain the one decision.
+        return tuple(range(len(self.sections)))
+
+    def with_scheduling_assignments(
+        self, sections: tuple[Section, ...],
+    ) -> "LabClass":
+        (lab,) = sections
+        rebuilt = tuple(
+            lab if self.role(s) == "lab_long"
+            else replace(s, instructor=lab.instructor, time_slot=lab.time_slot)
+            for s in self.sections
+        )
+        return replace(self, sections=rebuilt)
+
+    def editable_fields(self, record_index: int) -> frozenset[str]:
+        fields = {"instructor"}
+        if self.lab_time_editable:
+            fields.add("time")
+        return frozenset(fields)
+
+    def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
+        if not 0 <= record_index < len(self.sections):
+            raise IndexError(f"CSV record index out of range: {record_index}")
+        if field in {"room", "building"}:
+            raise ValueError("Lab rooms and buildings are fixed")
+        if field == "instructor":
+            return tuple(range(len(self.sections)))
+        if field == "time":
+            if not self.lab_time_editable:
+                raise ValueError("Lab time is fixed")
+            return tuple(range(len(self.sections)))
+        return (record_index,)
+
+
+@dataclass(slots=True)
+class LectureLabClass(_LectureLabMixin, NormalClass):
+    """A lecture row linked to its lab.
+
+    Two or three source rows: exactly one CLAS row plus one or two LAB
+    rows. Two scheduling decisions -- the lecture and the 170-minute (or
+    the lone) lab. The lecture's room and time are editable; the lab's
+    rooms are fixed and its time is fixed unless ``lab_time_editable``.
+    Catalog credits count once for a shared course number, or add the two
+    numbers' trailing digits for a catalog-sibling pair.
+    """
+
+    lab_time_editable: bool = False
+    fixed_lab_locations: tuple[tuple[str, str], ...] = ()
+    fixed_lab_slot: str = ""
+    schedule_issue_rule: ClassVar[str] = "lecture_lab_invalid"
+
+    def __post_init__(self) -> None:
+        kinds = sorted(_meeting_kind(s) for s in self.sections)
+        if len(self.sections) not in (2, 3) or kinds.count("lecture") != 1 or not (
+            1 <= kinds.count("lab") <= 2
+        ):
+            raise ValueError(
+                "LectureLabClass requires one CLAS row and one or two LAB rows"
+            )
+        self._init_lab_baselines()
         issues = self.structure_issues()
         if issues:
             raise ValueError(issues[0])
 
     @property
     def lecture(self) -> Section:
-        return next(s for s in self.sections if self.role(s) == "lecture")
-
-    @property
-    def lab_short(self) -> Section:
-        return next(s for s in self.sections if self.role(s) == "lab_short")
-
-    @property
-    def lab_long(self) -> Section:
-        return next(s for s in self.sections if self.role(s) == "lab_long")
+        return next(s for s in self.sections if _meeting_kind(s) == "lecture")
 
     def structure_issues(self) -> tuple[str, ...]:
-        if len({s.identity for s in self.sections}) != 1:
-            return ("Lecture/lab rows must have the same Subject, Number and Section",)
-        if not self.lecture.instructor or len({s.instructor for s in self.sections}) != 1:
-            return ("Lecture/lab rows must share one nonblank instructor",)
-        if any(not s.has_meeting_time or not s.room for s in self.sections):
-            return ("Lecture/lab rows require physical meeting times and rooms",)
-        if (self.lab_short.days, self.lab_short.start) != (self.lab_long.days, self.lab_long.start):
-            return ("Both labs must share weekdays and start time",)
-        if (self.lab_short.building, self.lab_short.room) == (self.lab_long.building, self.lab_long.room):
-            return ("The two labs must use different rooms",)
-        if tuple((s.building, s.room) for s in self.sections) != self.fixed_locations:
-            return ("Lecture/lab rooms and buildings are fixed",)
-        if not self.lab_time_editable and self.lab_long.time_slot != self.fixed_lab_slot:
-            return ("Lab time is fixed",)
-        if self.lecture.duration != self.fixed_lecture_duration:
-            return ("Lecture duration is fixed",)
-        return ()
+        lecture = self.lecture
+        labs = self._lab_sections()
+        if any(
+            s.subject != lecture.subject or s.section != lecture.section
+            for s in labs
+        ):
+            return ("Lecture and lab rows must share Subject and Section",)
+        if not lecture.instructor or len(
+            {s.instructor for s in self.sections}
+        ) != 1:
+            return ("Lecture and lab rows must share one nonblank instructor",)
+        if not lecture.has_meeting_time or not lecture.room:
+            return ("The lecture row needs a physical meeting time and room",)
+        return self._lab_structure_issues()
 
     def validation_report(self) -> tuple[str, ...]:
         issues = self.structure_issues()
@@ -1170,85 +1480,78 @@ class LectureLabClass(NormalClass):
         )
 
     @staticmethod
-    def valid_assignment(left: Section, right: Section) -> bool:
-        return left.instructor == right.instructor and not (
-            set(left.days or "") & set(right.days or "")
-            and left.start < right.end and right.start < left.end
+    def valid_assignment(lecture: Section, lab: Section) -> bool:
+        return lecture.instructor == lab.instructor and not (
+            set(lecture.days or "") & set(lab.days or "")
+            and lecture.start < lab.end and lab.start < lecture.end
         )
 
     def pairwise_predicate(self):
         return self.valid_assignment
 
+    @property
+    def credit_hours(self) -> float:
+        lecture_number = self.lecture.number
+        lab_number = self.lab_long.number
+        if lecture_number == lab_number:
+            return infer_credit_hours(lecture_number)
+        return infer_credit_hours(lecture_number) + infer_credit_hours(lab_number)
+
     def scheduling_entries(self) -> tuple[Section, ...]:
         return (self.lecture, self.lab_long)
 
     def scheduling_record_indexes(self, entry_index: int) -> tuple[int, ...]:
-        roles = {"lecture"} if entry_index == 0 else {"lab_short", "lab_long"}
-        return tuple(i for i, s in enumerate(self.sections) if self.role(s) in roles)
+        kind = "lecture" if entry_index == 0 else "lab"
+        return tuple(
+            i for i, s in enumerate(self.sections) if _meeting_kind(s) == kind
+        )
 
-    def with_scheduling_assignments(self, sections: tuple[Section, ...]) -> "LectureLabClass":
+    def with_scheduling_assignments(
+        self, sections: tuple[Section, ...],
+    ) -> "LectureLabClass":
         lecture, lab = sections
         rebuilt = tuple(
-            lecture if self.role(s) == "lecture" else lab if self.role(s) == "lab_long"
+            lecture if _meeting_kind(s) == "lecture"
+            else lab if self.role(s) in {"lab_long", "lab_single"}
             else replace(s, instructor=lab.instructor, time_slot=lab.time_slot)
             for s in self.sections
         )
         return replace(self, sections=rebuilt)
 
-    def resource_usage(self, source: Section, assigned: Section) -> tuple[Section, ...]:
-        if self.role(source) != "lab_long":
-            return ()
-        return (replace(self.lab_short, time_slot=assigned.time_slot, instructor=""),)
-
-    def to_records(self) -> list[dict[str, object]]:
-        records = []
-        for index, section in enumerate(self.sections):
-            row = section.to_record()
-            building, room = self.fixed_locations[index]
-            row["Lecture Lab Baseline"] = json.dumps({
-                "building": building, "room": room,
-                "time_slot": self.fixed_lab_slot if self.role(section) != "lecture" else "",
-                "duration": self.fixed_lecture_duration if self.role(section) == "lecture" else section.duration,
-            }, sort_keys=True)
-            records.append(row)
-        return records
-
-    def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
-        if not 0 <= record_index < 3:
-            raise IndexError(f"CSV record index out of range: {record_index}")
-        if field in {"room", "building"}:
-            raise ValueError("Lecture/lab rooms and buildings are fixed")
-        if field == "instructor":
-            return (0, 1, 2)
-        if field == "time" and self.role(self.sections[record_index]) != "lecture":
-            if not self.lab_time_editable:
-                raise ValueError("Lab time is fixed")
-            return self.scheduling_record_indexes(1)
-        return (record_index,)
-
     def editable_fields(self, record_index: int) -> frozenset[str]:
+        if self.role(self.sections[record_index]) == "lecture":
+            return frozenset({"instructor", "time", "room"})
         fields = {"instructor"}
-        if self.role(self.sections[record_index]) == "lecture" or self.lab_time_editable:
+        if self.lab_time_editable:
             fields.add("time")
         return frozenset(fields)
 
-    def apply_edit(self, field: str, record_index: int, **changes: object) -> "LectureLabClass":
-        targets = self.edit_targets(field, record_index)
+    def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
+        if not 0 <= record_index < len(self.sections):
+            raise IndexError(f"CSV record index out of range: {record_index}")
+        is_lecture = self.role(self.sections[record_index]) == "lecture"
+        if field == "instructor":
+            return tuple(range(len(self.sections)))
+        if field in {"room", "building"}:
+            if is_lecture:
+                return (record_index,)
+            raise ValueError("Lab rooms and buildings are fixed")
         if field == "time":
-            # One shared start, but each room keeps its own occupancy duration.
-            changes.pop("duration", None)
-        return replace(self, sections=tuple(
-            replace(s, **changes) if i in targets else s
-            for i, s in enumerate(self.sections)
-        ))
+            if is_lecture:
+                return (record_index,)
+            if not self.lab_time_editable:
+                raise ValueError("Lab time is fixed")
+            return tuple(
+                i for i, s in enumerate(self.sections)
+                if _meeting_kind(s) == "lab"
+            )
+        return (record_index,)
 
-    def _change(self, record: int | None, **changes: object) -> "LectureLabClass":
-        field_name = "time" if "time_slot" in changes else next(iter(changes))
-        if record is None:
-            if field_name == "time":
-                raise ValueError("Specify the lecture or lab record when changing time")
-            record = 0
-        return self.apply_edit(field_name, record, **changes)
+    def _default_change_record(self) -> int:
+        return next(
+            i for i, s in enumerate(self.sections)
+            if _meeting_kind(s) == "lecture"
+        )
 
 
 # Every atomic class kind derives from NormalClass, so this is the shared

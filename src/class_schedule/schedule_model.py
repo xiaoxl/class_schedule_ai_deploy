@@ -46,11 +46,14 @@ from .class_model import (
     CoreqClass,
     CrossListingClass,
     FourCreditClass,
+    LabClass,
     LectureLabClass,
+    lecture_lab_number_siblings,
     HybridClass,
     infer_credit_hours,
     NormalClass,
     Section,
+    _meeting_kind,
 )
 from .instructor_identity import is_new_instructor, is_new_professor
 from .pattern_rules import MeetingPatternLike, matches_configured_pattern
@@ -340,6 +343,8 @@ def _group_records(
     result, remaining = _take_configured_relationships(
         remaining, tuple(relationships)
     )
+    siblings, remaining = _take_lecture_lab_siblings(remaining)
+    result.extend(siblings)
     same_course, remaining = _take_same_course(remaining)
     result.extend(same_course)
     if infer_legacy_relationships:
@@ -404,6 +409,62 @@ def _take_configured_relationships(
     return found, [item for item in remaining if id(item) not in consumed]
 
 
+def _take_lecture_lab_siblings(
+    remaining: list[Section],
+) -> tuple[list[Class], list[Section]]:
+    """Link a lecture to a lab whose course number is a catalog sibling.
+
+    Structural fallback for the cross-number case (e.g. CHEM 3264 CLAS +
+    CHEM 3260 LAB): same subject, section and instructor, one CLAS row and
+    one or two LAB rows, and course numbers that share their stem and
+    differ only in the last digit. The same-course-number case (one
+    identity, three rows) is left to ``_take_same_course``; an explicit
+    ``[[relationships]] kind = "lecture_lab"`` entry can link a pair that
+    does not fit this shape.
+    """
+    by_key: dict[tuple[str, str, str], list[Section]] = {}
+    for section in remaining:
+        by_key.setdefault(
+            (section.subject, section.section.upper(), section.instructor), []
+        ).append(section)
+
+    found: list[Class] = []
+    consumed: set[int] = set()
+    for (subject, section_code, instructor), bucket in by_key.items():
+        if not instructor:
+            continue
+        lectures = [s for s in bucket if _meeting_kind(s) == "lecture"]
+        labs_by_number: dict[str, list[Section]] = {}
+        for s in bucket:
+            if _meeting_kind(s) == "lab":
+                labs_by_number.setdefault(s.number, []).append(s)
+        for lab_number, labs in labs_by_number.items():
+            if not 1 <= len(labs) <= 2 or any(id(s) in consumed for s in labs):
+                continue
+            if len(labs) == 2 and sorted(s.duration or 0 for s in labs) != [50, 170]:
+                continue
+            if any(not s.room for s in labs):
+                continue  # arranged labs: link only through an explicit relationship
+            candidates = [
+                lecture for lecture in lectures
+                if id(lecture) not in consumed
+                and lecture.number != lab_number
+                and lecture_lab_number_siblings(lecture.number, lab_number)
+            ]
+            if len(candidates) != 1:
+                continue
+            rows = (candidates[0], *labs)
+            try:
+                found.append(LectureLabClass(rows))
+            except ValueError as error:
+                raise GroupingError(
+                    f"{subject} {candidates[0].number}/{lab_number}-{section_code}: {error}",
+                    [row.to_record() for row in rows],
+                ) from error
+            consumed.update(id(row) for row in rows)
+    return found, [s for s in remaining if id(s) not in consumed]
+
+
 def _take_same_course(
     remaining: list[Section],
 ) -> tuple[list[Class], list[Section]]:
@@ -431,6 +492,21 @@ def _take_same_course(
             )
         if len(group) == 2:
             left, right = group
+            if all(_meeting_kind(section) == "lab" for section in group) and sorted(
+                section.duration or 0 for section in group
+            ) == [50, 170]:
+                # A 50/170 pair under one identity is a split-room lab; a
+                # malformed one (same room, different start, ...) is a hard
+                # error, never silently two classes.
+                try:
+                    found.append(LabClass((left, right)))
+                except ValueError as error:
+                    raise GroupingError(
+                        f"{' '.join(key[:2])}-{key[2]}: {error}",
+                        [left.to_record(), right.to_record()],
+                    ) from error
+                consumed.update(id(section) for section in group)
+                continue
             if re.fullmatch(r"[FM]\d\d", left.section.upper()):
                 target = HybridClass
             elif max(left.credit_hours, right.credit_hours) == 4:
@@ -1521,7 +1597,7 @@ def check_soft_preferences(
             if rule.direction != "dislike":
                 continue
             item = schedule.classes[ref.class_index]
-            if isinstance(item, LectureLabClass) and item.role(section) == "lab_short" and rule.room is None:
+            if isinstance(item, (LectureLabClass, LabClass)) and item.role(section) == "lab_short" and rule.room is None:
                 continue  # Auxiliary room occupancy is not a third teaching meeting.
             if rule.matches(
                 course=course, section=section.section,
@@ -1545,7 +1621,7 @@ def check_soft_preferences(
     by_instructor: dict[str, list[tuple[RecordReference, Section]]] = {}
     for ref, section in sections:
         item = schedule.classes[ref.class_index]
-        if isinstance(item, LectureLabClass) and item.role(section) == "lab_short":
+        if isinstance(item, (LectureLabClass, LabClass)) and item.role(section) == "lab_short":
             continue
         if not section.is_online:
             by_instructor.setdefault(section.instructor, []).append((ref, section))

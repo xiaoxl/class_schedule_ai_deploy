@@ -10,4 +10,5 @@ examples/
 inputs/
 tests/*
 !tests/test_lecture_lab.py
+!tests/test_lab.py
 .old/

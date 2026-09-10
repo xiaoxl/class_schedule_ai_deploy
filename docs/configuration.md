@@ -256,10 +256,15 @@ rewards or penalties. Explicit section selectors retain their existing matching
 behavior. This is a code rule shared by the solver and evaluation, not a
 configuration switch; the stored hybrid rows and hard constraints are unchanged.
 
-## Lecture/lab relationships
+## Lab and lecture/lab relationships
 
-`kind = "lecture_lab"` selects one offering with three template records: a
-lecture and 50/170-minute labs. `lab_time_editable = false` is the default;
-rooms remain fixed even when lab time is unlocked. Calendar roles are
-`lecture_lab_lecture` and `lecture_lab_lab`. See [Lecture/lab classes](lecture-lab.md)
-for the complete configuration, import requirements, and persistence rules.
+`kind = "lecture_lab"` links a lecture to its lab. It takes one member (a
+single offering whose lecture and 50/170-minute labs share a course
+number) or two members (a lecture course then its catalog-sibling lab
+course, e.g. `["CHEM 3264 1", "CHEM 3260 1"]`). `lab_time_editable = false`
+is the default; the lecture's room and time are editable, the lab's rooms
+stay fixed even when its time is unlocked. Calendar roles are
+`lecture_lab_lecture` (shared-number lecture only) and `lecture_lab_lab`.
+A standalone split-room lab (`LabClass`) is recognized structurally and
+needs no relationship. See [Lab and lecture/lab classes](lecture-lab.md)
+for the complete rules.
