@@ -148,18 +148,63 @@ def _locations_toml(sections, header: str) -> str:
     return "".join(blocks)
 
 
+# The department's standard start grids: MWF meetings start on the hour
+# through 4pm; TR meetings sit on the 80-minute blocks.
+_MWF_START_GRID = tuple(f"{hour:02d}:00" for hour in range(8, 17))
+_TR_START_GRID = ("08:00", "09:30", "11:00", "13:00", "14:30", "16:00")
+_MWF_TWO_DAY_COMBOS = ("MW", "MF", "WF")
+
+
 def _timeslot_toml(schedule: Schedule, header: str) -> str:
-    """Infer time domains without losing each meeting's structural role."""
+    """Infer the calendar, widened to the department's standard grids.
+
+    For each observed meeting -- ``(days, duration, start, structural role)``:
+
+    - **Exactly two of M/W/F** (``MW``/``MF``/``WF``): patterns for all
+      three two-day combos on the standard hourly MWF grid, same duration.
+    - **MWF** (all three days): the ``MWF`` pattern only, on that grid.
+    - **TR**: the ``TR`` pattern on the standard TR grid, same duration.
+    - **A single weekday**: that ``(start, duration)`` accepted on every
+      one of M/T/W/R/F.
+    - **Anything else** (five-day, ``MWRF`` ...): copied verbatim.
+
+    An ``MWF`` 50-minute meeting also yields a ``TR`` 80-minute pattern of
+    the same role, and a ``TR`` 80-minute meeting an ``MWF`` 50-minute one
+    -- the standard three-credit lecture pair. Every other combo keeps its
+    observed duration. Structural role is always preserved.
+    """
     grouped: dict[tuple[str, int, str], set[str]] = {}
+
+    def add(days: str, duration: int, role: str, starts) -> None:
+        grouped.setdefault((days, duration, role), set()).update(starts)
+
     for item in schedule.classes:
         for section in item.scheduling_entries():
             if not section.has_meeting_time or not section.duration:
                 continue
-            key = (
-                section.days or "", section.duration,
-                section_pattern_role(item, section),
-            )
-            grouped.setdefault(key, set()).add(section.start.strftime("%H:%M"))
+            days = section.days or ""
+            duration = section.duration
+            role = section_pattern_role(item, section)
+            start = section.start.strftime("%H:%M")
+            day_set = set(days)
+
+            if day_set <= set("MWF") and len(day_set) == 2:
+                for combo in _MWF_TWO_DAY_COMBOS:
+                    add(combo, duration, role, _MWF_START_GRID)
+            elif days == "MWF":
+                add("MWF", duration, role, _MWF_START_GRID)
+                if duration == 50:
+                    add("TR", 80, role, _TR_START_GRID)
+            elif days == "TR":
+                add("TR", duration, role, _TR_START_GRID)
+                if duration == 80:
+                    add("MWF", 50, role, _MWF_START_GRID)
+            elif len(day_set) == 1:
+                for day in "MTWRF":
+                    add(day, duration, role, (start,))
+            else:
+                add(days, duration, role, (start,))
+
     if not grouped:
         raise ValueError("Template contains no physical meeting times to infer")
     blocks = [header]

@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from class_schedule.config_inference import infer_configuration_from_template
+from class_schedule import NormalClass, Schedule, Section
+from class_schedule.config_inference import _timeslot_toml, infer_configuration_from_template
 from class_schedule.solver import SolverConfig
 
 
@@ -158,6 +159,62 @@ class ConfigurationInferenceTests(unittest.TestCase):
         self.assertEqual(len(relationship["members"]), 3)
         self.assertEqual(relationship["unsynced"], ["room"])
         self.assertNotIn("id", relationship)
+
+
+class TimeslotInferenceTests(unittest.TestCase):
+    @staticmethod
+    def _patterns(*meetings):
+        classes = [
+            NormalClass((Section(
+                subject="CHEM", number=number, section="1", instructor="T",
+                type=kind, time_slot=slot, duration=duration, room="1", building="B",
+            ),))
+            for number, kind, slot, duration in meetings
+        ]
+        toml = _timeslot_toml(Schedule(classes), "# header\n")
+        return tomllib.loads(toml)["calendar"]["meeting_patterns"]
+
+    def _covers(self, patterns, days, duration, start):
+        return any(
+            p["days"] == [days] and p["duration_minutes"] == duration
+            and start in p["starts"]
+            for p in patterns
+        )
+
+    def test_two_mwf_days_expand_to_every_two_day_combo_on_the_hourly_grid(self):
+        patterns = self._patterns(("2110", "LAB", "MW 2:00pm", 50))
+        for combo in ("MW", "MF", "WF"):
+            self.assertTrue(self._covers(patterns, combo, 50, "14:00"))
+            self.assertTrue(self._covers(patterns, combo, 50, "08:00"))
+            self.assertTrue(self._covers(patterns, combo, 50, "16:00"))
+        self.assertFalse(any(p["days"] == ["MWF"] for p in patterns))
+
+    def test_three_mwf_days_stay_mwf_and_add_the_tr_eighty_twin(self):
+        patterns = self._patterns(("3254", "CLAS", "MWF 12:00pm", 50))
+        self.assertTrue(self._covers(patterns, "MWF", 50, "12:00"))
+        self.assertTrue(self._covers(patterns, "TR", 80, "09:30"))
+        self.assertFalse(any(p["days"] in (["MW"], ["MF"], ["WF"]) for p in patterns))
+
+    def test_tr_uses_the_standard_grid_and_eighty_adds_the_mwf_twin(self):
+        patterns = self._patterns(("3264", "CLAS", "TR 11:00am", 80))
+        self.assertEqual(
+            next(p for p in patterns if p["days"] == ["TR"])["starts"],
+            ["08:00", "09:30", "11:00", "13:00", "14:30", "16:00"],
+        )
+        self.assertTrue(self._covers(patterns, "MWF", 50, "09:00"))
+
+    def test_a_single_weekday_is_accepted_on_every_day_at_its_own_start(self):
+        patterns = self._patterns(
+            ("2130", "LAB", "M 2:30pm", 170),
+            ("2131", "LAB", "R 2:30pm", 170),
+        )
+        for day in "MTWRF":
+            self.assertTrue(self._covers(patterns, day, 170, "14:30"))
+
+    def test_tr_fifty_minutes_gets_no_mwf_twin(self):
+        patterns = self._patterns(("3264", "CLAS", "TR 11:00am", 50))
+        self.assertTrue(self._covers(patterns, "TR", 50, "11:00"))
+        self.assertFalse(any(p["days"] == ["MWF"] for p in patterns))
 
 
 if __name__ == "__main__":

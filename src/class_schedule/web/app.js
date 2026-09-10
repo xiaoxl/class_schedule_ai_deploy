@@ -128,7 +128,10 @@ function bindDrag(){$$(".course-block").forEach(el=>{el.addEventListener("dragst
 // handlers never need to know this themselves any more, since /api/edit
 // decides the real targets; this only drives the context-menu hint text.
 function linkedField(item,field,recordIndex){return !!(item.record_linked_fields?.[recordIndex]?.[field]??item.linked_fields?.[field]);}
-function draggedPattern(item,oldDays,targetDay){if(item.kind==="FourCreditClass"){if(oldDays==="MWF")return "MWF";if(["T","R"].includes(oldDays))return "TR".includes(targetDay)?targetDay:oldDays;}if(oldDays==="MWF"&&"TR".includes(targetDay))return "TR";if(oldDays==="TR"&&"MWF".includes(targetDay))return "MWF";return oldDays.length===1?targetDay:oldDays;}
+// A two-day MWF pattern picks its other day from the drop column:
+// M -> MW, W -> WF, F -> MF (matches the inferred calendar combos).
+const MWF_TWO_DAY_DROP={M:"MW",W:"WF",F:"MF"};
+function draggedPattern(item,oldDays,targetDay){if(item.kind==="FourCreditClass"){if(oldDays==="MWF")return "MWF";if(["T","R"].includes(oldDays))return "TR".includes(targetDay)?targetDay:oldDays;}if(oldDays==="MWF"&&"TR".includes(targetDay))return "TR";if(oldDays==="TR"&&"MWF".includes(targetDay))return "MWF";if(["MW","MF","WF"].includes(oldDays)&&MWF_TWO_DAY_DROP[targetDay])return MWF_TWO_DAY_DROP[targetDay];return oldDays.length===1?targetDay:oldDays;}
 function minuteToClock24(minute){const normalized=((minute%1440)+1440)%1440,hour=Math.floor(normalized/60),minutes=normalized%60;return `${String(hour).padStart(2,"0")}:${String(minutes).padStart(2,"0")}`;}
 // Every edit (drag, course-list time picker, instructor/room assignment)
 // goes through here -- the browser names one row, its pre-edit identity,

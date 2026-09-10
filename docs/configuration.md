@@ -169,6 +169,30 @@ This is persisted policy, not a live guess. Omitted `unsynced` and
 writes the exact mismatching fields it observes. Legacy `synced_fields` input
 is temporarily accepted for migration but is never generated.
 
+### Inferred calendar (`timeslot.toml`)
+
+Template inference does not copy each meeting's exact slot; it widens the
+calendar to the department's standard grids. Per observed meeting
+`(days, duration, start, structural role)`:
+
+- Exactly two of M/W/F (`MW`/`MF`/`WF`) → patterns for **all three**
+  two-day combos on the standard hourly MWF grid (`08:00`–`16:00`).
+- `MWF` (all three days) → the `MWF` pattern only, on that grid.
+- `TR` → the `TR` pattern on the standard TR grid
+  (`08:00 09:30 11:00 13:00 14:30 16:00`).
+- A single weekday → that `(start, duration)` accepted on **every** one of
+  M/T/W/R/F.
+- Anything else → copied verbatim.
+
+An `MWF` 50-minute meeting also emits a `TR` 80-minute pattern of the same
+role (and a `TR` 80-minute meeting an `MWF` 50-minute one) — the standard
+three-credit lecture pair. Every other combo keeps its observed duration;
+the structural role is always preserved. Re-inferring after a template
+change is the way to absorb new meeting times into the calendar. `MF` and
+`WF` are valid `Time Slot` day-strings (alongside `M T W R F MW TR MWF`),
+and dragging a two-day MWF block picks its other day from the drop column:
+M → `MW`, W → `WF`, F → `MF`.
+
 ## People, preferences, and constraints
 
 New Instructor identities are dynamic and need no person record. Their contract, numeric course limit, and back-to-back policy are defined in `constraints.toml`.

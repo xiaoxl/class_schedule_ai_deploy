@@ -13,7 +13,7 @@ from collections.abc import Mapping
 # match room presence.
 _EMPTY_VALUES = frozenset({"", "none", "nan", "nat", "unassigned"})
 _SLOT_PATTERN = re.compile(
-    r"^(?P<days>M|T|W|R|F|MW|TR|MWF)\s+"
+    r"^(?P<days>M|T|W|R|F|MW|MF|WF|TR|MWF)\s+"
     r"(?P<clock>(?:0?[1-9]|1[0-2]):[0-5]\d\s*(?:am|pm))$",
     re.IGNORECASE,
 )
