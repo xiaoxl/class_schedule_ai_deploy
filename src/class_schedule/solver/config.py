@@ -144,6 +144,8 @@ def load_constraint_rules(path: str | Path) -> tuple[ConstraintRule, ...]:
             direction=entry.direction,
             name=entry.name,
             course=entry.course,
+            subject=entry.subject,
+            number=entry.number,
             section=entry.section,
             section_prefix=entry.section_prefix,
             room=(
@@ -223,7 +225,8 @@ class SolverConfig:
             constraint_rules=tuple(
                 ConstraintRule(
                     direction=entry.direction, name=entry.name,
-                    course=entry.course, section=entry.section,
+                    course=entry.course, subject=entry.subject, number=entry.number,
+                    section=entry.section,
                     section_prefix=entry.section_prefix,
                     room=(None if entry.room is None else (entry.room,) if isinstance(entry.room, str) else tuple(entry.room)),
                     time=parse_rule_time(entry.time) if entry.time is not None else None,
@@ -319,7 +322,11 @@ class SolverConfig:
             selector = (
                 f"{rule.course}-{rule.section}"
                 if rule.course and rule.section
-                else rule.course or rule.section_prefix or "all sections"
+                else rule.course
+                or " ".join(filter(None, (rule.subject, rule.number)))
+                or rule.section
+                or rule.section_prefix
+                or "all sections"
             )
             if person is None:
                 raise ValueError(

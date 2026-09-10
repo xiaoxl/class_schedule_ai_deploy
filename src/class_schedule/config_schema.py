@@ -86,10 +86,34 @@ class TimeWindowSchema(StrictModel):
 class RuleSelectorSchema(StrictModel):
     name: str | None = None
     course: str | None = None
+    subject: str | None = None
+    number: str | None = None
     section: str | None = None
     section_prefix: str | None = None
     room: str | list[str] | None = None
     time: TimeWindowSchema | str | None = None
+
+    @field_validator("subject")
+    @classmethod
+    def validate_subject(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip().upper()
+        if not cleaned.isalpha():
+            raise ValueError("subject must contain letters only")
+        return cleaned
+
+    @field_validator("number")
+    @classmethod
+    def validate_number(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip().upper()
+        if not re.fullmatch(r"\d+[A-Z]?", cleaned):
+            raise ValueError(
+                "number must be digits with an optional trailing letter"
+            )
+        return cleaned
 
     @field_validator("time")
     @classmethod
@@ -128,8 +152,12 @@ class RuleSelectorSchema(StrictModel):
     def validate_selectors(self):
         if self.name is not None and not self.name.strip():
             raise ValueError("a rule's name must not be blank")
-        if self.section is not None and self.course is None:
-            raise ValueError("section requires course")
+        if self.course is not None and (
+            self.subject is not None or self.number is not None
+        ):
+            raise ValueError(
+                "use course, or subject/number, but not both"
+            )
         if self.section is not None and self.section_prefix is not None:
             raise ValueError("a rule cannot set both section and section_prefix")
         if self.section_prefix is not None and not self.section_prefix.strip():
@@ -137,7 +165,8 @@ class RuleSelectorSchema(StrictModel):
         if all(
             value is None
             for value in (
-                self.course, self.section, self.section_prefix, self.room, self.time,
+                self.course, self.subject, self.number, self.section,
+                self.section_prefix, self.room, self.time,
             )
         ):
             raise ValueError("a rule must contain at least one selector")

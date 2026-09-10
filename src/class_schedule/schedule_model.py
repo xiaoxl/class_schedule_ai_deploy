@@ -749,6 +749,8 @@ class ConstraintRule:
     direction: str = "+"
     name: str | None = None
     course: str | None = None
+    subject: str | None = None
+    number: str | None = None
     section: str | None = None
     section_prefix: str | None = None
     room: str | tuple[str, ...] | None = None
@@ -763,7 +765,12 @@ class ConstraintRule:
             )
 
     def applies_to(self, course: str, section: str) -> bool:
+        rule_subject, _, rule_number = course.partition(" ")
         if self.course is not None and self.course != course:
+            return False
+        if self.subject is not None and self.subject != rule_subject:
+            return False
+        if self.number is not None and self.number != rule_number:
             return False
         if self.section is not None and self.section != section:
             return False
@@ -839,6 +846,8 @@ class PreferenceRule:
     """
 
     course: str | None = None
+    subject: str | None = None
+    number: str | None = None
     section: str | None = None
     section_prefix: str | None = None
     room: str | tuple[str, ...] | None = None
@@ -865,7 +874,12 @@ class PreferenceRule:
             and self.section is None and self.section_prefix is None
         ):
             return False
+        rule_subject, _, rule_number = course.partition(" ")
         if self.course is not None and self.course != course:
+            return False
+        if self.subject is not None and self.subject != rule_subject:
+            return False
+        if self.number is not None and self.number != rule_number:
             return False
         if self.section is not None and self.section != section:
             return False
@@ -899,6 +913,10 @@ class PreferenceRule:
         selectors = []
         if self.course is not None:
             selectors.append(f"course {self.course}")
+        if self.subject is not None:
+            selectors.append(f"subject {self.subject}")
+        if self.number is not None:
+            selectors.append(f"number {self.number}")
         if self.section is not None:
             selectors.append(f"section {self.section}")
         if self.section_prefix is not None:
@@ -1022,11 +1040,11 @@ def _parse_rule(raw: Mapping[str, object]) -> PreferenceRule:
         )
     section = raw.get("section")
     section_prefix = raw.get("section_prefix")
-    if section is not None and "course" not in raw:
-        raise ValueError("A rule's 'section' requires 'course' to also be set")
     raw_room = raw.get("room")
     return PreferenceRule(
         course=str(raw["course"]) if "course" in raw else None,
+        subject=str(raw["subject"]) if raw.get("subject") is not None else None,
+        number=str(raw["number"]) if raw.get("number") is not None else None,
         section=str(section) if section is not None else None,
         section_prefix=(
             str(section_prefix).strip() if section_prefix is not None else None

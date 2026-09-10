@@ -269,7 +269,7 @@ weight = -50
         self.assertEqual(rule.course, "MATH 2934")
         self.assertEqual(rule.signed_weight, 50)
 
-    def test_section_without_course_raises(self):
+    def test_section_subject_and_number_selectors_stand_alone(self):
         path = write_toml("""
 [[instructors]]
 name = "Xiao, Xinli"
@@ -279,6 +279,43 @@ name = "Xiao, Xinli"
 section = "F01"
 room = "Corley 269"
 weight = 100
+
+[[rules]]
+name = "Xiao, Xinli"
+subject = "MATH"
+weight = 20
+
+[[rules]]
+name = "Xiao, Xinli"
+subject = "STAT"
+number = "2303"
+weight = 15
+""")
+        self.addCleanup(path.unlink)
+        rules = load_preferences(path)["Xiao, Xinli"].rules
+        self.assertEqual(rules[0].section, "F01")
+        self.assertIsNone(rules[0].course)
+        self.assertEqual(rules[1].subject, "MATH")
+        self.assertEqual((rules[2].subject, rules[2].number), ("STAT", "2303"))
+        self.assertTrue(rules[1].matches(
+            course="MATH 4123", section="1", building="", room="",
+            days=None, start=None, end=None,
+        ))
+        self.assertFalse(rules[1].matches(
+            course="STAT 4123", section="1", building="", room="",
+            days=None, start=None, end=None,
+        ))
+
+    def test_course_together_with_subject_raises(self):
+        path = write_toml("""
+[[instructors]]
+name = "Xiao, Xinli"
+
+[[rules]]
+name = "Xiao, Xinli"
+course = "MATH 1113"
+subject = "MATH"
+weight = 10
 """)
         self.addCleanup(path.unlink)
         with self.assertRaises(ValueError):

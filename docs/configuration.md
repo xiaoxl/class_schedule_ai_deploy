@@ -173,9 +173,9 @@ is temporarily accepted for migration but is never generated.
 
 New Instructor identities are dynamic and need no person record. Their contract, numeric course limit, and back-to-back policy are defined in `constraints.toml`.
 
-Preference rules use course, section, section prefix, room, and time selectors. Positive weights reward matches and negative weights penalize them. Named rules apply to one instructor; unnamed rules are global.
+Preference rules use `course`, `subject`, `number`, `section`, `section_prefix`, `room`, and `time` selectors; an unset selector matches anything. `course` is the `"SUBJECT NUMBER"` shorthand for `subject` + `number` and cannot be combined with either. `subject` alone scopes a rule to a whole department (`subject = "MATH"`), `number` to one catalog number across subjects, and `section` may now stand alone (e.g. every `F01`) or narrow a subject/number. Positive weights reward matches and negative weights penalize them. Named rules apply to one instructor; unnamed rules are global.
 
-Constraints are hard rules using the same selectors without a weight. Unknown fields and invalid cross-file references are rejected so mistakes cannot silently alter solver behavior.
+Constraints are hard rules using the same selectors without a weight (and must still carry `name`, `room`, and/or `time`). A Friday-noon block for two departments is two rules, one `subject = "MATH"` and one `subject = "STAT"`, each with `direction = "-"` and the `time` window. Unknown fields and invalid cross-file references are rejected so mistakes cannot silently alter solver behavior.
 
 The same file owns numeric scheduling policy:
 
