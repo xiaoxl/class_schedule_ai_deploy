@@ -305,6 +305,49 @@ class LectureLabViewTests(unittest.TestCase):
                 self.assertEqual(response.json()["classes"][0]["sections"][0]["Duration"], 50)
 
 
+class DragDurationTests(unittest.TestCase):
+    """`_resolve_meeting_duration` -- a drag only changes a meeting's
+    length when the day pattern forces it (docs/codes.md)."""
+
+    def _config(self):
+        return SolverConfig(persons={}, preferences={}, rooms=[], meeting_patterns=[
+            MeetingPattern("T", 50, (datetime.time(14),), frozenset({"normal"})),
+            MeetingPattern("W", 50, (datetime.time(14),), frozenset({"normal"})),
+            MeetingPattern("MWF", 50, (datetime.time(9),), frozenset({"normal"})),
+            MeetingPattern("TR", 80, (datetime.time(9),), frozenset({"normal"})),
+        ])
+
+    def _lab(self):
+        # An unlinked 170-minute lab with no calendar pattern of its own.
+        return NormalClass((Section(
+            subject="CHEM", number="3340", section="1", instructor="Am",
+            type="LAB", time_slot="T 2:00pm", duration=170, room="", building="",
+        ),))
+
+    def test_same_day_nudge_keeps_the_length(self):
+        from class_schedule.webapp import _resolve_meeting_duration
+        self.assertEqual(
+            _resolve_meeting_duration(self._lab(), 0, "T", self._config()), 170,
+        )
+
+    def test_cross_day_drag_of_a_pattern_exempt_meeting_keeps_the_length(self):
+        from class_schedule.webapp import _resolve_meeting_duration
+        # "W" only offers 50 minutes, but 170 was never pattern-pinned.
+        self.assertEqual(
+            _resolve_meeting_duration(self._lab(), 0, "W", self._config()), 170,
+        )
+
+    def test_day_pattern_change_still_snaps_a_day_dependent_meeting(self):
+        from class_schedule.webapp import _resolve_meeting_duration
+        lecture = NormalClass((Section(
+            subject="MATH", number="1113", section="1", instructor="Am",
+            type="CLAS", time_slot="MWF 9:00am", duration=50, room="1", building="B",
+        ),))
+        self.assertEqual(
+            _resolve_meeting_duration(lecture, 0, "TR", self._config()), 80,
+        )
+
+
 class LectureLabConfigTests(unittest.TestCase):
     def test_inference_emits_one_member_for_a_shared_number(self):
         schedule = Schedule([LectureLabClass(rows())])

@@ -1475,20 +1475,39 @@ def _resolve_meeting_duration(
     item: Class, record_index: int, days: str,
     config: solver_module.SolverConfig,
 ) -> int | None:
-    """The configured duration for moving ``item``'s ``record_index`` row
-    to a new ``days`` pattern (e.g. dragging a FourCreditClass's MWF
-    meeting onto a T column) -- mirrors what the frontend used to compute
-    locally (draggedPattern/patternDuration in app.js) using the same
-    ``pattern_rules``/``config.meeting_patterns`` machinery ``/api/solve``'s
-    candidate generation and ``evaluate_schedule``'s meeting-pattern check
-    already rely on, so "what's a legal duration for this day" is decided
-    in exactly one place.
+    """The duration for moving ``item``'s ``record_index`` row to ``days``.
+
+    A meeting's length only changes when the *day pattern* changes and the
+    row's current length is not legal on the new pattern (dragging a
+    FourCreditClass's MWF meeting onto a T column). A same-day nudge, or a
+    move to a day where the current length is still legal, keeps the
+    length; a day with no matching pattern at all (e.g. a fixed lab)
+    keeps it too. Uses the same ``pattern_rules``/``config.meeting_patterns``
+    machinery as candidate generation and the meeting-pattern check.
     """
     section = item.sections[record_index]
-    for pattern in config.meeting_patterns:
-        if pattern.days == days and pattern_applies(item, section, pattern):
-            return pattern.duration_minutes
-    return None
+    if days == (section.days or ""):
+        return section.duration
+
+    def durations_for(day: str) -> list[int]:
+        return [
+            pattern.duration_minutes
+            for pattern in config.meeting_patterns
+            if pattern.days == day and pattern_applies(item, section, pattern)
+        ]
+
+    new_day = durations_for(days)
+    if not new_day:
+        return None
+    if section.duration in new_day:
+        return section.duration
+    # The row's length has no home on the new day. Only override it when
+    # the row's *current* day pinned it to a pattern -- a genuinely
+    # day-dependent meeting. A pattern-exempt meeting (a fixed or unlinked
+    # lab) keeps its intrinsic length.
+    if section.duration in durations_for(section.days or ""):
+        return new_day[0]
+    return section.duration
 
 
 def _serialize_schedule(schedule: Schedule) -> list[dict]:

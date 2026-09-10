@@ -524,12 +524,18 @@ Request: `{package, records, class_index, record_index, field, value}` --
 2. Rejects a `"time"`/`"room"` edit on an online/arranged row outright
    (`section.is_online`) -- per the project owner, those rows only ever
    take an instructor edit; there's no meeting to move or room to assign.
-3. For `"time"`, resolves the duration via a new `_resolve_meeting_duration`
-   helper -- the same `pattern_rules.pattern_applies` +
-   `config.meeting_patterns` lookup `/api/solve`'s candidate generation and
-   `evaluate_schedule`'s meeting-pattern check already use, so "what's a
-   legal duration for this day" has one source, not a second copy
-   (previously `app.js`'s `patternDuration`/`draggedPattern`).
+3. For `"time"`, resolves the duration via `_resolve_meeting_duration` --
+   the same `pattern_rules.pattern_applies` + `config.meeting_patterns`
+   lookup `/api/solve`'s candidate generation and `evaluate_schedule`'s
+   meeting-pattern check already use, so "what's a legal duration for this
+   day" has one source, not a second copy (previously `app.js`'s
+   `patternDuration`/`draggedPattern`). A meeting's length changes *only*
+   when the day pattern changes and the row was pinned to a pattern on
+   its old day but has no home for that length on the new one (a
+   FourCreditClass MWF meeting dragged onto T/R). A same-day nudge, or any
+   drag of a pattern-exempt meeting (a fixed or unlinked lab), keeps the
+   length. `LectureLabClass`/`LabClass` also drop `duration` from a time
+   edit at the model layer, so their lab rows are doubly protected.
 4. Calls `item.apply_edit(field, record_index, **changes)` -- the atomic
    class decides linkage; the endpoint never does.
 5. Returns `{"classes": ..., "violations": ...}`, the same shape
