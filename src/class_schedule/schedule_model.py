@@ -46,6 +46,7 @@ from .class_model import (
     CoreqClass,
     CrossListingClass,
     FourCreditClass,
+    LectureLabClass,
     HybridClass,
     infer_credit_hours,
     NormalClass,
@@ -269,13 +270,14 @@ def _group_records(
     separate "infer" step. Each pass below both finds candidate rows
     *and* decides which kind they become, using that kind's own public
     recognition predicate from ``class_model``. Precedence, highest
-    first: same-course pairs (four-credit/Hybrid) beat cross-listed
+    first: explicit relationships, then same-course groups (lecture/lab,
+    four-credit/Hybrid), then optionally cross-listed
     pairs, which beat coreq pairs. A remaining physical M/F-prefixed row is
     normalized into a Hybrid with a derived ONLINE companion; anything else
     left over is a single class.
-    Construction always re-validates through the target class's own
-    ``validate`` -- a pair that matches a scan (e.g. the coreq whitelist)
-    but fails its finer rules (e.g. bad scheduling) still raises here.
+    Construction rejects structural failures; business scheduling issues
+    remain available through validation_report. Lecture/lab construction
+    also enforces its shared identity/instructor and fixed assignments.
 
     Rows in a concurrent-enrollment section (see
     ``_IGNORED_SECTION_PREFIXES``) are dropped up front and never appear
@@ -381,7 +383,9 @@ def _take_configured_relationships(
             continue
         rows = tuple(item for group in groups for item in group)
         try:
-            if relationship.kind == "hybrid":
+            if relationship.kind == "lecture_lab":
+                item = LectureLabClass(rows, lab_time_editable=relationship.lab_time_editable)
+            elif relationship.kind == "hybrid":
                 item = HybridClass(rows)
             elif relationship.kind == "four_credit":
                 item = FourCreditClass(rows)
@@ -410,6 +414,16 @@ def _take_same_course(
     found: list[Class] = []
     consumed: set[int] = set()
     for key, group in by_identity.items():
+        if len(group) == 3:
+            try:
+                found.append(LectureLabClass(tuple(group)))
+            except ValueError as error:
+                raise GroupingError(
+                    f"{' '.join(key[:2])}-{key[2]}: {error}",
+                    [section.to_record() for section in group],
+                ) from error
+            consumed.update(id(section) for section in group)
+            continue
         if len(group) > 2:
             raise GroupingError(
                 f"{' '.join(key[:2])}-{key[2]} has more than two CSV records",
@@ -1506,6 +1520,9 @@ def check_soft_preferences(
         for rule in applicable_rules:
             if rule.direction != "dislike":
                 continue
+            item = schedule.classes[ref.class_index]
+            if isinstance(item, LectureLabClass) and item.role(section) == "lab_short" and rule.room is None:
+                continue  # Auxiliary room occupancy is not a third teaching meeting.
             if rule.matches(
                 course=course, section=section.section,
                 building=section.building, room=section.room,
@@ -1527,6 +1544,9 @@ def check_soft_preferences(
             continue
     by_instructor: dict[str, list[tuple[RecordReference, Section]]] = {}
     for ref, section in sections:
+        item = schedule.classes[ref.class_index]
+        if isinstance(item, LectureLabClass) and item.role(section) == "lab_short":
+            continue
         if not section.is_online:
             by_instructor.setdefault(section.instructor, []).append((ref, section))
     for instructor, instructor_entries in by_instructor.items():
@@ -1762,7 +1782,10 @@ def _weekly_workbook(
     # from -- ``_build_weekly_sheet`` needs that to tell a real
     # double-booking from a HybridClass/CrossListingClass companion
     # meeting that's *meant* to land on the same slot.
-    entries = [(item, section) for item in schedule for section in item.sections]
+    entries = [
+        (item, section) for item in schedule
+        for section in (item.scheduling_entries() if group == "instructor" else item.sections)
+    ]
 
     def key_of(section: Section) -> str:
         if group == "instructor":

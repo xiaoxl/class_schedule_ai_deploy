@@ -255,3 +255,11 @@ companion does not repeat general course, instructor, or global preference
 rewards or penalties. Explicit section selectors retain their existing matching
 behavior. This is a code rule shared by the solver and evaluation, not a
 configuration switch; the stored hybrid rows and hard constraints are unchanged.
+
+## Lecture/lab relationships
+
+`kind = "lecture_lab"` selects one offering with three template records: a
+lecture and 50/170-minute labs. `lab_time_editable = false` is the default;
+rooms remain fixed even when lab time is unlocked. Calendar roles are
+`lecture_lab_lecture` and `lecture_lab_lab`. See [Lecture/lab classes](lecture-lab.md)
+for the complete configuration, import requirements, and persistence rules.

@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from .class_model import HybridClass
+from .class_model import LectureLabClass, HybridClass
 from .schedule_model import Schedule
 
 
@@ -189,6 +189,19 @@ def apply_overrides(schedule: Schedule, overrides: OverrideFile) -> Schedule:
         item = result.classes[index]
         if edit.record is not None and not 0 <= edit.record < len(item.sections):
             raise IndexError(f"CSV record index out of range for {edit.course_id}: {edit.record}")
+        if isinstance(item, LectureLabClass):
+            for field, values in (
+                ("instructor", {"instructor": edit.instructor}),
+                ("room", {k: v for k, v in {"room": edit.room, "building": edit.building}.items() if v is not None}),
+                ("time", {"time_slot": edit.time_slot}),
+            ):
+                if not values or all(v is None for v in values.values()):
+                    continue
+                if field == "time" and edit.record is None:
+                    raise ValueError("Specify the lecture or lab record when changing time")
+                item = item.apply_edit(field, edit.record if edit.record is not None else 0, **values)
+            result.classes[index] = item
+            continue
         hybrid_physical = (
             item.sections.index(item.physical_section)
             if isinstance(item, HybridClass) else None

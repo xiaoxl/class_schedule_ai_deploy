@@ -84,6 +84,10 @@ def _record(config: SolverConfig, identity: str, role: str, atomic: frozenset[st
 def _synthesize_relationship(config: SolverConfig, relationship) -> list[dict[str, object]]:
     atomic = frozenset(" ".join(member.split()[:2]) for member in relationship.members)
     placeholder = _placeholder(config, relationship.members)
+    if relationship.kind == "lecture_lab":
+        raise ValueError(
+            "lecture_lab requires its three source template rows; fixed rooms and lab time cannot be synthesized"
+        )
     if relationship.kind == "hybrid":
         return [_record(config, relationship.members[0], "hybrid_physical", atomic, placeholder=placeholder)]
     if relationship.kind == "four_credit":
@@ -161,7 +165,7 @@ def reconcile_records(
         section = identity.split(maxsplit=2)[2]
         if section.startswith("TC") and (
             relationship is None
-            or relationship.kind not in {"hybrid", "four_credit"}
+            or relationship.kind not in {"hybrid", "four_credit", "lecture_lab"}
         ):
             # TC sections are web sections. Banner exports may describe them
             # as arranged/unscheduled; normalize them explicitly so neither

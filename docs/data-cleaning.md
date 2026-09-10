@@ -18,6 +18,9 @@ Cleaning follows these rules:
 - Preserve valid source values and normalize only documented aliases.
 - Reject malformed physical meeting data before solving.
 - Group through the domain model, not spreadsheet row position.
+- Recognize one lecture plus 50/170-minute labs as a three-row `LectureLabClass`
+  before rejecting excess same-course rows. See [lecture/lab rules](lecture-lab.md)
+  for matching conditions, fixed assignments, and baseline metadata.
 - Count load by atomic class, not flattened rows.
 
 The import already publishes the reconciled working schedule. Run `initial <configuration>` only when a template was placed into the configuration directory outside the importer and its working views need to be rebuilt. Extra offerings are removed, missing offerings are generated, unknown instructors become a qualifying dynamic position, and the generated audit is written to `reconciliation.toml`.

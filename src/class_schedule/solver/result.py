@@ -29,7 +29,7 @@ def apply_solution(
             rebuilt.append(apply_candidate(
                 sections[section_index], candidates[section_index][picked]
             ))
-        classes.append(type(item)(tuple(rebuilt)))
+        classes.append(item.with_scheduling_assignments(tuple(rebuilt)))
     return Schedule(classes)
 
 

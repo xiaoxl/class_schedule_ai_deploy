@@ -320,6 +320,8 @@ class MeetingPatternSchema(StrictModel):
         "coreq_supplement",
         "four_credit_primary",
         "four_credit_partial",
+        "lecture_lab_lecture",
+        "lecture_lab_lab",
     ]]
     courses: list[str] = Field(default_factory=list)
     atomic_courses: list[str] = Field(default_factory=list)
@@ -499,7 +501,8 @@ class CourseRelationshipSchema(StrictModel):
     # Legacy input compatibility only. Relationship identity is derived from
     # kind + canonical members and never needs to be authored or persisted.
     id: str | None = Field(default=None, exclude=True)
-    kind: Literal["coreq", "cross_listing", "four_credit", "hybrid"]
+    kind: Literal["coreq", "cross_listing", "four_credit", "hybrid", "lecture_lab"]
+    lab_time_editable: bool = False
     members: list[str]
     synced_fields: list[Literal["instructor", "room", "time"]] | None = None
     unsynced: list[Literal["instructor", "room", "time"]] | None = None
@@ -544,6 +547,10 @@ class CourseRelationshipSchema(StrictModel):
 
     @model_validator(mode="after")
     def validate_member_count(self):
+        if self.kind == "lecture_lab" and len(self.members) != 1:
+            raise ValueError("lecture_lab relationships require 1 member")
+        if self.lab_time_editable and self.kind != "lecture_lab":
+            raise ValueError("lab_time_editable is only meaningful for lecture_lab relationships")
         if self.kind == "four_credit" and len(self.members) != 1:
             raise ValueError("four_credit relationships require 1 member")
         if self.kind == "hybrid" and len(self.members) != 1:

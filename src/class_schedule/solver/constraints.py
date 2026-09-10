@@ -138,6 +138,7 @@ def build_slots(
     sections: list[Section],
     owner: list[int],
     candidates: list[list[SectionCandidate]],
+    *, class_list: list[Class] | None = None,
 ) -> list[Slot]:
     slots = []
     for section_index, section_candidates in enumerate(candidates):
@@ -154,6 +155,17 @@ def build_slots(
                 room_key=f"{candidate.building} {candidate.room}".strip(),
                 instructor=candidate.instructor,
             ))
+            if class_list is not None:
+                source = sections[section_index]
+                item = class_list[owner[section_index]]
+                for reservation in item.resource_usage(source, apply_candidate(source, candidate)):
+                    slots.append(Slot(
+                        section=section_index, candidate=candidate_index,
+                        class_index=owner[section_index], days=reservation.days,
+                        start=reservation.start, end=reservation.end,
+                        room_key=f"{reservation.building} {reservation.room}".strip(),
+                        instructor="",
+                    ))
     return slots
 
 

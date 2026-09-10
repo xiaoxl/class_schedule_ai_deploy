@@ -2,6 +2,9 @@
 
 This project reconciles CSV/XLSX schedule templates to `courses.toml`, groups rows into atomic classes, applies preferences, solves with OR-Tools CP-SAT, and publishes auditable versions under `output/<package>/verN/`.
 
+See [Lecture/lab classes](lecture-lab.md) for the three-row lecture plus
+50/170-minute lab format, fixed locations, and optional lab time adjustment.
+
 ## Start the web interface
 
 Open PowerShell in the project directory:

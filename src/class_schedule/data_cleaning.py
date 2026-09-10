@@ -15,7 +15,7 @@ NORMALIZED_COLUMNS = (
     "Subject", "Number", "Section", "Type", "Title", "Credits",
     "Instructor", "Delivery Mode", "Time Slot",
     "Duration", "Days", "Start", "End", "Building", "Room",
-    "Cross-List", "CRN", "Seats Available", "Source Row",
+    "Cross-List", "Lecture Lab Baseline", "CRN", "Seats Available", "Source Row",
 )
 
 
@@ -66,6 +66,7 @@ def clean_dataframe(
             normalized = section.to_record()
             normalized.update({
                 "CRN": _first(row, "CRN"),
+                "Lecture Lab Baseline": _first(row, "Lecture Lab Baseline"),
                 "Seats Available": _first(
                     row, "Seats Available", "Seats_Avail", "Seats Avail",
                 ),

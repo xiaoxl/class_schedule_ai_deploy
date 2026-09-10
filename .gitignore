@@ -8,5 +8,6 @@ config/
 out/
 examples/
 inputs/
-tests/
+tests/*
+!tests/test_lecture_lab.py
 .old/

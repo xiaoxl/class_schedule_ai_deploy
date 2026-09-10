@@ -43,7 +43,7 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "Room": ("Room",),
     "Building": ("Building",),
     "Instructor": ("Instructor", "Instructor Name"),
-    "Type": ("Type", "Schedule Type"),
+    "Type": ("Type", "Schedule Type", "Meeting Type"),
     "Title": ("Title", "Catalog Title", "Section Title"),
     "Credits": ("Credits", "Course Credit Hours"),
     "Cross-List": ("Cross-List", "Cross List", "XL Group Code"),

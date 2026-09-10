@@ -6,7 +6,7 @@ import datetime
 from dataclasses import replace
 
 from .. import record_utils
-from ..class_model import Class, HybridClass, Section
+from ..class_model import Class, HybridClass, LectureLabClass, Section
 from ..new_instructors import can_new_instructor_teach, can_new_professor_teach
 from ..instructor_identity import is_new_instructor, is_new_professor
 from ..pattern_rules import pattern_applies, section_pattern_role
@@ -79,7 +79,7 @@ def preference_cost(
     section: str,
     preferences: dict[str, PreferenceRecord],
     global_rules: tuple[PreferenceRule, ...] = (),
-    *, hybrid_companion: bool = False,
+    *, hybrid_companion: bool = False, room_reservation: bool = False,
 ) -> float:
     preference = preferences.get(instructor)
     cost = 0.0
@@ -87,6 +87,8 @@ def preference_cost(
     if preference is not None:
         rules.extend(preference.rules)
     for rule in rules:
+        if room_reservation and rule.room is None:
+            continue
         if rule.matches(
             course=course, section=section, building=building, room=room,
             days=days, start=start, end=end,
@@ -106,6 +108,11 @@ def section_candidates(
     new_professors: tuple[str, ...] = (),
 ) -> list[SectionCandidate]:
     course = f"{section.subject} {section.number}"
+    lecture_lab = isinstance(item, LectureLabClass)
+    if lecture_lab:
+        locked_fields = locked_fields | {"room", "building"}
+        if item.role(section) == "lab_long" and not item.lab_time_editable:
+            locked_fields = locked_fields | {"time"}
     hybrid_companion = isinstance(item, HybridClass) and section.is_online
     current = SectionCandidate(
         instructor=section.instructor,
@@ -125,18 +132,33 @@ def section_candidates(
     )
     constraints = config.constraints_for(course, section.section)
 
+    def reservation_preference_cost(candidate: SectionCandidate) -> float:
+        return sum(
+            preference_cost(
+                candidate.instructor, reservation.days, reservation.start, reservation.end,
+                reservation.building, reservation.room, course, section.section,
+                config.preferences, config.global_rules, room_reservation=True,
+            )
+            for reservation in item.resource_usage(section, apply_candidate(section, candidate))
+        )
+
+    current = replace(current, cost=current.cost + reservation_preference_cost(current))
+
     def constraints_allow(candidate: SectionCandidate) -> bool:
+        reservations = (apply_candidate(section, candidate),) + item.resource_usage(
+            section, apply_candidate(section, candidate),
+        )
         return all(
             rule.allows(
                 instructor=candidate.instructor,
-                building=candidate.building,
-                room=candidate.room,
-                days=candidate.days,
-                start=candidate.start,
-                end=candidate.end,
+                building=reservation.building,
+                room=reservation.room,
+                days=reservation.days,
+                start=reservation.start,
+                end=reservation.end,
                 is_online=section.is_online,
             )
-            for rule in constraints
+            for reservation in reservations for rule in constraints
         )
 
     instructors = (
@@ -188,6 +210,13 @@ def section_candidates(
         pattern for pattern in applicable_patterns
         if pattern.duration_minutes == section.duration
     ]
+    if lecture_lab:
+        patterns = [p for p in patterns if p.duration_minutes == section.duration]
+        if "time" in locked_fields:
+            patterns = [MeetingPattern(
+                section.days, section.duration, (section.start,),
+                frozenset({section_pattern_role(item, section)}),
+            )]
     current_is_allowed = (
         section.instructor in instructors
         and
@@ -211,6 +240,8 @@ def section_candidates(
     rooms = config.rooms or [
         RoomRecord(building=section.building, room=section.room)
     ]
+    if lecture_lab:
+        rooms = [RoomRecord(building=section.building, room=section.room)]
     by_instructor: dict[str, dict[tuple[str, str, str], SectionCandidate]] = {
         instructor: {} for instructor in instructors
     }
@@ -238,6 +269,7 @@ def section_candidates(
                         instructor, time_slot, pattern.duration_minutes,
                         pattern.days, start, end, room.room, room.building, cost,
                     )
+                    candidate = replace(candidate, cost=candidate.cost + reservation_preference_cost(candidate))
                     if constraints_allow(candidate):
                         bucket[(time_slot, room.building, room.room)] = candidate
         if instructor == section.instructor and current_is_allowed:

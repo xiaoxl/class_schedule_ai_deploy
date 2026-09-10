@@ -1498,16 +1498,23 @@ def _serialize_schedule(schedule: Schedule) -> list[dict]:
             "course_ids": list(item.course_ids),
             "credit_hours": item.credit_hours,
             "sections": [_serialize_record(r) for r in item.to_records()],
-            # Whether an edit to this field would touch more than this row
-            # (see docs/codes.md's edit_targets/apply_edit matrix) -- the
-            # web UI reads this straight off the view instead of guessing
-            # from `kind`/`synced_fields` itself, so there is exactly one
-            # place (Class.edit_targets) that knows the answer. `0` is an
-            # arbitrary row: for every current kind, whether a field links
-            # is a property of the class/pair, not of which row you'd edit
-            # through, so any valid record_index gives the same answer.
+            "editable_fields": [sorted(item.editable_fields(i)) for i in range(len(item.sections))],
+            "record_linked_fields": [
+                {
+                    field: field in item.editable_fields(i) and len(item.edit_targets(field, i)) > 1
+                    for field in ("instructor", "room", "time")
+                }
+                for i in range(len(item.sections))
+            ],
+            "scheduling_records": [
+                i for i, section in enumerate(item.sections)
+                if any(section is entry for entry in item.scheduling_entries())
+            ],
+            # Compatibility summary for older clients. New clients use
+            # record_linked_fields because lecture and lab time edits have
+            # different targets within the same atomic class.
             "linked_fields": {
-                field: len(item.edit_targets(field, 0)) > 1
+                field: field in item.editable_fields(0) and len(item.edit_targets(field, 0)) > 1
                 for field in ("instructor", "room", "time")
             },
             # CrossListingClass only -- the raw, persisted config knowledge

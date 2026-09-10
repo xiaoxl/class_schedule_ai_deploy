@@ -103,7 +103,7 @@ def solve_detailed(
     sections: list[Section] = []
     owner: list[int] = []
     for class_index, item in enumerate(class_list):
-        for section in item.sections:
+        for section in item.scheduling_entries():
             sections.append(section)
             owner.append(class_index)
 
@@ -122,7 +122,10 @@ def solve_detailed(
                 MAX_CANDIDATES_SINGLE_SECTION
                 if len(item.sections) == 1 else MAX_CANDIDATES_PAIRED_SECTION
             ),
-            locks_for_section(locks, item.course_ids, record),
+            frozenset().union(*(
+                locks_for_section(locks, item.course_ids, source_index)
+                for source_index in item.scheduling_record_indexes(record)
+            )),
             placeholder_instructors,
             new_professors,
         ))
@@ -149,7 +152,7 @@ def solve_detailed(
     add_pairwise_validity_constraints(
         class_list, sections, sections_by_class, candidates, chosen, model
     )
-    slots = build_slots(sections, owner, candidates)
+    slots = build_slots(sections, owner, candidates, class_list=class_list)
     effective_persons, effective_preferences = workload_records(
         placeholder_instructors + new_professors, config.persons, config.preferences,
         config.new_instructor_policy, config.new_professor_policy,
@@ -206,7 +209,7 @@ def solve_detailed(
         # Match by course and meeting occurrence, independent of class ordering.
         previous_rows: dict[str, list[Section]] = {}
         for item in excluded.classes:
-            for section in item.sections:
+            for section in item.scheduling_entries():
                 previous_rows.setdefault(section.course_id, []).append(section)
         counts: dict[str, int] = {}
         previous_sections = []

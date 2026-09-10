@@ -376,7 +376,12 @@ class SolverConfig:
         requirements: list[tuple[str, str, frozenset[str]]] = []
         for relation in relationships:
             atomic = frozenset(" ".join(member.split()[:2]) for member in relation.members)
-            if relation.kind == "four_credit":
+            if relation.kind == "lecture_lab":
+                course = " ".join(relation.members[0].split()[:2])
+                requirements.append((course, "lecture_lab_lecture", atomic))
+                if relation.lab_time_editable:
+                    requirements.append((course, "lecture_lab_lab", atomic))
+            elif relation.kind == "four_credit":
                 course = " ".join(relation.members[0].split()[:2])
                 requirements.extend((course, role, atomic) for role in (
                     "four_credit_primary", "four_credit_partial",

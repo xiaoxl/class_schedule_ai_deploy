@@ -7,7 +7,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from .class_model import CoreqClass, CrossListingClass, FourCreditClass, HybridClass, Section
+from .class_model import CoreqClass, CrossListingClass, FourCreditClass, HybridClass, LectureLabClass, Section
 from .config_schema import CourseRelationshipSchema, CoursesFileSchema
 from .instructor_identity import is_new_instructor, is_new_professor
 from .pattern_rules import section_pattern_role
@@ -152,7 +152,7 @@ def _timeslot_toml(schedule: Schedule, header: str) -> str:
     """Infer time domains without losing each meeting's structural role."""
     grouped: dict[tuple[str, int, str], set[str]] = {}
     for item in schedule.classes:
-        for section in item.sections:
+        for section in item.scheduling_entries():
             if not section.has_meeting_time or not section.duration:
                 continue
             key = (
@@ -272,7 +272,8 @@ def infer_relationships_from_template(
     # Intrinsic kinds were already recognized without configuration.
     for item in schedule.classes:
         kind = (
-            "hybrid" if isinstance(item, HybridClass)
+            "lecture_lab" if isinstance(item, LectureLabClass)
+            else "hybrid" if isinstance(item, HybridClass)
             else "four_credit" if isinstance(item, FourCreditClass)
             else None
         )
@@ -378,7 +379,8 @@ def _inferred_relationships(schedule: Schedule) -> list[CourseRelationshipSchema
     relationships: list[CourseRelationshipSchema] = []
     for item in schedule.classes:
         kind = (
-            "hybrid" if isinstance(item, HybridClass)
+            "lecture_lab" if isinstance(item, LectureLabClass)
+            else "hybrid" if isinstance(item, HybridClass)
             else "four_credit" if isinstance(item, FourCreditClass)
             else "cross_listing" if isinstance(item, CrossListingClass)
             else "coreq" if isinstance(item, CoreqClass)
@@ -393,6 +395,7 @@ def _inferred_relationships(schedule: Schedule) -> list[CourseRelationshipSchema
         )
         relationships.append(CourseRelationshipSchema(
             kind=kind, members=members, unsynced=unsynced,
+            lab_time_editable=isinstance(item, LectureLabClass) and item.lab_time_editable,
         ))
     return relationships
 
@@ -419,6 +422,8 @@ def _courses_toml(schedule: Schedule, header: str) -> str:
             f"kind = {_quote(relationship.kind)}\n"
             f"members = {_array(relationship.members)}\n"
         )
+        if relationship.kind == "lecture_lab":
+            block += f"lab_time_editable = {str(relationship.lab_time_editable).lower()}\n"
         if relationship.kind == "cross_listing":
             block += f"unsynced = {_array(relationship.unsynced or [])}\n"
         blocks.append(block)
