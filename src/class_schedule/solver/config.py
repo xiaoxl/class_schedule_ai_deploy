@@ -26,11 +26,36 @@ from ..schedule_model import (
     PersonRecord,
     PreferenceRecord,
     PreferenceRule,
+    _SELECTOR_FIELDS,
+    _selector_options,
     load_global_rules,
     load_persons,
     load_preferences,
     parse_rule_time,
 )
+
+
+def _selectors_disjoint(left: object, right: object) -> bool:
+    """True when both selectors are set and share no value."""
+    a, b = _selector_options(left), _selector_options(right)
+    return a is not None and b is not None and not (set(a) & set(b))
+
+
+def _constraint_rule(entry) -> ConstraintRule:
+    """Build one hard rule from a schema entry -- one path for every field.
+
+    The schema has validated each selector; ``ConstraintRule`` turns any
+    list into a tuple, so selectors just pass straight through.
+    """
+    return ConstraintRule(
+        direction=entry.direction,
+        time=parse_rule_time(entry.time) if entry.time is not None else None,
+        **{
+            name: getattr(entry, name)
+            for name in _SELECTOR_FIELDS
+            if getattr(entry, name) is not None
+        },
+    )
 from .types import MeetingPattern, RoomRecord
 
 
@@ -139,27 +164,7 @@ def load_rooms(path: str | Path) -> list[RoomRecord]:
 def load_constraint_rules(path: str | Path) -> tuple[ConstraintRule, ...]:
     with open(path, "rb") as handle:
         raw = ConstraintsFileSchema.model_validate(tomllib.load(handle))
-    return tuple(
-        ConstraintRule(
-            direction=entry.direction,
-            name=entry.name,
-            course=entry.course,
-            subject=entry.subject,
-            number=entry.number,
-            section=entry.section,
-            section_prefix=entry.section_prefix,
-            room=(
-                None if entry.room is None
-                else (entry.room,) if isinstance(entry.room, str)
-                else tuple(entry.room)
-            ),
-            time=(
-                parse_rule_time(entry.time)
-                if entry.time is not None else None
-            ),
-        )
-        for entry in raw.rules
-    )
+    return tuple(_constraint_rule(entry) for entry in raw.rules)
 
 
 def load_constraints(path: str | Path) -> ConstraintsFileSchema:
@@ -223,14 +228,7 @@ class SolverConfig:
                 resolved["preferences.toml"]
             ),
             constraint_rules=tuple(
-                ConstraintRule(
-                    direction=entry.direction, name=entry.name,
-                    course=entry.course, subject=entry.subject, number=entry.number,
-                    section=entry.section,
-                    section_prefix=entry.section_prefix,
-                    room=(None if entry.room is None else (entry.room,) if isinstance(entry.room, str) else tuple(entry.room)),
-                    time=parse_rule_time(entry.time) if entry.time is not None else None,
-                ) for entry in constraints.rules
+                _constraint_rule(entry) for entry in constraints.rules
             ),
             version=hashlib.sha256(
                 b"\0".join(path.read_bytes() for path in paths)
@@ -318,47 +316,36 @@ class SolverConfig:
         for rule in self.constraint_rules:
             if rule.name is None:
                 continue
-            person = self.persons.get(rule.name)
-            selector = (
-                f"{rule.course}-{rule.section}"
-                if rule.course and rule.section
-                else rule.course
-                or " ".join(filter(None, (rule.subject, rule.number)))
-                or rule.section
-                or rule.section_prefix
-                or "all sections"
-            )
-            if person is None:
-                raise ValueError(
-                    f"Constraint instructor for {selector} is unknown: {rule.name}"
-                )
-            if rule.course is not None and rule.course not in person.courses:
-                raise ValueError(
-                    f"Constraint instructor {rule.name} is not qualified for {selector}"
-                )
+            selector = "; ".join(rule._selector_descriptions()) or "all sections"
+            for instructor in _selector_options(rule.name) or ():
+                person = self.persons.get(instructor)
+                if person is None:
+                    raise ValueError(
+                        f"Constraint instructor for {selector} is unknown: {instructor}"
+                    )
+                for course in _selector_options(rule.course) or ():
+                    if course not in person.courses:
+                        raise ValueError(
+                            f"Constraint instructor {instructor} is not qualified for {selector}"
+                        )
         for index, left in enumerate(self.constraint_rules):
             for right in self.constraint_rules[index + 1:]:
-                selectors_overlap = not (
-                    left.course is not None
-                    and right.course is not None
-                    and left.course != right.course
-                ) and not (
-                    left.section is not None
-                    and right.section is not None
-                    and left.section != right.section
-                )
+                selectors_overlap = not _selectors_disjoint(
+                    left.course, right.course
+                ) and not _selectors_disjoint(left.section, right.section)
+                left_names = set(_selector_options(left.name) or ())
+                right_names = set(_selector_options(right.name) or ())
                 if (
                     selectors_overlap
                     and left.direction == "+"
                     and right.direction == "+"
-                    and left.name is not None
-                    and right.name is not None
-                    and left.name != right.name
+                    and left_names and right_names
+                    and left_names != right_names
                 ):
                     raise ValueError(
                         f"Conflicting instructor constraints for "
-                        f"{left.course or 'matching sections'}: {left.name} and "
-                        f"{right.name}"
+                        f"{'; '.join(left._selector_descriptions()) or 'matching sections'}: "
+                        f"{sorted(left_names)} and {sorted(right_names)}"
                     )
 
     @staticmethod
@@ -367,10 +354,11 @@ class SolverConfig:
         filename: str,
     ) -> None:
         for rule in rules:
-            if rule.course is not None and rule.course not in catalog_names:
-                raise ValueError(
-                    f"{filename} references unknown catalog course: {rule.course}"
-                )
+            for course in _selector_options(rule.course) or ():
+                if course not in catalog_names:
+                    raise ValueError(
+                        f"{filename} references unknown catalog course: {course}"
+                    )
 
     def _validate_pattern_coverage(self) -> None:
         assert self.catalogs is not None and self.courses is not None

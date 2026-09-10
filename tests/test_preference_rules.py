@@ -321,6 +321,50 @@ weight = 10
         with self.assertRaises(ValueError):
             load_preferences(path)
 
+    def test_every_selector_accepts_a_list(self):
+        path = write_toml("""
+[[instructors]]
+name = "Xiao, Xinli"
+
+[[rules]]
+name = "Xiao, Xinli"
+subject = ["MATH", "STAT"]
+section = ["F01", "F02"]
+building = ["Corley", "Hillside"]
+weight = -12
+""")
+        self.addCleanup(path.unlink)
+        rule = load_preferences(path)["Xiao, Xinli"].rules[0]
+        self.assertEqual(rule.subject, ("MATH", "STAT"))
+        self.assertEqual(rule.section, ("F01", "F02"))
+        self.assertEqual(rule.building, ("Corley", "Hillside"))
+        self.assertTrue(rule.matches(
+            course="STAT 2303", section="F02", building="Hillside", room="7",
+            days=None, start=None, end=None,
+        ))
+        self.assertFalse(rule.matches(
+            course="STAT 2303", section="001", building="Hillside", room="7",
+            days=None, start=None, end=None,
+        ))
+        self.assertFalse(rule.matches(
+            course="CHEM 1113", section="F01", building="Corley", room="7",
+            days=None, start=None, end=None,
+        ))
+
+    def test_duplicate_list_values_are_rejected(self):
+        path = write_toml("""
+[[instructors]]
+name = "Xiao, Xinli"
+
+[[rules]]
+name = "Xiao, Xinli"
+subject = ["MATH", "MATH"]
+weight = 5
+""")
+        self.addCleanup(path.unlink)
+        with self.assertRaises(ValueError):
+            load_preferences(path)
+
     def test_zero_weight_raises(self):
         path = write_toml("""
 [[instructors]]

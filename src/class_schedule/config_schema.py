@@ -83,37 +83,57 @@ class TimeWindowSchema(StrictModel):
         return days
 
 
+# Every rule selector is one value or a list of values, handled the same
+# way: an unset selector matches anything, otherwise the meeting's value
+# must be one of the listed options (``section_prefix`` matches by prefix).
+RULE_SELECTOR_FIELDS = (
+    "name", "course", "subject", "number", "section",
+    "section_prefix", "room", "building",
+)
+
+
 class RuleSelectorSchema(StrictModel):
-    name: str | None = None
-    course: str | None = None
-    subject: str | None = None
-    number: str | None = None
-    section: str | None = None
-    section_prefix: str | None = None
+    name: str | list[str] | None = None
+    course: str | list[str] | None = None
+    subject: str | list[str] | None = None
+    number: str | list[str] | None = None
+    section: str | list[str] | None = None
+    section_prefix: str | list[str] | None = None
     room: str | list[str] | None = None
+    building: str | list[str] | None = None
     time: TimeWindowSchema | str | None = None
 
-    @field_validator("subject")
+    @field_validator(*RULE_SELECTOR_FIELDS, mode="after")
     @classmethod
-    def validate_subject(cls, value: str | None) -> str | None:
+    def _normalize_selector(cls, value, info):
+        """One list-or-scalar cleanup for every selector field."""
         if value is None:
             return None
-        cleaned = value.strip().upper()
-        if not cleaned.isalpha():
-            raise ValueError("subject must contain letters only")
-        return cleaned
-
-    @field_validator("number")
-    @classmethod
-    def validate_number(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        cleaned = value.strip().upper()
-        if not re.fullmatch(r"\d+[A-Z]?", cleaned):
-            raise ValueError(
-                "number must be digits with an optional trailing letter"
-            )
-        return cleaned
+        field = info.field_name
+        items = [value] if isinstance(value, str) else list(value)
+        if not items:
+            raise ValueError(f"{field} selector must not be empty")
+        cleaned: list[str] = []
+        for item in items:
+            text = str(item).strip()
+            if not text:
+                raise ValueError(f"{field} selectors must be nonblank")
+            if field == "subject":
+                text = text.upper()
+                if not text.isalpha():
+                    raise ValueError("subject must contain letters only")
+            elif field == "number":
+                text = text.upper()
+                if not re.fullmatch(r"\d+[A-Z]?", text):
+                    raise ValueError(
+                        "number must be digits with an optional trailing letter"
+                    )
+            elif field == "course" and not COURSE_PATTERN.fullmatch(text):
+                raise ValueError(f"invalid course identifier: {text!r}")
+            cleaned.append(text)
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError(f"{field} selectors must not contain duplicates")
+        return cleaned[0] if isinstance(value, str) else cleaned
 
     @field_validator("time")
     @classmethod
@@ -127,47 +147,17 @@ class RuleSelectorSchema(StrictModel):
             )
         return value
 
-    @field_validator("course")
-    @classmethod
-    def validate_course(cls, value: str | None) -> str | None:
-        if value is not None and not COURSE_PATTERN.fullmatch(value):
-            raise ValueError(f"invalid course identifier: {value!r}")
-        return value
-
-    @field_validator("room")
-    @classmethod
-    def validate_rooms(
-        cls, value: str | list[str] | None,
-    ) -> str | list[str] | None:
-        if value is None:
-            return None
-        rooms = [value] if isinstance(value, str) else value
-        if not rooms or any(not room.strip() for room in rooms):
-            raise ValueError("room selectors must contain nonblank room names")
-        if len(rooms) != len(set(rooms)):
-            raise ValueError("room selectors must not contain duplicates")
-        return value
-
     @model_validator(mode="after")
     def validate_selectors(self):
-        if self.name is not None and not self.name.strip():
-            raise ValueError("a rule's name must not be blank")
         if self.course is not None and (
             self.subject is not None or self.number is not None
         ):
-            raise ValueError(
-                "use course, or subject/number, but not both"
-            )
+            raise ValueError("use course, or subject/number, but not both")
         if self.section is not None and self.section_prefix is not None:
             raise ValueError("a rule cannot set both section and section_prefix")
-        if self.section_prefix is not None and not self.section_prefix.strip():
-            raise ValueError("section_prefix must not be blank")
         if all(
-            value is None
-            for value in (
-                self.course, self.subject, self.number, self.section,
-                self.section_prefix, self.room, self.time,
-            )
+            getattr(self, field) is None
+            for field in (*RULE_SELECTOR_FIELDS, "time")
         ):
             raise ValueError("a rule must contain at least one selector")
         return self
@@ -212,9 +202,12 @@ class ConstraintRuleSchema(RuleSelectorSchema):
 
     @model_validator(mode="after")
     def require_hard_value(self):
-        if self.name is None and self.room is None and self.time is None:
+        if (
+            self.name is None and self.room is None
+            and self.building is None and self.time is None
+        ):
             raise ValueError(
-                "a constraint rule requires name, room, and/or time"
+                "a constraint rule requires name, room, building, and/or time"
             )
         return self
 

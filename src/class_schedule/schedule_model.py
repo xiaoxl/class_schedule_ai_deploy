@@ -742,44 +742,133 @@ class PersonRecord:
     aliases: tuple[PersonAlias, ...] = ()
 
 
+# ---------------------------------------------------------------------------
+# Rule selectors
+#
+# ``ConstraintRule`` (hard) and ``PreferenceRule`` (soft) share one
+# selector model. Every selector is a single value or a list of values;
+# a rule targets a meeting when *each* selector that is set contains that
+# meeting's value (an unset selector matches anything). ``course`` is the
+# "SUBJECT NUMBER" shorthand for ``subject`` + ``number`` and cannot be
+# combined with either. ``section_prefix`` matches by case-insensitive
+# prefix; every other selector matches exactly. ``room`` and ``building``
+# both feed one location test (``location_matches`` also accepts a bare
+# building name, so ``room = "Corley"`` and ``building = "Corley"`` behave
+# alike).
+# ---------------------------------------------------------------------------
+
+_SELECTOR_FIELDS = (
+    "name", "course", "subject", "number", "section",
+    "section_prefix", "room", "building",
+)
+
+
+def _selector_options(selector: object) -> tuple[str, ...] | None:
+    """A selector as a tuple of options, or ``None`` when it is unset."""
+    if selector is None:
+        return None
+    return (selector,) if isinstance(selector, str) else tuple(selector)
+
+
+def _selector_hit(selector: object, value: str) -> bool:
+    options = _selector_options(selector)
+    return options is None or value in options
+
+
+def _prefix_hit(selector: object, value: str) -> bool:
+    options = _selector_options(selector)
+    return options is None or any(
+        value.upper().startswith(option.upper()) for option in options
+    )
+
+
 @dataclass(frozen=True)
-class ConstraintRule:
-    """One hard rule using the same selectors as a preference rule."""
+class _RuleSelectors:
+    """The selector fields and matching shared by both rule kinds."""
+
+    name: str | tuple[str, ...] | None = None
+    course: str | tuple[str, ...] | None = None
+    subject: str | tuple[str, ...] | None = None
+    number: str | tuple[str, ...] | None = None
+    section: str | tuple[str, ...] | None = None
+    section_prefix: str | tuple[str, ...] | None = None
+    room: str | tuple[str, ...] | None = None
+    building: str | tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        for name in _SELECTOR_FIELDS:
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, str):
+                object.__setattr__(self, name, tuple(value))
+
+    @property
+    def locations(self) -> tuple[str, ...]:
+        """Every location string this rule names -- ``room`` and ``building``."""
+        return (
+            (_selector_options(self.room) or ())
+            + (_selector_options(self.building) or ())
+        )
+
+    # Callers that validate a rule's referenced locations still read ``rooms``.
+    rooms = locations
+
+    def selects_course(self, course: str, section: str) -> bool:
+        """Whether the course-side selectors admit this ``"SUBJECT NUMBER"``."""
+        rule_subject, _, rule_number = course.partition(" ")
+        return (
+            _selector_hit(self.course, course)
+            and _selector_hit(self.subject, rule_subject)
+            and _selector_hit(self.number, rule_number)
+            and _selector_hit(self.section, section)
+            and _prefix_hit(self.section_prefix, section)
+        )
+
+    def selects_instructor(self, instructor: str) -> bool:
+        return _selector_hit(self.name, instructor)
+
+    @property
+    def has_location_selector(self) -> bool:
+        return self.room is not None or self.building is not None
+
+    def selects_location(self, building: str, room: str) -> bool:
+        return not self.has_location_selector or location_matches(
+            building, room, self.locations
+        )
+
+    def _selector_descriptions(self) -> list[str]:
+        labels = {"section_prefix": "section prefix"}
+        parts = []
+        for name in _SELECTOR_FIELDS:
+            if name == "name":
+                continue
+            options = _selector_options(getattr(self, name))
+            if options is not None:
+                parts.append(f"{labels.get(name, name)} {'/'.join(options)}")
+        return parts
+
+
+@dataclass(frozen=True)
+class ConstraintRule(_RuleSelectors):
+    """One hard rule: forbid (``-``) or require (``+``) a combination."""
 
     direction: str = "+"
-    name: str | None = None
-    course: str | None = None
-    subject: str | None = None
-    number: str | None = None
-    section: str | None = None
-    section_prefix: str | None = None
-    room: str | tuple[str, ...] | None = None
     time: TimeWindow | None = None
 
     def __post_init__(self) -> None:
+        super().__post_init__()
         if self.direction not in ("+", "-"):
             raise ValueError("constraint direction must be '+' or '-'")
-        if self.name is None and self.room is None and self.time is None:
+        if (
+            self.name is None
+            and not self.has_location_selector
+            and self.time is None
+        ):
             raise ValueError(
-                "a constraint rule requires name, room, and/or time"
+                "a constraint rule requires name, room/building, and/or time"
             )
 
     def applies_to(self, course: str, section: str) -> bool:
-        rule_subject, _, rule_number = course.partition(" ")
-        if self.course is not None and self.course != course:
-            return False
-        if self.subject is not None and self.subject != rule_subject:
-            return False
-        if self.number is not None and self.number != rule_number:
-            return False
-        if self.section is not None and self.section != section:
-            return False
-        if (
-            self.section_prefix is not None
-            and not section.upper().startswith(self.section_prefix.upper())
-        ):
-            return False
-        return True
+        return self.selects_course(course, section)
 
     def allows(
         self,
@@ -793,64 +882,48 @@ class ConstraintRule:
         is_online: bool,
     ) -> bool:
         """Apply positive requirements or reject a forbidden combination."""
-        matches: list[bool] = []
+        checks: list[bool] = []
         if self.name is not None:
-            matches.append(instructor == self.name)
-        if self.room is not None:
+            checks.append(self.selects_instructor(instructor))
+        if self.has_location_selector:
             if is_online:
                 if self.direction == "-":
                     return True
             else:
-                matches.append(location_matches(building, room, self.rooms))
+                checks.append(self.selects_location(building, room))
         if self.time is not None:
             if is_online:
                 if self.direction == "-":
                     return True
             else:
-                matches.append(self.time.overlaps(days, start, end))
-        return all(matches) if self.direction == "+" else not all(matches)
-
-    @property
-    def rooms(self) -> tuple[str, ...]:
-        if self.room is None:
-            return ()
-        return (self.room,) if isinstance(self.room, str) else self.room
+                checks.append(self.time.overlaps(days, start, end))
+        return all(checks) if self.direction == "+" else not all(checks)
 
 
 @dataclass(frozen=True)
-class PreferenceRule:
+class PreferenceRule(_RuleSelectors):
     """One normalized flat ``[[rules]]`` selector.
 
     The TOML loader uses a rule's explicit ``name`` to attach it to one
     ``PreferenceRecord``; rules without a name remain global. Comments and
     physical ordering in the file never determine scope. A TOML rule's
-    positive/negative signed ``weight`` is normalized into ``direction`` and
-    a non-negative magnitude here.
+    positive/negative signed ``weight`` is normalized into ``direction``
+    and a non-negative magnitude here.
 
-    ``course`` ("SUBJECT NUMBER", matching persons.toml's own
-    convention), ``section``, ``section_prefix``, ``room``, and ``time``
-    are all optional match keys -- an unset key matches anything, so a rule can be as
-    broad ("this instructor generally avoids Corley") or as narrow ("this
-    exact course-section must land in one of these rooms") as its fields
-    specify. ``room`` may be one location or a tuple of alternatives;
-    matching any alternative satisfies that selector once. ``section`` only makes sense alongside ``course`` -- a bare
-    section code like "F01" repeats across unrelated courses. In contrast,
-    ``section_prefix`` intentionally matches across courses, e.g. ``"TC"``.
+    Every selector (``name``, ``course``/``subject``/``number``,
+    ``section``, ``section_prefix``, ``room``, ``building``) is optional
+    and may be one value or a list; an unset selector matches anything,
+    so a rule can be as broad ("this instructor avoids Corley") or as
+    narrow ("this exact course-section must land in one of these rooms")
+    as its fields specify. ``section_prefix`` matches across courses
+    (e.g. ``"TC"``); the rest match exactly.
 
     ``direction`` is ``"prefer"`` (subtracts ``weight`` from a matching
-    candidate's cost -- a reward the solver seeks out) or ``"dislike"``
-    (adds it -- a penalty the solver avoids); ``weight`` is always a
-    non-negative magnitude, on the same 0-100 scale as the other soft
-    costs. A weight of 100 is stronger than the 90-point under-load cost,
-    but remains a soft objective rather than a hard constraint.
+    candidate's cost) or ``"dislike"`` (adds it); ``weight`` is a
+    non-negative magnitude on the same 0-100 scale as the other soft
+    costs, but stays a soft objective rather than a hard constraint.
     """
 
-    course: str | None = None
-    subject: str | None = None
-    number: str | None = None
-    section: str | None = None
-    section_prefix: str | None = None
-    room: str | tuple[str, ...] | None = None
     time: TimeWindow | None = None
     direction: str = "dislike"
     weight: float = 0.0
@@ -874,23 +947,9 @@ class PreferenceRule:
             and self.section is None and self.section_prefix is None
         ):
             return False
-        rule_subject, _, rule_number = course.partition(" ")
-        if self.course is not None and self.course != course:
+        if not self.selects_course(course, section):
             return False
-        if self.subject is not None and self.subject != rule_subject:
-            return False
-        if self.number is not None and self.number != rule_number:
-            return False
-        if self.section is not None and self.section != section:
-            return False
-        if (
-            self.section_prefix is not None
-            and not section.upper().startswith(self.section_prefix.upper())
-        ):
-            return False
-        if self.room is not None and not location_matches(
-            building, room, self.rooms
-        ):
+        if not self.selects_location(building, room):
             return False
         if self.time is not None and not self.time.overlaps(days, start, end):
             return False
@@ -900,35 +959,17 @@ class PreferenceRule:
     def signed_weight(self) -> float:
         return -self.weight if self.direction == "prefer" else self.weight
 
-    @property
-    def rooms(self) -> tuple[str, ...]:
-        if self.room is None:
-            return ()
-        return (self.room,) if isinstance(self.room, str) else self.room
-
     def describe(self) -> str:
         """Render this rule's own selectors for a hover tooltip -- the
-        finding `message` only ever says *that* something matched, never
+        finding ``message`` only ever says *that* something matched, never
         *what the rule actually says*."""
-        selectors = []
-        if self.course is not None:
-            selectors.append(f"course {self.course}")
-        if self.subject is not None:
-            selectors.append(f"subject {self.subject}")
-        if self.number is not None:
-            selectors.append(f"number {self.number}")
-        if self.section is not None:
-            selectors.append(f"section {self.section}")
-        if self.section_prefix is not None:
-            selectors.append(f"section prefix {self.section_prefix}")
-        if self.room is not None:
-            selectors.append(f"room {'/'.join(self.rooms)}")
+        parts = list(self._selector_descriptions())
         if self.time is not None:
             days = "".join(d for d in _WEEKDAY_LETTERS if d in self.time.days)
-            selectors.append(
+            parts.append(
                 f"time {days} {self.time.start:%H:%M}-{self.time.end:%H:%M}"
             )
-        where = "; ".join(selectors) if selectors else "every meeting"
+        where = "; ".join(parts) if parts else "every meeting"
         return f"{self.direction} rule -- {where} (weight {self.weight:g})"
 
 
@@ -1038,22 +1079,14 @@ def _parse_rule(raw: Mapping[str, object]) -> PreferenceRule:
         raise ValueError(
             f"Rule direction must be 'prefer' or 'dislike', got {direction!r}"
         )
-    section = raw.get("section")
-    section_prefix = raw.get("section_prefix")
-    raw_room = raw.get("room")
+    # The schema has already validated and normalized each selector; the
+    # dataclass turns any list into a tuple. Same handling for every field.
     return PreferenceRule(
-        course=str(raw["course"]) if "course" in raw else None,
-        subject=str(raw["subject"]) if raw.get("subject") is not None else None,
-        number=str(raw["number"]) if raw.get("number") is not None else None,
-        section=str(section) if section is not None else None,
-        section_prefix=(
-            str(section_prefix).strip() if section_prefix is not None else None
-        ),
-        room=(
-            str(raw_room) if isinstance(raw_room, str)
-            else tuple(str(room) for room in raw_room)
-            if raw_room is not None else None
-        ),
+        **{
+            name: raw[name]
+            for name in _SELECTOR_FIELDS
+            if raw.get(name) is not None
+        },
         time=parse_rule_time(raw["time"]) if "time" in raw else None,
         direction=direction,
         weight=float(raw.get("weight", 0.0)),

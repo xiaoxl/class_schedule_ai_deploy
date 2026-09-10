@@ -118,6 +118,43 @@ class EvaluateConstraintTimeTests(unittest.TestCase):
             evaluation.hard_violations[0].rule, "constraint_negative"
         )
 
+    def test_subject_list_scopes_a_negative_time_rule(self):
+        rule = ConstraintRule(
+            direction="-", subject=["MATH", "STAT"],
+            time=TimeWindow(frozenset("F"), datetime.time(12), datetime.time(12, 50)),
+        )
+        math_noon = Schedule([NormalClass((make_section(
+            Subject="MATH", **{"Time Slot": "F 12:00pm"}, Room="101", Instructor="Alice",
+        ),))])
+        chem_noon = Schedule([NormalClass((make_section(
+            Subject="CHEM", **{"Time Slot": "F 12:00pm"}, Room="101", Instructor="Alice",
+        ),))])
+        self.assertEqual(
+            len(evaluate_schedule(math_noon, {}, {}, constraint_rules=(rule,)).hard_violations),
+            1,
+        )
+        self.assertEqual(
+            evaluate_schedule(chem_noon, {}, {}, constraint_rules=(rule,)).hard_violations,
+            (),
+        )
+
+    def test_building_selector_forbids_a_whole_building(self):
+        rule = ConstraintRule(direction="-", building="Corley")
+        in_corley = Schedule([NormalClass((make_section(
+            Building="Corley", Room="101", Instructor="Alice",
+        ),))])
+        elsewhere = Schedule([NormalClass((make_section(
+            Building="McEver", Room="101", Instructor="Alice",
+        ),))])
+        self.assertEqual(
+            len(evaluate_schedule(in_corley, {}, {}, constraint_rules=(rule,)).hard_violations),
+            1,
+        )
+        self.assertEqual(
+            evaluate_schedule(elsewhere, {}, {}, constraint_rules=(rule,)).hard_violations,
+            (),
+        )
+
     def test_mw_noon_does_not_match_a_friday_negative_time_rule(self):
         schedule = Schedule([NormalClass((make_section(
             **{"Time Slot": "MW 12:00pm"}, Room="101", Instructor="Alice"
