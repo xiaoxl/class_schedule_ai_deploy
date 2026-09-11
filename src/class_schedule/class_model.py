@@ -64,11 +64,13 @@ class Section:
     credits: float | None = None
     cross_list: str = ""
     lecture_lab_baseline: str = ""
+    source_section: str = ""
 
     def __post_init__(self) -> None:
         self.subject = record_utils.text(self.subject).upper()
         self.number = record_utils.text(self.number)
         self.section = record_utils.text(self.section)
+        self.source_section = record_utils.text(self.source_section)
         self.instructor = canonical_instructor(record_utils.text(self.instructor))
         self.time_slot = record_utils.text(self.time_slot)
         if not self.subject or not self.number or not self.section:
@@ -164,6 +166,7 @@ class Section:
             subject=text(get(row, "Subject")),
             number=text(get(row, "Number")),
             section=text(get(row, "Section")),
+            source_section=text(get(row, "Source Section")),
             time_slot=slot,
             duration=duration,
             room=text(get(row, "Room")),
@@ -187,6 +190,7 @@ class Section:
             "Subject": self.subject,
             "Number": self.number,
             "Section": self.section,
+            **({"Source Section": self.source_section} if self.source_section else {}),
             "Type": self.type or None,
             "Title": self.title or None,
             "Credits": self.credits,
@@ -214,6 +218,7 @@ class NormalClass:
     """
 
     sections: tuple[Section, ...]
+    section_numbers_linked: ClassVar[bool] = False
 
     def __post_init__(self) -> None:
         # Row-count failures remain constructor-fatal because the atomic
@@ -295,7 +300,7 @@ class NormalClass:
         return None
 
     def editable_fields(self, record_index: int) -> frozenset[str]:
-        return frozenset({"instructor", "room", "time"}) if not self.sections[record_index].is_online else frozenset({"instructor"})
+        return frozenset({"instructor", "room", "time", "section"}) if not self.sections[record_index].is_online else frozenset({"instructor", "section"})
 
     def scheduling_entries(self) -> tuple[Section, ...]:
         return self.sections
@@ -314,6 +319,32 @@ class NormalClass:
         return ()
 
     # ---- modification (subclasses may enforce kind-specific behavior) ----
+
+    def section_edit_targets(self, record_index: int) -> tuple[int, ...]:
+        if not 0 <= record_index < len(self.sections):
+            raise IndexError(f"CSV record index out of range: {record_index}")
+        return tuple(range(len(self.sections))) if self.section_numbers_linked else (record_index,)
+
+    def change_section(self, section: str, *, record: int = 0) -> "NormalClass":
+        """Return a renumbered class, keeping required same-section rows linked.
+
+        Section codes are text identifiers: '001' and '1' stay distinct.
+        Source Section retains the original configuration identity for regrouping.
+        """
+        if not isinstance(section, str) or not section.strip():
+            raise ValueError("section must be a non-empty string")
+        section = section.strip()
+        if any(character.isspace() for character in section):
+            raise ValueError("section must not contain whitespace")
+        targets = self.section_edit_targets(record)
+        updated = replace(self, sections=tuple(
+            replace(row, section=section, source_section=row.source_section or row.section)
+            if index in targets and row.section != section else row
+            for index, row in enumerate(self.sections)
+        ))
+        if isinstance(self, CrossListingClass):
+            updated.synced_fields = self.synced_fields
+        return updated
 
     def change_time(
         self, time_slot: str, *, record: int | None = None
@@ -360,6 +391,8 @@ class NormalClass:
     # they required to be").
 
     def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
+        if field == "section":
+            return self.section_edit_targets(record_index)
         """Which record indices an edit to ``field`` must also touch,
         given the row the edit was made through. Default: only that row.
         """
@@ -375,6 +408,8 @@ class NormalClass:
         """
         if not 0 <= record_index < len(self.sections):
             raise IndexError(f"CSV record index out of range: {record_index}")
+        if field == "section":
+            return self.change_section(changes.get("section"), record=record_index)
         targets = self.edit_targets(field, record_index)
         updated = tuple(
             replace(section, **changes) if index in targets else section
@@ -399,6 +434,7 @@ class FourCreditClass(SpecialClass):
 
     MAX_START_DIFFERENCE_MINUTES: ClassVar[int] = 90
     schedule_issue_rule: ClassVar[str] = "four_credit_invalid"
+    section_numbers_linked: ClassVar[bool] = True
     def __post_init__(self) -> None:
         super(FourCreditClass, self).__post_init__()
 
@@ -470,6 +506,8 @@ class FourCreditClass(SpecialClass):
         return self.is_valid_schedule
 
     def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
+        if field == "section":
+            return self.section_edit_targets(record_index)
         # Instructor must match (is_four_credit); the MWF and T/R meetings
         # are never the same time or necessarily the same room.
         return (0, 1) if field == "instructor" else (record_index,)
@@ -501,6 +539,7 @@ class HybridClass(SpecialClass):
     """
 
     schedule_issue_rule: ClassVar[str] = "hybrid_invalid"
+    section_numbers_linked: ClassVar[bool] = True
     def __post_init__(self) -> None:
         physical = [section for section in self.sections if section.has_meeting_time]
         if len(physical) == 1 and len(self.sections) in (1, 2):
@@ -576,7 +615,7 @@ class HybridClass(SpecialClass):
     def is_hybrid(left: Section, right: Section) -> bool:
         if left.identity != right.identity:
             return False
-        if not re.fullmatch(r"[FM]\d\d", left.section.upper()):
+        if not re.fullmatch(r"[FM]\d\d", (left.source_section or left.section).upper()):
             return False
         if left.instructor != right.instructor:
             return False
@@ -592,7 +631,7 @@ class HybridClass(SpecialClass):
     def is_hybrid_physical(section: Section) -> bool:
         """Return whether one imported row is sufficient to build a Hybrid."""
         return (
-            bool(re.fullmatch(r"[FM]\d\d", section.section.strip().upper()))
+            bool(re.fullmatch(r"[FM]\d\d", (section.source_section or section.section).strip().upper()))
             and section.has_meeting_time
             and bool(section.room)
         )
@@ -606,6 +645,8 @@ class HybridClass(SpecialClass):
         return self.is_valid_schedule
 
     def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
+        if field == "section":
+            return self.section_edit_targets(record_index)
         # Instructor must match; the companion row has no time/room of its
         # own to edit at all (see docs/codes.md -- callers should disable
         # those controls for it), so route either row's time/room edit to
@@ -836,7 +877,15 @@ class CrossListingClass(NormalClass):
 
         return _predicate
 
+    def section_edit_targets(self, record_index: int) -> tuple[int, ...]:
+        super(CrossListingClass, self).section_edit_targets(record_index)
+        selected = self.sections[record_index]
+        return tuple(index for index, row in enumerate(self.sections)
+                     if index == record_index or self.is_known_pair(selected, row))
+
     def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
+        if field == "section":
+            return self.section_edit_targets(record_index)
         # The one kind whose linking is per-instance, not per-kind -- see
         # synced_fields (docs/codes.md): a field the source data already
         # had matching stays linked, one that didn't stays independent.
@@ -889,6 +938,7 @@ class CoreqClass(SpecialClass):
         {"MATH 1113", "MATH 1110"},
     ]
     schedule_issue_rule: ClassVar[str] = "coreq_invalid"
+    section_numbers_linked: ClassVar[bool] = True
     def __post_init__(self) -> None:
         super(CoreqClass, self).__post_init__()
 
@@ -1037,6 +1087,8 @@ class CoreqClass(SpecialClass):
         return self.is_valid_schedule
 
     def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
+        if field == "section":
+            return self.section_edit_targets(record_index)
         # Instructor must match; the two meetings are never the same
         # time. Room only has to match when the pair is currently
         # back-to-back on a shared weekday (is_valid_schedule's rule) --
@@ -1317,6 +1369,8 @@ class _LectureLabMixin:
     ):
         if not 0 <= record_index < len(self.sections):
             raise IndexError(f"CSV record index out of range: {record_index}")
+        if field == "section":
+            return self.change_section(changes.get("section"), record=record_index)
         targets = self.edit_targets(field, record_index)
         if field == "time":
             # One shared start; each room keeps its own occupancy duration.
@@ -1351,6 +1405,7 @@ class LabClass(_LectureLabMixin, SpecialClass):
     fixed_lab_locations: tuple[tuple[str, str], ...] = ()
     fixed_lab_slot: str = ""
     schedule_issue_rule: ClassVar[str] = "lab_invalid"
+    section_numbers_linked: ClassVar[bool] = True
 
     def __post_init__(self) -> None:
         if len(self.sections) != 2 or sorted(map(self.role, self.sections)) != [
@@ -1402,12 +1457,14 @@ class LabClass(_LectureLabMixin, SpecialClass):
         return replace(self, sections=rebuilt)
 
     def editable_fields(self, record_index: int) -> frozenset[str]:
-        fields = {"instructor"}
+        fields = {"instructor", "section"}
         if self.lab_time_editable:
             fields.add("time")
         return frozenset(fields)
 
     def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
+        if field == "section":
+            return self.section_edit_targets(record_index)
         if not 0 <= record_index < len(self.sections):
             raise IndexError(f"CSV record index out of range: {record_index}")
         if field in {"room", "building"}:
@@ -1437,6 +1494,7 @@ class LectureLabClass(_LectureLabMixin, NormalClass):
     fixed_lab_locations: tuple[tuple[str, str], ...] = ()
     fixed_lab_slot: str = ""
     schedule_issue_rule: ClassVar[str] = "lecture_lab_invalid"
+    section_numbers_linked: ClassVar[bool] = True
 
     def __post_init__(self) -> None:
         kinds = sorted(_meeting_kind(s) for s in self.sections)
@@ -1520,13 +1578,15 @@ class LectureLabClass(_LectureLabMixin, NormalClass):
 
     def editable_fields(self, record_index: int) -> frozenset[str]:
         if self.role(self.sections[record_index]) == "lecture":
-            return frozenset({"instructor", "time", "room"})
-        fields = {"instructor"}
+            return frozenset({"instructor", "time", "room", "section"})
+        fields = {"instructor", "section"}
         if self.lab_time_editable:
             fields.add("time")
         return frozenset(fields)
 
     def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
+        if field == "section":
+            return self.section_edit_targets(record_index)
         if not 0 <= record_index < len(self.sections):
             raise IndexError(f"CSV record index out of range: {record_index}")
         is_lecture = self.role(self.sections[record_index]) == "lecture"

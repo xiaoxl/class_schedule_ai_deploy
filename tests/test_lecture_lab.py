@@ -121,7 +121,7 @@ class LectureLabRecognitionTests(unittest.TestCase):
 class LectureLabEditingTests(unittest.TestCase):
     def test_lecture_room_and_time_are_editable(self):
         item = LectureLabClass(rows())
-        self.assertEqual(item.editable_fields(0), frozenset({"instructor", "time", "room"}))
+        self.assertEqual(item.editable_fields(0), frozenset({"instructor", "time", "room", "section"}))
         moved = item.apply_edit("time", 0, time_slot="MWF 10:00am")
         self.assertEqual(moved.lecture.time_slot, "MWF 10:00am")
         self.assertEqual(moved.lab_long.time_slot, "M 1:00pm")
@@ -262,7 +262,7 @@ class LectureLabViewTests(unittest.TestCase):
         payload, = _serialize_schedule(Schedule([item]))
         self.assertEqual(payload["scheduling_records"], [0, 2])
         self.assertEqual(payload["editable_fields"], [
-            ["instructor"], ["instructor"], ["instructor", "room", "time"],
+            ["instructor", "section"], ["instructor", "section"], ["instructor", "room", "section", "time"],
         ])
         self.assertTrue(payload["linked_fields"]["instructor"])
 

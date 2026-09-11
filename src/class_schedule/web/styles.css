@@ -8,3 +8,5 @@
 .solve-progress-label{display:block;margin-top:5px;font-size:12px;color:var(--muted)}
 
 .app-version{display:inline-block;vertical-align:middle;font-size:10px;font-weight:600;letter-spacing:0;color:var(--blue);background:var(--blue2);border-radius:4px;padding:2px 5px;white-space:nowrap}
+
+.course-sort{border:0;background:transparent;padding:0;color:inherit;text-align:left;font:inherit;letter-spacing:inherit;text-transform:uppercase;cursor:pointer}.section-number-button{border:0;border-bottom:1px dotted var(--blue);padding:0 2px;background:transparent;color:var(--blue);font:inherit;cursor:text}.section-number-button:hover{background:var(--blue2)}.section-number-input{width:6em;max-width:100%;padding:3px 5px;border:1px solid var(--blue);border-radius:4px;font:inherit}.course-sort:focus-visible,.section-number-button:focus-visible{outline:2px solid var(--blue);outline-offset:3px}

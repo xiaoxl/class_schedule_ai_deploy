@@ -69,7 +69,7 @@ unset, which is fine for local development but not for a host with an
 ephemeral filesystem (see `render.yaml`, which points all three at one
 mounted Disk). `CONFIG_DIR` may not contain any complete package yet on a
 fresh mount -- the Web app boots regardless and the Configuration workspace's
-upload/infer-from-template flow creates the first one.
+**Upload file to start** flow creates the first one.
 
 ## File responsibilities
 
@@ -292,3 +292,15 @@ stay fixed even when its time is unlocked. Calendar roles are
 A standalone split-room lab (`LabClass`) is recognized structurally and
 needs no relationship. See [Lab and lecture/lab classes](lecture-lab.md)
 for the complete rules.
+
+
+## Importing through the Configuration workspace
+
+**Upload file to start** accepts multiple dropped files or folders and recursively reads subfolders. Use the single **Upload Files** button to select multiple CSV/XLSX or TOML files. Each batch represents one configuration package, with multiple TOMLs and at most one schedule template. Each upload creates a new package, using the TOML package comment or template filename as its name; existing names receive a numeric suffix. A template alone generates all seven configuration files. When TOMLs and a template are uploaded together, supplied TOMLs take precedence and missing files are inferred. Configuration-only uploads preserve their supplied rules and remain Draft if required files are missing.
+
+Select **Template** in the editor's file list to browse the uploaded sheet in a read-only table, with 200 rows per page, scrolling, and an original-file download. The Template tab uses the shared editor title bar for its filename, path, update time, and working-view status. Drop one CSV/XLSX anywhere in the lower editor to replace the selected package's template, preserve all TOML content, and rebuild working views; there is no separate template upload button. Save or reset unsaved TOML edits before uploading. The **Template vs. Courses Differences** panel sits below the editor and compares the template against the selected configuration.
+
+
+The entire lower TOML editor (including the file list and template preview) also accepts dropped files or folders. Dropping there updates the selected existing package: TOMLs replace existing files by basename, CSV/XLSX replaces the package template, and files not supplied stay unchanged. TOML package comments are retargeted to the selected package instead of routing the upload elsewhere. A batch is validated and applied together; invalid input leaves the existing package intact. The upper start zone always creates a new automatically named package instead.
+
+After a top-zone upload creates a Ready package and builds its working views, the UI automatically opens that package's schedule tab and scrolls to the top. Draft packages and rejected uploads stay in Configuration for review. Updates dropped into the lower editor stay in the editor.

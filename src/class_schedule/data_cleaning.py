@@ -12,7 +12,7 @@ from .class_model import Section
 from .schedule_model import GroupingError, PersonRecord, Schedule, resolve_person_name
 
 NORMALIZED_COLUMNS = (
-    "Subject", "Number", "Section", "Type", "Title", "Credits",
+    "Subject", "Number", "Section", "Source Section", "Type", "Title", "Credits",
     "Instructor", "Delivery Mode", "Time Slot",
     "Duration", "Days", "Start", "End", "Building", "Room",
     "Cross-List", "Lecture Lab Baseline", "CRN", "Seats Available", "Source Row",

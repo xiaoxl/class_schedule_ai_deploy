@@ -65,7 +65,7 @@ class LabClassRecognitionTests(unittest.TestCase):
 class LabClassBehaviourTests(unittest.TestCase):
     def test_rooms_and_time_are_locked_instructor_links(self):
         item = LabClass(lab_rows())
-        self.assertEqual(item.editable_fields(0), frozenset({"instructor"}))
+        self.assertEqual(item.editable_fields(0), frozenset({"instructor", "section"}))
         for index in (0, 1):
             with self.assertRaisesRegex(ValueError, "fixed"):
                 item.apply_edit("room", index, room="7", building="Science")

@@ -26,9 +26,11 @@ import tomllib
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from dataclasses import replace
 from html import escape
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from zipfile import BadZipFile
 
 import psutil
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
@@ -40,9 +42,9 @@ from .app_version import get_app_version
 from . import record_utils
 from . import solver as solver_module
 from .class_model import Class
-from .config_inference import infer_configuration_from_template
+from .config_inference import infer_configuration_from_template, _courses_toml
 from .pattern_rules import pattern_applies
-from .schedule_io import read_schedule
+from .schedule_io import read_schedule, read_table
 from .schedule_run import _verified_initial, next_version
 from .version_publisher import publish_version, sha256
 from .template_workspace import (
@@ -264,7 +266,10 @@ def create_app() -> FastAPI:
     async def create_configuration_package(
         config_files: list[UploadFile] = File(...),
         current_package: str = Form(DEFAULT_PACKAGE),
+        upload_mode: str = Form("legacy"),
     ):
+        if upload_mode not in {"legacy", "create", "replace_template", "update"}:
+            raise HTTPException(400, "Unknown upload mode")
         current_package = current_package.strip()
         if not PACKAGE_ID.fullmatch(current_package):
             raise HTTPException(
@@ -288,9 +293,63 @@ def create_app() -> FastAPI:
                 continue
             if filename in replacements:
                 raise HTTPException(400, f"Folder contains more than one {filename}")
-            replacements[filename] = await upload.read()
+            content = await upload.read()
+            if not content or len(content) > MAX_CONFIG_BYTES:
+                raise HTTPException(400, f"{filename} must be nonempty and at most 2 MB")
+            replacements[filename] = content
         if not replacements and uploaded_template is None:
             raise HTTPException(400, "Upload configuration TOMLs or one CSV/XLSX template")
+        if upload_mode == "update":
+            root = _package_root(current_package)
+            if not root.is_dir():
+                raise HTTPException(404, f"Unknown configuration package: {current_package}")
+            incoming = {}
+            for name, content in replacements.items():
+                if not (root / CONFIG_FILES[name]).is_file():
+                    raise HTTPException(400, f"Cannot update missing file: {name}")
+                try:
+                    text = content.decode("utf-8-sig")
+                    tomllib.loads(text)
+                except (UnicodeError, ValueError) as error:
+                    raise HTTPException(400, f"Invalid {name}: {error}") from error
+                incoming[name] = _retarget_package_comment(text, current_package).encode("utf-8")
+            _apply_configuration_transaction({current_package: {
+                "replacements": incoming, "template": uploaded_template, "rebuild": True,
+            }})
+            return _configuration_file_payload(current_package)
+        if upload_mode == "replace_template":
+            if replacements or uploaded_template is None:
+                raise HTTPException(400, "Upload exactly one CSV/XLSX template here")
+            _package_root(current_package)
+            _apply_configuration_transaction({current_package: {
+                "template": uploaded_template, "rebuild": True,
+            }})
+            return _configuration_file_payload(current_package)
+        if upload_mode == "create":
+            source_name = _package_name_from_comments(replacements) if replacements else None
+            base = source_name or _package_name_from_template_filename(uploaded_template[0])
+            package = _next_available_package_name(base)
+            incoming = {
+                name: _retarget_package_comment(content.decode("utf-8-sig"), package).encode("utf-8")
+                for name, content in replacements.items()
+            }
+            inferred_names = []
+            if uploaded_template is not None and len(incoming) < len(CONFIG_FILES):
+                try:
+                    inferred = _infer_uploaded_template(*uploaded_template, package=package)
+                except (OSError, ValueError, BadZipFile) as error:
+                    raise HTTPException(422, f"Could not infer configuration: {error}") from error
+                for name, content in inferred.files.items():
+                    if name not in incoming:
+                        incoming[name] = content
+                        inferred_names.append(name)
+            _apply_configuration_transaction({package: {
+                "replacements": incoming, "template": uploaded_template,
+                "rebuild": True, "create_only": True,
+            }})
+            payload = _configuration_file_payload(package)
+            payload["inferred_files"] = inferred_names
+            return payload
         routed_package = (
             _package_name_from_comments(replacements) if replacements else None
         )
@@ -345,6 +404,23 @@ def create_app() -> FastAPI:
             headers={"Content-Disposition": f'attachment; filename="{path.name}"'},
         )
 
+    @app.get("/api/configuration-packages/{package}/template-preview")
+    async def preview_configuration_template(package: str, offset: int = 0, limit: int = 200):
+        path = find_template(_package_root(package))
+        if path is None:
+            raise HTTPException(404, "No template uploaded")
+        if offset < 0 or not 1 <= limit <= 500:
+            raise HTTPException(400, "Invalid preview page")
+        try:
+            table = read_table(path).fillna("")
+            return {
+                "filename": path.name, "columns": [str(column) for column in table.columns],
+                "rows": table.iloc[offset:offset + limit].astype(str).values.tolist(),
+                "total": len(table), "offset": offset, "limit": limit,
+            }
+        except (OSError, ValueError, BadZipFile) as error:
+            raise HTTPException(422, f"Could not preview template: {error}") from error
+
     @app.delete("/api/configuration-packages/{package}/template")
     async def delete_configuration_template(package: str):
         return _delete_package_template(package)
@@ -372,7 +448,7 @@ def create_app() -> FastAPI:
             }})
         except HTTPException:
             raise
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, BadZipFile) as error:
             raise HTTPException(422, f"Could not infer configuration: {error}") from error
         payload = _configuration_file_payload(inferred_package)
         payload["source_package"] = package
@@ -628,7 +704,11 @@ def create_app() -> FastAPI:
             raise HTTPException(
                 400, "Online/arranged rows only accept instructor edits",
             )
-        if field == "instructor":
+        if field == "section":
+            if not isinstance(value, str) or not value.strip():
+                raise HTTPException(400, "section value must be a non-empty string")
+            changes = {"section": value.strip()}
+        elif field == "instructor":
             if not isinstance(value, str) or not value.strip():
                 raise HTTPException(400, "instructor value must be a non-empty string")
             changes: dict[str, object] = {"instructor": value.strip()}
@@ -658,9 +738,12 @@ def create_app() -> FastAPI:
         else:
             raise HTTPException(400, f"Unknown field: {field!r}")
         try:
-            schedule.classes[class_index] = item.apply_edit(
-                field, record_index, **changes,
-            )
+            if field == "section":
+                schedule.change_section(section.course_id, value, record=record_index)
+            else:
+                schedule.classes[class_index] = item.apply_edit(
+                    field, record_index, **changes,
+                )
         except (ValueError, IndexError) as error:
             raise HTTPException(400, str(error)) from error
         return {
@@ -894,6 +977,18 @@ def _fork_configuration_from_schedule(
         new_name = _next_available_package_name(clean or source_package)
         new_root = CONFIG_DIR / new_name
         staging = CONFIG_DIR / f".{new_name}-forkstaging-{uuid.uuid4().hex}"
+        renamed = any(row.source_section and row.source_section != row.section
+                      for item in schedule for row in item.sections)
+        if renamed:
+            # The fork becomes a new baseline: its offerings and relationships
+            # use current identifiers, and no longer reference the old package.
+            rebased = []
+            for item in schedule:
+                updated = replace(item, sections=tuple(replace(row, source_section="") for row in item.sections))
+                if hasattr(item, "synced_fields"):
+                    updated.synced_fields = item.synced_fields
+                rebased.append(updated)
+            schedule = Schedule(rebased)
         try:
             copied = 0
             for filename, relative in CONFIG_FILES.items():
@@ -911,6 +1006,11 @@ def _fork_configuration_from_schedule(
                 copied += 1
             if not copied:
                 raise RuntimeError(f"{source_package} has no configuration files to copy")
+            if renamed:
+                (staging / "courses.toml").write_text(
+                    _courses_toml(schedule, f"# Configuration package: {new_name}\n"),
+                    encoding="utf-8",
+                )
             staging.replace(new_root)
         except Exception:
             if staging.exists():
@@ -1045,7 +1145,7 @@ def _configuration_summary(package: str) -> dict:
         try:
             config, manifest = _ensure_current_work_views(package)
             version = config.version
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, BadZipFile) as error:
             errors.append(str(error))
     status = "invalid" if errors else "draft" if missing else "ready"
     return {
@@ -1086,6 +1186,8 @@ def _apply_configuration_transaction(changes: dict[str, dict]) -> None:
             for package, change in changes.items():
                 source = CONFIG_DIR / package
                 staged_package = staged_config / package
+                if change.get("create_only") and source.exists():
+                    raise HTTPException(409, "Configuration name was just taken; retry the upload")
                 if source.is_dir():
                     shutil.copytree(source, staged_package)
                 else:
@@ -1129,7 +1231,7 @@ def _apply_configuration_transaction(changes: dict[str, dict]) -> None:
                     )
         except HTTPException:
             raise
-        except (OSError, UnicodeError, ValueError) as error:
+        except (OSError, UnicodeError, ValueError, BadZipFile) as error:
             logger.warning("Configuration transaction validation failed: %s", error)
             raise HTTPException(
                 422, f"Upload rejected; working views could not be rebuilt: {error}",
@@ -1316,7 +1418,7 @@ def _rebuild_package_work_views(package: str) -> dict:
     root = _package_root(package)
     try:
         return rebuild_work_views(root, config_root=CONFIG_DIR, work_root=WORK_ROOT)
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, BadZipFile) as error:
         logger.warning("Could not rebuild work views for %s: %s", package, error)
         raise HTTPException(422, f"Could not rebuild work views: {error}") from error
 
@@ -1521,7 +1623,7 @@ def _serialize_schedule(schedule: Schedule) -> list[dict]:
             "record_linked_fields": [
                 {
                     field: field in item.editable_fields(i) and len(item.edit_targets(field, i)) > 1
-                    for field in ("instructor", "room", "time")
+                    for field in ("instructor", "room", "time", "section")
                 }
                 for i in range(len(item.sections))
             ],
@@ -1534,7 +1636,7 @@ def _serialize_schedule(schedule: Schedule) -> list[dict]:
             # different targets within the same atomic class.
             "linked_fields": {
                 field: field in item.editable_fields(0) and len(item.edit_targets(field, 0)) > 1
-                for field in ("instructor", "room", "time")
+                for field in ("instructor", "room", "time", "section")
             },
             # CrossListingClass only -- the raw, persisted config knowledge
             # `linked_fields` above is itself derived from. See docs/codes.md.

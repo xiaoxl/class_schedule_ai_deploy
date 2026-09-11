@@ -227,6 +227,32 @@ class Schedule:
     # ``record=None`` it would silently satisfy that requirement and
     # defeat the whole point.
 
+    def change_section(
+        self, course_id: str, section: str, *, record: int | None = None,
+    ) -> "Schedule":
+        """Renumber an atomic member, rejecting duplicate course/section identities.
+
+        Multiple meetings of one existing identity may share the new identity;
+        distinct sections of the same course may not be collapsed together.
+        No mutation occurs until every linked target passes the collision check.
+        """
+        index = self.index_of(course_id)
+        item = self.classes[index]
+        if record is None:
+            record = next(i for i, row in enumerate(item.sections) if row.course_id == course_id)
+        updated = item.change_section(section, record=record)
+        owners = {}
+        for class_index, current in enumerate(self.classes):
+            candidate = updated if class_index == index else current
+            for before, after in zip(current.sections, candidate.sections):
+                key = (after.subject.upper(), after.number.upper(), after.section.upper())
+                owner = (class_index, before.subject.upper(), before.number.upper(), before.section.upper())
+                if key in owners and owners[key] != owner:
+                    raise ValueError(f"Section already exists for {after.subject} {after.number}: {after.section}")
+                owners[key] = owner
+        self.classes[index] = updated
+        return self
+
     def change_time(
         self, course_id: str, time_slot: str, *, record: object = _UNSET
     ) -> "Schedule":
@@ -291,7 +317,7 @@ def _group_records(
     for row in records:
         normalized = record_utils.normalize_columns(row)
         section_code = record_utils.text(
-            record_utils.value(normalized, "Section")
+            record_utils.value(normalized, "Source Section") or record_utils.value(normalized, "Section")
         ).upper()
         if section_code.startswith(_IGNORED_SECTION_PREFIXES):
             continue
@@ -369,6 +395,14 @@ def _take_configured_relationships(
     relationships: tuple[CourseRelationshipSchema, ...],
 ) -> tuple[list[Class], list[Section]]:
     """Apply explicit courses.toml relationships before legacy inference."""
+    renames = {
+        f"{row.subject} {row.number} {row.source_section}".upper():
+        f"{row.subject} {row.number} {row.section}".upper()
+        for row in remaining if row.source_section
+    }
+    relationships = tuple(relation.model_copy(update={
+        "members": [renames.get(member, member) for member in relation.members],
+    }) for relation in relationships)
     found: list[Class] = []
     consumed: set[int] = set()
     for relationship in relationships:
@@ -507,7 +541,7 @@ def _take_same_course(
                     ) from error
                 consumed.update(id(section) for section in group)
                 continue
-            if re.fullmatch(r"[FM]\d\d", left.section.upper()):
+            if re.fullmatch(r"[FM]\d\d", (left.source_section or left.section).upper()):
                 target = HybridClass
             elif max(left.credit_hours, right.credit_hours) == 4:
                 target = FourCreditClass

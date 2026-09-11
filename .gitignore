@@ -11,4 +11,6 @@ inputs/
 tests/*
 !tests/test_lecture_lab.py
 !tests/test_lab.py
+!tests/test_template_import.py
+!tests/test_section_edit.py
 .old/
