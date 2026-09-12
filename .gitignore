@@ -13,4 +13,5 @@ tests/*
 !tests/test_lab.py
 !tests/test_template_import.py
 !tests/test_section_edit.py
+!tests/test_course_view.cjs
 .old/

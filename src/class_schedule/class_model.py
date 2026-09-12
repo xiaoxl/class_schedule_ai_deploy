@@ -391,11 +391,11 @@ class NormalClass:
     # they required to be").
 
     def edit_targets(self, field: str, record_index: int) -> tuple[int, ...]:
-        if field == "section":
-            return self.section_edit_targets(record_index)
         """Which record indices an edit to ``field`` must also touch,
         given the row the edit was made through. Default: only that row.
         """
+        if field == "section":
+            return self.section_edit_targets(record_index)
         return (record_index,)
 
     def apply_edit(
